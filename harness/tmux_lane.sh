@@ -11,7 +11,9 @@ USAGE='usage: tmux_lane.sh <run> <coder|tester> <launch|qualify|freeze|retire-pr
                   [--agent codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent] [--model <model>]
                   [--effort <low|medium|high|xhigh|max>]
                   [--persistent (resident native session; always on for Claude, which runs
-                   as an interactive Claude Code session and never in print mode)]
+                   as an interactive Claude Code session and never in print mode, and for
+                   codex, the default, which is Codex'"'"'s own interactive session: the
+                   lane agent codex-interactive, never codex exec)]
                   [--metered] [--spend-cap-usd <usd> --usd-per-hour <usd>]
                   [--wall-cap-minutes <min, metered lanes and qualify only>]
                   [--round <tag> --replace-session <why the session cannot resume>]
@@ -125,10 +127,17 @@ exec 4< <("$FACTORY_PYTHON" "$(dirname "${BASH_SOURCE[0]}")/model_settings.py" "
 { IFS= read -r -d '' AGENT <&4 && IFS= read -r -d '' MODEL_ARG <&4 &&
   IFS= read -r -d '' EFFORT <&4; } || exit 64
 exec 4<&-
+# An author lane on Codex is Codex's own interactive session, hosted by the lane wrapper: the
+# adapter the lane agent `codex-interactive` names. `codex`, the default, is that adapter, and
+# everything from here on, the launch record included, says `codex-interactive`. No author
+# lane runs `codex exec` for it, and nothing falls back to it. `codex-ollama` is a different
+# lane agent and is unchanged: Codex on a local Ollama model has not been run interactively.
+[ "$AGENT" != codex ] || AGENT=codex-interactive
 # Claude Code is a resident native terminal session for every action: it has no print mode here.
 # So is Cursor's agent: its interactive program, never `-p`. So is Muse Code: its interactive
 # session, never `muse exec`. So is Antigravity: its interactive session, never `--print`.
-# So is the lane agent codex-interactive: Codex's interactive session, hosted by the wrapper.
+# So is Codex (`codex`, which is the lane agent codex-interactive): its interactive session,
+# hosted by the wrapper, never `codex exec`.
 case "$ACTION:$AGENT" in
   launch:claude|qualify:claude|launch:claude-ollama|qualify:claude-ollama|\
   launch:cursor-agent|qualify:cursor-agent|launch:muse|qualify:muse|launch:agy|qualify:agy|\
@@ -590,7 +599,7 @@ PY
   # or disabled. With no --model, the model keys of that config are read here only so the
   # launch record names what the lane ran and a resume runs the same; the lane runs what the
   # operator's own `codex` would. A config that names no model leaves Codex's own default.
-  if [ "$AGENT" = codex ] && [ -z "$MODEL" ]; then
+  if [ "$AGENT" = codex-interactive ] && [ -z "$MODEL" ]; then
     exec 4< <("$FACTORY_PYTHON" "$D/lane_agent.py" codex-model --codex-home "$SAFE_CODEX_HOME")
     IFS= read -r -d '' MODEL <&4 || refuse 70 "the model in $SAFE_CODEX_HOME/config.toml could not be read" \
       "fix $SAFE_CODEX_HOME/config.toml, or name the model with --model"
@@ -1117,7 +1126,7 @@ PY
   fi
   # Codex's trusted event/session driver stays outside the model boundary. Other clients
   # are direct children of lane_agent, which retains their process/exit evidence on the host.
-  case "$AGENT" in codex|codex-ollama) ;; *) WRAP+="$BOUNDARY_MODEL_ARGS" ;; esac
+  case "$AGENT" in codex-ollama) ;; *) WRAP+="$BOUNDARY_MODEL_ARGS" ;; esac
   # On a host whose kernel will not give Codex's own sandbox a namespace (a gVisor container,
   # for one), the operator sets FACTORY_LANE_SANDBOX=off: the container is then the sandbox.
   CODEX_SANDBOX_ARG=""
@@ -1127,7 +1136,8 @@ PY
   # The operator's Codex configuration, rules, apps and MCP servers stay as they are. The lane
   # adds its permission profile, shell policy and scoped Kindex as -c overrides beside them.
   case "$AGENT" in
-    codex|codex-ollama)
+    codex-ollama)
+      # The one lane that still runs `codex exec` (with --oss): see the note where AGENT is set.
       printf -v LANE_CMD '%s %s -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q%s -- codex %s exec %s --json -C %q -c %q -c %q -c %q -c %q -' \
         "$ENV_PREFIX" "$WRAP" "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
         "$PROMPT" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$LANE" "$BOUNDARY_CODEX_ARGS" "$CODEX_POLICY_ARG" "$LOCAL_ARGS" "$REPOSITORY" \

@@ -126,8 +126,8 @@ public API is still pre-1.0.
   when Codex's prompt hook reports it; stop reports carry the reply. Lane hooks are the
   clone's `.codex/hooks.json`. Codex's folder trust and hook trust are not given by the
   Factory; `FACTORY_LANE_SANDBOX=off` is the explicit per-run choice that also passes
-  `--dangerously-bypass-hook-trust`. Author lane only, not accepted, not resumable by the
-  Factory; `codex` and `codex-ollama` still run `codex exec` (`docs/HARNESS.md`).
+  `--dangerously-bypass-hook-trust`. (As first written this was the lane agent
+  `codex-interactive` only; the two entries below make it resumable and the default.)
 - A lane message to a hosted session that has ended restarts that session on its own
   conversation instead of failing. Since hosted sessions replaced print mode, a Claude Code
   lane that had finished, been closed, or been ended by the watcher for a review pause or a
@@ -139,6 +139,20 @@ public API is still pre-1.0.
   other. Programs the registry does not report as resumable are refused (exit 70) with the
   message left planned. A message a busy session could not take is now said to be not
   given, rather than "do not resend".
+- **The default author lane, `codex`, is Codex's own interactive session, hosted, and no
+  longer `codex exec`.** The launcher runs `--agent codex` (and a launch with no `--agent`)
+  as the adapter `codex-interactive`, and records that name. Nothing falls back to `codex
+  exec`: a Codex lane an earlier Factory started as `codex exec` is refused a message and
+  told to start a hosted session with `--replace-session`. `--model` and `--effort` reach
+  the session and its restart; with no `--model` the operator's configured model keys are
+  recorded and passed, as before; billing is still Codex's own sign-in. `codex-ollama` is
+  unchanged and still runs `codex exec`. **For operators:** a default Codex lane now asks
+  what an interactive session asks. Codex asks its folder-trust question for a clone it
+  has not seen, and skips the lane's report hooks until they are trusted (Codex's
+  `/hooks`, or `FACTORY_LANE_SANDBOX=off`, the explicit per-run choice); without that
+  the lane works but reports nothing and stays `starting`. Run against Codex itself with
+  the default agent once (2026-11-14): launch, clean end, restart on the same session id,
+  a queued follow-up, three messages each reported once.
 - An ended `codex-interactive` session is restarted by a lane message with Codex's own
   `codex resume`, the message given as the resume's launch argument, because a resumed
   Codex session that is given nothing reports nothing (observed). The hand-over is recorded
@@ -146,8 +160,7 @@ public API is still pre-1.0.
   reports `codex-interactive` as resumable by the Factory. Shown with a stand-in program
   and run once against Codex itself through `tmux_lane.sh` and `tmux_lane_message.sh`
   (2026-11-14, codex-cli 0.167.0, a synthetic folder): launch, clean end, restart on the
-  same session id, two queued follow-ups, every message reported once. `codex` and
-  `codex-ollama` still run `codex exec`.
+  same session id, two queued follow-ups, every message reported once.
 - `tmux_lane_message.sh --native-session-file` is removed and refused by name. It handed an
   exited interactive Codex session to `codex exec resume`, a non-interactive run, after
   reading Codex's own session file. A `codex-interactive` lane that an earlier Factory
@@ -165,7 +178,8 @@ public API is still pre-1.0.
   candidate check likewise never follows a link on the way to a lane's paths.
 - Not converted, each with its `native_blocker` recorded at launch (`docs/HARNESS.md`,
   "Providers not yet native"): Prime still starts in print mode with a private
-  configuration and is not installed where this was written. Codex still runs `codex exec`.
+  configuration and is not installed where this was written. `codex-ollama` still runs
+  `codex exec`.
 
 ## [0.8.29] - 2026-11-09
 

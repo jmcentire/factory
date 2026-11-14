@@ -407,10 +407,22 @@ and they are not the same thing:
 
 ### Interactive Codex lanes are Codex's own session, hosted
 
-The lane agent `codex-interactive` runs `codex --no-daemon --no-alt-screen` on the same
-terminal host, with the operator's sign-in, configuration, hooks and MCP servers intact.
-`--no-daemon` keeps it off the operator's shared Codex server. The lane agents `codex` and
-`codex-ollama` still run `codex exec` and are not converted. What follows was observed on
+The lane agent `codex`, the default author lane, runs `codex --no-daemon --no-alt-screen`
+on the same terminal host, with the operator's sign-in, configuration, hooks and MCP
+servers intact. `--no-daemon` keeps it off the operator's shared Codex server.
+`codex-interactive` is the same adapter by its own name, and is the name every record
+carries: the launcher turns `codex` into it at once, so a launch record, a turn record and
+a lane message all say `codex-interactive`. No author lane runs `codex exec` for it and
+nothing falls back to `codex exec`: a lane that an earlier Factory started as `codex exec`
+is refused a message and told to start a hosted session with `--replace-session`. An
+explicit `--model` and `--effort` are passed to the session (`-m`, `-c
+model_reasoning_effort=`) and again when it is restarted; with no `--model`, the model
+keys of the operator's own Codex configuration are recorded and passed the same way, as
+they were for the `codex exec` lane, so the record names what ran. Billing is Codex's own
+sign-in, checked before launch as before. Only `codex-ollama` still runs `codex exec`:
+Codex's interactive program on a local Ollama model has not been run. **What changes for
+an operator:** a default Codex lane now needs what an interactive session needs (the two
+trusts below); without them it works but reports nothing. What follows was observed on
 codex-cli 0.167.0 on the operator's ChatGPT sign-in on 2026-11-13, by the adapter's author
 only: three one-word turns in direct probes, then two one-word turns of this adapter
 through `lane_agent.py`. It is an author-lane adapter and is not accepted.
@@ -502,9 +514,9 @@ operator's to weigh.
 
 ### Providers not yet native, and exactly why
 
-Codex lanes (`codex`, `codex-ollama`) load the operator's whole Codex configuration but
-still run `codex exec`; the hosted interactive lane agent is `codex-interactive` (above). Prime lanes still start in print mode with a
-private configuration. Each launch records and prints `native_blocker`, asked by the lane
+`codex-ollama` lanes load the operator's whole Codex configuration but still run `codex
+exec`; the lane agent `codex` is the hosted interactive session (above). Prime lanes still
+start in print mode with a private configuration. Each launch records and prints `native_blocker`, asked by the lane
 agent's own name: it is empty only for `claude` and `claude-ollama`,
 and `python harness/agents.py describe --agent <lane agent>` prints it. For `cursor-agent`,
 `muse`, `agy` and `codex-interactive` it says what was run and what is still open. The
@@ -514,7 +526,7 @@ and progress-review pauses, which continue a session, are not offered for them. 
 | Provider | Established, and from where | Not established |
 |---|---|---|
 | Prime | Nothing: the program is not installed where this was written. | Everything. |
-| Codex (`codex`, `codex-ollama`) | From `codex --help` and this harness's own use: the interactive program is `codex [PROMPT]` (lane agent `codex-interactive`); `codex resume [SESSION_ID]`; `codex queue` queues a message for an existing session; hooks given by `-c` are skipped until the operator trusts them. The operator's configuration is already intact. | Any report from the interactive program that it started, received a prompt or stopped, and that `codex queue` reaches a live interactive session. Until then a `codex-interactive` lane can be neither messaged nor resumed by the Factory, so it cannot replace `codex exec` for unattended work. |
+| Codex on Ollama (`codex-ollama`) | That `codex exec --oss` runs on a model the local Ollama server has, with the operator's configuration intact. | Everything about Codex's interactive program on a local model: whether its hooks report, whether `codex queue` reaches it, whether `codex resume` keeps its session. Until one of those runs it stays on `codex exec`. |
 
 To clear a row, a live session of that program must show: a report when the session is
 ready for input, a report carrying a submitted prompt, a report when it stops, and the

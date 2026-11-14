@@ -100,7 +100,9 @@ class Agent:
 
 
 AGENTS: Mapping[str, Agent] = {
-    # `codex exec`, non-interactive: the default for author lanes.
+    # `codex exec`, non-interactive. No author lane is launched on this entry any more: the
+    # launcher runs the lane agent `codex` as `codex-interactive` (tmux_lane.sh). It still
+    # answers for the name where an older record or a caller uses it.
     "codex": Agent("codex", "codex", "stdin", False, "codex-login"),
     # Codex's own interactive session, hosted like Claude Code on a terminal the wrapper
     # owns. Its first message is its launch argument; later ones go through `codex queue`.
@@ -312,7 +314,8 @@ def _seed_from_launches(root: pathlib.Path) -> dict[str, object]:
         families = set()
         for row in rows:
             agent_name, model = str(row.get("agent") or ""), str(row.get("model") or "")
-            # codex-interactive runs the operator's Codex config, which its record does not carry.
+            # A codex-interactive record made before the launcher carried the operator's
+            # configured model into it names no model.
             config = row.get("model_config")
             overrides = [str(o) for o in config] if isinstance(config, list) else []
             custom = (agent_name == "codex-interactive" and not model) or any(

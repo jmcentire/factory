@@ -382,8 +382,8 @@ class Codex(Harness):
 class CodexInteractive(Harness):
     """Codex's own interactive session, hosted on a terminal the lane wrapper owns: the
     operator's sign-in, configuration, hooks and MCP servers, all untouched and all still
-    loaded. Never ``codex exec``. (The lane agents ``codex`` and ``codex-ollama`` still run
-    ``codex exec``; this entry is the lane agent ``codex-interactive`` only.)
+    loaded. Never ``codex exec``. This entry is the lane agents ``codex`` (the default author
+    lane) and ``codex-interactive``; only ``codex-ollama`` still runs ``codex exec``.
 
     What decides the shape was observed on codex-cli 0.167.0 on the operator's ChatGPT
     sign-in, 2026-11-13: the first message given at launch is reported by Codex's own
@@ -712,19 +712,14 @@ _BLOCKERS = {
             "Muse lane unattended.",
     "prime-agent": "Prime: not installed on the machine this was assessed on; its interactive "
                    "program and any report or MCP interface are unassessed.",
-    # Lane agents `codex` and `codex-ollama`. Their configuration defect is fixed (nothing of
-    # the operator's Codex configuration is ignored); their mode is not.
-    "codex": "Codex: this lane runs `codex exec`, the non-interactive mode, not the "
-             "interactive program. Established (`codex --help` here, and this harness's own "
-             "use): the interactive program is `codex [PROMPT]` (lane agent "
-             "codex-interactive), `codex resume [SESSION_ID]` continues a session, `codex "
-             "queue` queues a message for an existing session, and hooks given by `-c` are "
-             "skipped until the operator trusts them. The interactive program is now "
-             "hosted as the lane agent codex-interactive, which reports its start, prompts "
-             "and stops, takes a later message through `codex queue`, and is restarted by "
-             "a lane message with Codex's own resume (run once against Codex itself, "
-             "2026-11-14); this exec lane is not converted yet: that is a separate change, "
-             "not made, and the interactive adapter has no Signet guard shown on it." + _TO_SHOW,
+    # The registry entry `codex` is `codex exec`. The only lane agent still on it is
+    # `codex-ollama`; the lane agent `codex` is the interactive adapter (LANE_VARIANTS).
+    "codex": "Codex on a local Ollama model (`codex-ollama`): this lane runs `codex exec "
+             "--oss`, the non-interactive mode, not the interactive program. It is not "
+             "converted because Codex's interactive program on a local model has not been "
+             "run: nothing is known of its hooks, its queue or its resume there. The lane "
+             "agent `codex` does not run `codex exec`: it is Codex's own interactive "
+             "session, hosted (the adapter also named `codex-interactive`)." + _TO_SHOW,
     # The lane agent `codex-interactive`: Codex's own interactive session, hosted. What is
     # open is stated, not hidden.
     "codex-interactive": "Codex interactive: hosted as its own interactive session from an "
@@ -765,10 +760,13 @@ _BLOCKERS = {
                          "that one lane, but no tool hook of the Factory's and no Signet "
                          "guard was in place, so nothing about either is established.",
 }
-#: Lane agents that share a registry entry, and the blocker each really has. `codex-ollama`
-#: runs `codex exec` like `codex`. (`codex-interactive` has a registry entry of its own.)
+#: Lane agents that are answered for by another registry entry. The lane agent `codex`, the
+#: default author lane, is the hosted interactive adapter `codex-interactive`: the launcher
+#: runs that and records that name. `codex-ollama` is the registry entry `codex`, which is
+#: `codex exec`, and is the only lane agent still on it.
 #: Each maps to (registry entry, blocker or None for the entry's own, resumable by the Factory).
 LANE_VARIANTS: Mapping[str, tuple[str, str | None, bool]] = {
+    "codex": ("codex-interactive", None, True),
     "codex-ollama": ("codex", None, True),
 }
 
@@ -798,8 +796,8 @@ HARNESSES: Mapping[str, Harness] = {
                          metered=False),
     "claude-ollama": ClaudeOllama("claude-ollama", "claude", ("IS_SANDBOX",), True,
                                   memory="beside-operator", dialect="claude"),
-    # Codex lanes are launched by tmux_lane.sh, with the operator's whole configuration, and
-    # still by `codex exec` (see LANE_VARIANTS for the interactive lane agent).
+    # `codex exec`, with the operator's whole configuration. Only the lane agent `codex-ollama`
+    # still runs on this entry; the lane agent `codex` is `codex-interactive` (LANE_VARIANTS).
     "codex": Codex("codex", "codex", ("CODEX_HOME",), True, api_env=("OPENAI_API_KEY",),
                    memory="beside-operator", native_blocker=_BLOCKERS["codex"]),
     # Not resumable by the Factory yet, for the reasons its blocker gives. Antigravity's own

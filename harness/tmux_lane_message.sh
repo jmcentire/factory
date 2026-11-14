@@ -104,6 +104,11 @@ if active[0].get("agent") in {"claude", "claude-ollama", "cursor-agent", "muse",
         "lane-message: this lane was launched in print mode by an earlier Factory, and print "
         "mode is never used; start its native session with tmux_lane.sh launch "
         "--replace-session '<why>'")
+if active[0].get("agent") == "codex" and not persistent:
+    raise SystemExit(
+        "lane-message: this Codex lane was started as `codex exec` by an earlier Factory, and "
+        "an author lane on Codex is never continued through `codex exec`; start its hosted "
+        "session with tmux_lane.sh launch --replace-session '<why>'")
 if active[0].get("agent") == "codex-interactive" and not persistent:
     raise SystemExit(
         "lane-message: this interactive Codex lane was started by an earlier Factory with "
@@ -311,7 +316,7 @@ if [ "$BOUNDARY_RECORD" != null ]; then
   printf -v BOUNDARY_CODEX_ARGS ' --boundary-record %q' "$BOUNDARY_RECORD"
 fi
 case "$AGENT" in
-  codex|codex-ollama|codex-interactive) ;;
+  codex-ollama|codex-interactive) ;;
   cursor-agent|claude|claude-ollama|agy|muse|prime-agent)
     [ -f "$TURN_RECORD" ] && [ ! -L "$TURN_RECORD" ] || {
       echo "lane-message: the $AGENT lane has no turn record to resume it by; launch a new --round instead" >&2; exit 70;
@@ -641,12 +646,12 @@ SAFE_CODEX_HOME="${CODEX_HOME:-$SAFE_HOME/.codex}"
 LOCAL_ARGS=""
 if [ "$AGENT" = "codex-ollama" ]; then
   printf -v LOCAL_ARGS -- '--oss --local-provider ollama -m %q' "$MODEL"
-elif case "$AGENT" in codex|codex-interactive) true ;; *) false ;; esac && [ "${#MODEL_CONFIG[@]}" -eq 0 ] && [ -n "$MODEL" ]; then
+elif [ "$AGENT" = codex-interactive ] && [ "${#MODEL_CONFIG[@]}" -eq 0 ] && [ -n "$MODEL" ]; then
   printf -v LOCAL_ARGS -- '-m %q' "$MODEL"
 fi
-# A Codex lane launched with --effort recorded it (agents.py turn-record); resume at the same.
-# (An interactive Codex lane is here only to have its ended hosted session restarted.)
-if [ -f "$TURN_RECORD" ] && [ ! -L "$TURN_RECORD" ] && case "$AGENT" in codex|codex-interactive) true ;; *) false ;; esac; then
+# A Codex lane launched with --effort recorded it (agents.py turn-record); its ended hosted
+# session is restarted at the same, with the launch's own guard configuration.
+if [ -f "$TURN_RECORD" ] && [ ! -L "$TURN_RECORD" ] && [ "$AGENT" = codex-interactive ]; then
   TURN_EFFORT=$("$FACTORY_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("effort",""))' "$TURN_RECORD")
   case "$TURN_EFFORT" in ""|minimal|low|medium|high|xhigh|max) ;; *) echo "lane-message: the turn record's effort is malformed" >&2; exit 70 ;; esac
   [ -z "$TURN_EFFORT" ] || LOCAL_ARGS="${LOCAL_ARGS:+$LOCAL_ARGS }-c model_reasoning_effort=$TURN_EFFORT"
@@ -683,7 +688,7 @@ if [ "$PANE_DEAD" = "0" ]; then
     echo "the retry reuses this planned message." >&2
     exit 75
   fi
-  case "$AGENT" in codex|codex-ollama) ;; *)
+  case "$AGENT" in codex-ollama) ;; *)
     echo "lane-message: $MESSAGE_ID planned but NOT delivered: a live $AGENT turn takes no queued message;" >&2
     echo "retry when '$0 $RUN $SENDER $SLOT idle' reports idle." >&2
     exit 75 ;;
@@ -728,7 +733,9 @@ elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
   # The resumed turn runs under the same lane wrapper as the launch, so it reaches the lane log
   # and records its end, and a fresh watcher is started for it below.
   case "$AGENT" in
-    codex|codex-ollama)
+    codex-ollama)
+  # The one lane agent still continued through `codex exec` (--oss): Codex on a local Ollama
+  # model has not been run interactively.
   # The resume runs sandboxed exactly as its launch did (the launch record's FACTORY_LANE_SANDBOX).
   RESUME_POLICY="--ask-for-approval never"
   [ "$LANE_SANDBOX" != off ] || RESUME_POLICY="--dangerously-bypass-approvals-and-sandbox"
@@ -831,11 +838,13 @@ PY
 import datetime, json, os, sys
 journal, run, role, slot, sender, kind, message_id, message, agent, hosted = sys.argv[1:]
 size = os.path.getsize(message)
-# Codex resumes read the turn from stdin; a registry harness takes it as one argv element; a
+# A codex-ollama resume reads the turn from stdin. A registry harness takes it as one argv
+# element, and so does a restarted Codex session (its resume's launch argument). Any other
 # restarted hosted session is given it through its lane server, as a typed message is
 # (native_session.TYPED_LIMIT).
-limit = None if agent in ("codex", "codex-ollama") else 16384 if hosted == "1" else 131071
-via = "terminal" if hosted == "1" else "argv"
+typed = hosted == "1" and agent != "codex-interactive"
+limit = None if agent == "codex-ollama" else 16384 if typed else 131071
+via = "terminal" if typed else "argv"
 delivery = "stdin" if limit is None else ("file-pointer" if size > limit else via)
 row = json.dumps({
     "schema_version": "factory-tmux-lane-reopen/1",
@@ -902,5 +911,5 @@ fi
   --message-id "$MESSAGE_ID" --thread-id "$THREAD_ID" --transport "$TRANSPORT" >/dev/null
 # The activity feed is the Orchestrator's input; its own deliveries are not echoed back to it.
 
-case "$AGENT" in codex|codex-ollama) VIA=Codex ;; *) VIA="$AGENT" ;; esac
+case "$AGENT" in codex-ollama) VIA=Codex ;; *) VIA="$AGENT" ;; esac
 echo "lane-message: delivered $MESSAGE_ID to $RUN:$SLOT via $VIA $TRANSPORT"
