@@ -126,10 +126,11 @@ exec 4< <("$FACTORY_PYTHON" "$(dirname "${BASH_SOURCE[0]}")/model_settings.py" "
   IFS= read -r -d '' EFFORT <&4; } || exit 64
 exec 4<&-
 # Claude Code is a resident native terminal session for every action: it has no print mode here.
-# So is Cursor's agent: its interactive program, never `-p`.
+# So is Cursor's agent: its interactive program, never `-p`. So is Muse Code: its interactive
+# session, never `muse exec`.
 case "$ACTION:$AGENT" in
   launch:claude|qualify:claude|launch:claude-ollama|qualify:claude-ollama|\
-  launch:cursor-agent|qualify:cursor-agent|launch:agy)
+  launch:cursor-agent|qualify:cursor-agent|launch:muse|qualify:muse|launch:agy)
     PERSISTENT=1; PERSISTENT_ARGS=(--persistent) ;;
 esac
 case "$AGENT" in codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent) ;;
@@ -138,8 +139,8 @@ esac
 if [ "$PERSISTENT" = 1 ]; then
   case "$ACTION:$AGENT" in
     launch:claude|qualify:claude|launch:claude-ollama|qualify:claude-ollama|\
-    launch:cursor-agent|qualify:cursor-agent|launch:agy) ;;
-    *) echo "tmux-lane: --persistent requires --agent claude, claude-ollama, cursor-agent or (launch only) agy" >&2; exit 64 ;;
+    launch:cursor-agent|qualify:cursor-agent|launch:muse|qualify:muse|launch:agy) ;;
+    *) echo "tmux-lane: --persistent requires --agent claude, claude-ollama, cursor-agent, muse or (launch only) agy" >&2; exit 64 ;;
   esac
 fi
 case "$EFFORT" in ""|minimal|low|medium|high|xhigh|max) ;;
@@ -476,13 +477,18 @@ PY
       "$FACTORY_PYTHON" "$D/native_session.py" clean-project --manifest "$MANIFEST" >/dev/null || \
         refuse 70 "an earlier session's project files could not be accounted for ($MANIFEST)"
     done
-    # With the lane's own leftovers gone, anything at the paths a Cursor lane writes is the
-    # target project's. It is never edited or replaced, so the lane cannot run here. Say so
-    # now, before a budget is reserved or a launch recorded, not from inside the lane.
+    # With the lane's own leftovers gone, anything at the paths a Cursor or Muse lane writes
+    # is the target project's. It is never edited or replaced, so the lane cannot run here.
+    # Say so now, before a budget is reserved or a launch recorded, not from inside the lane.
     if [ "$AGENT" = cursor-agent ]; then
       OCCUPIED=$("$FACTORY_PYTHON" "$D/native_session.py" check-project --workspace "$REPOSITORY" 2>&1) || \
         refuse 70 "the lane's repository has Cursor project configuration of its own, which is not edited or replaced: $OCCUPIED" \
           "a Cursor lane reads its hooks and its Kindex only from those paths and cannot run in this repository; choose another agent for this lane"
+    fi
+    if [ "$AGENT" = muse ]; then
+      OCCUPIED=$("$FACTORY_PYTHON" "$D/native_session.py" check-project --agent muse --workspace "$REPOSITORY" 2>&1) || \
+        refuse 70 "the lane's repository has a Muse project hook file of its own, which is not edited or replaced: $OCCUPIED" \
+          "a Muse lane's hooks can be added beside the operator's only through that path, so it cannot run in this repository; choose another agent for this lane"
     fi
   fi
   if [ "$ACTION" = launch ]; then
@@ -1078,10 +1084,10 @@ PY
   if [ "$PERSISTENT" = 1 ]; then
     printf -v PERSISTENT_WRAP ' --persistent --run-root %q' "$ROOT"
     WRAP+="$PERSISTENT_WRAP"
-    case "$AGENT" in claude|claude-ollama|cursor-agent)
+    case "$AGENT" in claude|claude-ollama|cursor-agent|muse)
       # The session's own hook commands write its lifecycle journal here, so it is the lane's
       # private runtime, which a kernel boundary leaves writable, not the host control tree.
-      # For Cursor it also holds the record of the project files the session wrote.
+      # For Cursor and Muse it also holds the record of the project files the session wrote.
       printf -v NATIVE_WRAP ' --native-dir %q' "$AGENT_HOME"
       WRAP+="$NATIVE_WRAP" ;;
     esac
@@ -1134,6 +1140,11 @@ PY
         # Retain the explicit choice with the turn, so later resumes do not fall back to
         # the user's unrelated Cursor configuration.
         printf '%s\0' '--sandbox' 'disabled' >> "$SETUP_OUT"
+      fi
+      if [ "$AGENT" = muse ] && [ "${FACTORY_LANE_SANDBOX:-on}" = off ]; then
+        # Nothing is imposed on Muse's approvals or sandbox otherwise. This is the one
+        # configuration that adds its native permissive flag, retained with the turn.
+        printf '%s\0' '--yolo' >> "$SETUP_OUT"
       fi
       SETUP_ARGS=()
       while IFS= read -r -d '' PART; do SETUP_ARGS+=("--extra-arg=$PART"); done < "$SETUP_OUT"

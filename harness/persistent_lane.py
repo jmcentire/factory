@@ -735,6 +735,7 @@ def run_terminal(
     launcher: dict,
     note,
     diagnostic=None,
+    launched=None,
 ) -> int:
     """Own one native terminal session until its actual exit.
 
@@ -769,6 +770,12 @@ def run_terminal(
 
     Delivery records survive this wrapper: a restart that resumes the same conversation
     keeps them, types nothing that was ever typed, and marks an unfinished one ``unknown``.
+
+    ``launched`` is given when the first message was handed to the program as its launch
+    argument rather than typed (Muse Code, which reports a session's start only with its
+    first prompt): the message's mark and the digests of what was handed over. That message
+    is then already ``submitted`` when this begins, is never typed, and becomes ``observed``
+    the same way a typed one does, by the session's own prompt report carrying its mark.
 
     ``session_id`` is empty when the provider chooses its own conversation id (Cursor): the
     first start report after this program was spawned names it, and it is bound then. Where
@@ -821,6 +828,13 @@ def run_terminal(
         for key in carried:
             if isinstance(prior.get(key), (int, float)):
                 carried[key] = prior[key]
+    if launched is not None and "initial" not in deliveries:
+        # Handed over at launch: from that moment its outcome is uncertain, exactly as for
+        # a typed message from its first byte, and it is never given again.
+        deliveries["initial"] = {
+            "state": "submitted", "message_id": "initial", "token": launched["token"],
+            "typed_sha256": launched["typed_sha256"], "at": time.time(),
+            "via": "launch-argument"}
     deliveries.setdefault("initial", {"state": "queued", "message_id": "initial"})
     waiting: dict[str, str] = {}  # accepted, not yet typed: message id -> text
     for identifier, record in deliveries.items():
@@ -857,7 +871,8 @@ def run_terminal(
         "turn_started_at": time.time(),
         "stop_reported_at": None,
         "current_message_id": "initial",
-        "current_input_id": native_session.text_digest(prompt),
+        "current_input_id": (launched["typed_sha256"] if launched is not None
+                             else native_session.text_digest(prompt)),
         "capabilities": [],
         "review_boundary_pending": False,
         "foreign_inputs": 0,
@@ -869,6 +884,9 @@ def run_terminal(
     typing: list | None = None
     digests: dict[str, str] = {}  # message id -> digest of exactly what was typed
     bodies: dict[str, str] = {}  # message id -> digest of the message without its mark
+    if launched is not None and deliveries["initial"].get("via") == "launch-argument":
+        digests["initial"] = launched["typed_sha256"]
+        bodies["initial"] = launched["body_sha256"]
     ready_at = None
     events = native_session.Journal(journal, journal_offset)
 

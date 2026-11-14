@@ -246,11 +246,57 @@ candidate guard were exercised on temporary repositories, not through a live lan
   That is why the files exist only while the session runs, why a freeze removes any that a
   killed session left before it copies anything, and why it stops if one of them changed.
 
+### Muse lanes are Muse Code's own interactive session
+
+A Muse lane runs `muse --workspace <clone>` on the same terminal host, with the operator's
+HOME, sign-in, settings, hooks and MCP servers intact: no `muse exec`, no replaced
+`XDG_CONFIG_HOME`, no link to the sign-in file. Everything below was observed on Muse Code
+1.4.20 with its echo provider (which calls no model and needs no sign-in), by the adapter's
+author and independently by the tester on 2026-11-13. It is converted, not accepted.
+
+- **First message at launch.** Muse reports a session's start only when its first prompt is
+  submitted, so the lane's first message is Muse's launch argument (after `--`), with its
+  mark. Its delivery is `submitted` from the start (`via: launch-argument`) and `observed`
+  when Muse's prompt report carries the mark. Later messages are typed, as for Claude Code.
+- **Trust is the operator's.** For a clone Muse has not been told to trust, Muse asks in
+  the lane's window before anything runs. The Factory does not answer and passes no
+  `--trust-workspace`; until the session reports starting it is `starting` and nothing is
+  typed. Muse saves the answer itself. A launch prints this as "this start asks you".
+- **Hooks beside the operator's.** The lane's observation hooks are the project file
+  `.muse/hooks.json` in the lane's own clone, which Muse runs in addition to the operator's
+  hooks. It has the custody a Cursor lane's project files have: never written over a
+  target's own file (the launch is refused), excluded from commits, removed at exit and
+  before a relaunch or a freeze, and refused in a candidate commit. A per-run
+  `-c hooks=...` is refused in a lane's arguments, because Muse replaces the operator's
+  hooks with it.
+- **Kindex beside the operator's.** The lane's Kindex is one more server for that run,
+  `-c mcpServers.lane-kindex=...`, which Muse adds to the operator's servers and writes
+  nowhere. Its variables are set by `/usr/bin/env` in front of its command, because Muse
+  refuses literal `env` values in that form.
+- **Reports.** `SessionStart`, `UserPromptSubmit`, `Stop` and `SessionEnd`, in Claude Code's
+  names. A prompt's report and its turn's stop report share a turn id, so that stop is
+  recorded on the message as `response_stop`. A message typed while a turn runs waits in
+  Muse's own queue and is reported when the turn ends.
+- **Permissions.** Nothing is imposed: no `--yolo`, no `--disable-request-user-input`.
+  `FACTORY_LANE_SANDBOX=off` is the one configuration that adds `--yolo`.
+- **Sign-in check.** `muse usage`, Muse's own account command. The sign-in file is not
+  opened. A plan lane refuses `META_API_KEY`, which would override the account.
+- **Resume limit.** `muse resume <id>` continues the same session, and the registry builds
+  it whenever a session id is given. A resumed session reports nothing until a prompt is
+  typed, and Muse refuses a prompt beside `resume`, so it stays `starting` and is not typed
+  to: unattended resume is not supported, the registry reports Muse as not resumable by the
+  Factory, and wrap-up and progress-review pauses are not offered for it. That is less than
+  the print-mode lane did, and it is the cost of not using print mode.
+- **Not established.** Anything a signed-in model run would show: a model calling
+  `lane-kindex`, any tool-use hook (so there is no Signet guard for a Muse lane, and a
+  launch that requires one is refused), and any report of Muse asking the operator a
+  question. Muse refreshes its own sign-in file when it starts; that is Muse's doing.
+
 ### Memory isolation, said plainly
 
 A launch records `memory_isolation` and prints it. `lane-only` means the lane sees its
-scoped Kindex and none of the operator's MCP servers. `beside-operator` (Claude, Cursor and
-Codex lanes) means the operator's settings and MCP servers are intact and the lane's Kindex is
+scoped Kindex and none of the operator's MCP servers. `beside-operator` (Claude, Cursor, Muse
+and Codex lanes) means the operator's settings and MCP servers are intact and the lane's Kindex is
 added beside them: any memory server the operator configured is visible to the lane, so
 Coder and Tester independence rests on their separate inputs and clones, not on memory.
 That is the consequence of not suppressing the operator's configuration, and it is the
@@ -259,19 +305,18 @@ operator's to weigh.
 ### Providers not yet native, and exactly why
 
 Codex lanes (`codex`, `codex-ollama`) load the operator's whole Codex configuration but
-still run `codex exec`. Antigravity, Muse and Prime lanes still start in print mode with a
+still run `codex exec`. Antigravity and Prime lanes still start in print mode with a
 private configuration. Each launch records and prints `native_blocker`, asked by the lane
 agent's own name: it is empty only for `claude`, `claude-ollama` and `codex-interactive`,
 and `python harness/agents.py describe --agent <lane agent>` prints it. For `cursor-agent`
-it says what was run live and what is still open, and the
-registry reports Cursor as not resumable by the Factory, so wrap-up and progress-review
-pauses, which continue a session, are not offered for it. They are not converted
+and `muse` it says what was run and what is still open, and
+the registry reports both as not resumable by the Factory, so wrap-up and progress-review
+pauses, which continue a session, are not offered for them. The rest are not converted
 because doing so today would cost the lane its Kindex and any way to send it a message:
 
 | Provider | Established, and from where | Not established |
 |---|---|---|
 | Antigravity | From its own `agy changelog`: hooks.json events `SessionStart`, `PreInvocation` (input carries `lastUserInput`), `Stop` (input carries `continuation_active`); follow-up messages queue until the turn ends by default; plugins may bundle MCP servers and a workspace may list plugins in `.agents/plugins.json`. | That a project `.agents/hooks.json` and a workspace plugin load without an edit to the operator's configuration or a trust prompt. `agy mcp add` writes the operator's configuration and is not an option. |
-| Muse | Probed live on muse 1.4.6 (2026-10-12) and from its help: events `sessionStart`, `userPromptSubmit`, `stop`, `notification`, `sessionEnd`; hooks by per-run `-c hooks=<json>` or project `.muse/hooks.json` (off until the workspace is trusted); project MCP file `<repository>/.mcp.json`. | Whether `-c hooks=` adds to or replaces the operator's hooks, and the `userPromptSubmit` payload. No sign-in status command, so the preflight still reads whether a sign-in is stored. |
 | Prime | Nothing: the program is not installed where this was written. | Everything. |
 | Codex (`codex`, `codex-ollama`) | From `codex --help` and this harness's own use: the interactive program is `codex [PROMPT]` (lane agent `codex-interactive`); `codex resume [SESSION_ID]`; `codex queue` queues a message for an existing session; hooks given by `-c` are skipped until the operator trusts them. The operator's configuration is already intact. | Any report from the interactive program that it started, received a prompt or stopped, and that `codex queue` reaches a live interactive session. Until then a `codex-interactive` lane can be neither messaged nor resumed by the Factory, so it cannot replace `codex exec` for unattended work. |
 

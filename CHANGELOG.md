@@ -91,8 +91,21 @@ public API is still pre-1.0.
   lane may run unasked is the operator's own Cursor permission configuration plus the single
   rule `Mcp(lane-kindex:*)`. A launch prints and records what a start asks of the operator
   (`start_requires`). This narrows what a Cursor lane does unattended, deliberately.
+- Muse lanes run Muse Code's own interactive session on the same terminal host, with the
+  operator's HOME, sign-in, settings, hooks and MCP servers intact: no `muse exec`, no
+  replaced `XDG_CONFIG_HOME`, no `--yolo` (except for `FACTORY_LANE_SANDBOX=off`), no
+  `--disable-request-user-input`. The lane's first message is Muse's launch argument, later
+  ones are typed; lane hooks are the clone's `.muse/hooks.json` (same custody as Cursor's
+  project files, including the launch and candidate refusals); the lane's Kindex is the
+  per-run server `lane-kindex`; the sign-in check is `muse usage` and no longer opens the
+  sign-in file. Observed end to end on Muse Code 1.4.20 with its echo provider only: not
+  accepted, and nothing about a signed-in model run is established (`docs/HARNESS.md`).
+  Narrower than before, deliberately: a Muse lane is no longer resumable by the Factory, so
+  wrap-up and progress-review pauses are not offered for it and a lane message does not
+  restart an ended Muse session; a Muse lane launched in print mode by an earlier version
+  is not resumed in print mode (`--replace-session`).
 - Not converted, each with its `native_blocker` recorded at launch (`docs/HARNESS.md`,
-  "Providers not yet native"): Antigravity, Muse and Prime still start in print mode with a
+  "Providers not yet native"): Antigravity and Prime still start in print mode with a
   private configuration, because no qualified interface lets their interactive programs
   report readiness or receipt, and converting now would cost the lane its Kindex and any way
   to message it. Codex still runs `codex exec`.

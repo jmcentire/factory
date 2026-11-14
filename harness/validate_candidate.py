@@ -71,8 +71,11 @@ def lane_project_files(root: Path, task: dict[str, Any], candidate: Path,
     """The lane runtime files a candidate carries, each with why it is one.
 
     A Cursor lane writes its hooks, its Kindex and one permission rule into its clone's
-    ``.cursor/`` and keeps them out of ordinary commits, but an author can force one in. A
-    candidate is the work, not the lane's configuration, so such a commit is not validated.
+    ``.cursor/``, a Muse lane writes its hooks into ``.muse/hooks.json``, and both keep them
+    out of ordinary commits, but an author can force one in. A candidate is the work, not
+    the lane's configuration, so such a commit is not validated. Each provider's paths are
+    judged against lanes of that provider: "the run launched a Cursor lane" below reads, for
+    the Muse path, "the run launched a Muse lane".
 
     The run's base commit is consulted first. A file that is byte-for-byte what the target
     held at that commit is the target's own, whatever it says and whatever ran, and is
@@ -98,8 +101,9 @@ def lane_project_files(root: Path, task: dict[str, Any], candidate: Path,
     though the target had nothing there, and it is not refused as a lane's either.
 
     Scope, exactly: the three paths a Cursor lane writes (``.cursor/hooks.json``,
-    ``.cursor/mcp.json``, ``.cursor/cli.json``). A copy of a lane's file committed under
-    another name or elsewhere in the tree is not looked for.
+    ``.cursor/mcp.json``, ``.cursor/cli.json``) and the one a Muse lane writes
+    (``.muse/hooks.json``). A copy of a lane's file committed under another name or
+    elsewhere in the tree is not looked for.
     """
 
     lanes = root / "tmux-lanes"
@@ -112,7 +116,7 @@ def lane_project_files(root: Path, task: dict[str, Any], candidate: Path,
                 and not (repository / ".git").is_symlink():
             manifests += sorted(runtime.glob("*/agent/*-project-files.json"))
     manifests = [manifest for manifest in manifests if not manifest.is_symlink()]
-    cursor_lane = False
+    ran: set[str] = set()  # the agents whose lanes this run launched
     for journal in journals:
         if journal.is_symlink():
             continue
@@ -121,10 +125,14 @@ def lane_project_files(root: Path, task: dict[str, Any], candidate: Path,
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if isinstance(row, dict) and row.get("agent") == "cursor-agent":
-                cursor_lane = True
+            if isinstance(row, dict) and row.get("agent") in _native.PROJECT_FILES:
+                ran.add(row["agent"])
     found: list[str] = []
-    for relative in _native.CURSOR_PROJECT_FILES:
+    owners = [(relative, agent) for agent, relatives in _native.PROJECT_FILES.items()
+              for relative in relatives]
+    for relative, agent in owners:
+        label = _native.PROJECT_LABEL[agent]
+        lane_ran = agent in ran
         path = candidate / relative
         if not path.is_symlink() and not path.is_file():
             continue
@@ -133,8 +141,8 @@ def lane_project_files(root: Path, task: dict[str, Any], candidate: Path,
             # A link is judged as a link and never followed.
             if base == ("link", os.readlink(path).encode()):
                 continue  # the target's own link, exactly as it was before the run
-            reason = ("a Cursor lane ran in this run and the link is new or changed since "
-                      "the run's base commit") if cursor_lane else ""
+            reason = (f"a {label} lane ran in this run and the link is new or changed since "
+                      "the run's base commit") if lane_ran else ""
             if reason:
                 found.append(f"{relative} ({reason})")
             continue
@@ -145,8 +153,8 @@ def lane_project_files(root: Path, task: dict[str, Any], candidate: Path,
         # not make the target's own file a lane's. A recorded digest counts either way.
         reason = _native.lane_file_in_candidate(
             relative, data, manifests, marks=base is None)
-        if not reason and cursor_lane:
-            reason = ("a Cursor lane ran in this run and the file is new or changed since "
+        if not reason and lane_ran:
+            reason = (f"a {label} lane ran in this run and the file is new or changed since "
                       "the run's base commit")
         if reason:
             found.append(f"{relative} ({reason})")
@@ -263,8 +271,12 @@ def validate(
         result["candidate"] = dataclasses.asdict(materialized)
         carried = lane_project_files(root, task, candidate, repository.resolve())
         if carried:
+            whose = " and ".join(
+                _native.PROJECT_LABEL[agent] for agent, relatives in _native.PROJECT_FILES.items()
+                if any(item.startswith(relative + " ") for item in carried
+                       for relative in relatives))
             raise ValueError(
-                "candidate commit carries a lane's own Cursor project configuration, which "
+                f"candidate commit carries a lane's own {whose} project configuration, which "
                 "is not part of the work: " + "; ".join(carried) + ". Take those paths out "
                 "of the commit and validate the new commit.")
         if require_lfs and materialized.lfs_pointers_left:

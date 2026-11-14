@@ -271,6 +271,9 @@ class Plan:
     # The record of files this start wrote into the lane's own repository (Cursor's project
     # configuration), so exactly those are removed when the session ends; None: it wrote none.
     manifest: pathlib.Path | None = None
+    # The first message, when it was given to the program as its launch argument instead of
+    # being typed later: its mark and the digests of what was given. None: nothing was.
+    launched: Mapping[str, str] | None = None
 
 
 def plan(arguments: Sequence[str], *, launcher: Launcher, directory: pathlib.Path, slot: str,
@@ -369,6 +372,18 @@ _LANE_MARKS = {CURSOR_HOOKS: (b"native_session.py", b"--dialect"),
                CURSOR_CLI: (b"Mcp(lane-kindex:",)}
 
 
+#: Muse Code runs a project's hooks from this file, beside the operator's own, once the
+#: workspace is trusted (observed 2026-11-13 on Muse Code 1.4.20 with its echo provider, by
+#: me and independently by the tester). It is the lane's for as long as its session runs.
+MUSE_HOOKS = ".muse/hooks.json"
+MUSE_PROJECT_FILES = (MUSE_HOOKS,)
+_LANE_MARKS[MUSE_HOOKS] = (b"native_session.py", b"--dialect")
+#: The project files a lane of each agent writes into its own clone, and what to call them.
+PROJECT_FILES: Mapping[str, tuple[str, ...]] = {"cursor-agent": CURSOR_PROJECT_FILES,
+                                                "muse": MUSE_PROJECT_FILES}
+PROJECT_LABEL = {"cursor-agent": "Cursor", "muse": "Muse"}
+
+
 def _sha(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
@@ -439,7 +454,8 @@ def _manifest(path: pathlib.Path) -> dict[str, str]:
 
 
 def install_project_files(workspace: pathlib.Path, files: Mapping[str, bytes],
-                          manifest: pathlib.Path) -> None:
+                          manifest: pathlib.Path,
+                          reads: str = "lane hooks and the lane's Kindex") -> None:
     """Write lane configuration into the lane's own repository without touching the target's.
 
     A path that already exists is the target project's file unless this lane's manifest
@@ -464,7 +480,7 @@ def install_project_files(workspace: pathlib.Path, files: Mapping[str, bytes],
                 raise ValueError(
                     f"the lane's repository already has {relative}, which is the target "
                     "project's own file and is not edited or replaced. This provider reads "
-                    "lane hooks and the lane's Kindex only from that path, so the lane "
+                    f"{reads} only from that path, so the lane "
                     "cannot run as a native session in this repository")
         planned[str(target)] = _sha(data)
     _write_private(manifest, json.dumps({**recorded, **planned}, sort_keys=True))
@@ -583,6 +599,86 @@ def cursor_plan(arguments: Sequence[str], *, executable: str, directory: pathlib
                 Launcher(name, "executable", path=executable), offset, manifest)
 
 
+#: Muse subcommands a lane's session may begin with. Everything else Muse offers as a
+#: subcommand is another program (its headless `exec`, its servers), never a lane's session.
+_MUSE_SESSION_WORDS = ("resume",)
+
+
+def muse_plan(arguments: Sequence[str], *, executable: str, directory: pathlib.Path,
+              slot: str, workspace: pathlib.Path, prompt: str,
+              python: str = sys.executable) -> Plan:
+    """A native start of Muse Code's interactive session.
+
+    ``arguments`` exclude the executable. What was observed of Muse Code 1.4.20 on its echo
+    provider decides the shape, and nothing here goes beyond it:
+
+    - The lane's observation hooks go into ``.muse/hooks.json`` in the lane's own clone,
+      which Muse runs beside the operator's own hooks. A per-run ``-c hooks=...`` would
+      replace the operator's hooks, so it is refused here in any argument.
+    - Muse reports a session's start only when its first prompt is submitted, so the first
+      message is given as the launch argument (after ``--``, so its text is never read as an
+      option), with its mark. Later messages are typed.
+    - Muse chooses its own session id; its start report names it.
+    - ``resume <id>`` continues that same session. Muse refuses a prompt beside ``resume``
+      and a resumed session reports nothing until one is typed, so a resumed session is
+      given no launch argument and stays ``starting`` until it reports.
+    """
+
+    args = _split_values(list(arguments), ("--config",))
+    if args and not args[0].startswith("-") and args[0] not in _MUSE_SESSION_WORDS:
+        raise ValueError(f"native Muse session refuses the `{args[0]}` subcommand; a lane is "
+                         "Muse's interactive session")
+    for index, part in enumerate(args):
+        value = ""
+        if part in ("-c", "--config") and index + 1 < len(args):
+            value = args[index + 1]
+        elif part.startswith("-c") and not part.startswith("--") and len(part) > 2:
+            value = part[2:]
+        if re.match(r"\s*hooks\b", value):
+            raise ValueError("native Muse session refuses a per-run `hooks` setting: it "
+                             "replaces the operator's own hooks")
+    session = ""
+    resumed = args[:1] == ["resume"]
+    if resumed:
+        session = args[1] if len(args) > 1 else ""
+        try:
+            uuid.UUID(session)
+        except ValueError:
+            raise ValueError("native session id missing or malformed") from None
+    if "\0" in prompt:
+        raise ValueError("the first message holds a NUL byte and cannot be a launch argument")
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    journal = directory / f"{slot}-native-events.jsonl"
+    if journal.is_symlink():
+        raise ValueError("symlinked native event journal")
+    command = shlex.join([python, str(pathlib.Path(__file__).resolve()), "hook",
+                          "--dialect", "muse", "--journal", str(journal)])
+    # The one file shape observed to load: an outer "hooks" object keyed by Claude Code's
+    # event names. The same object without the outer key is silently ignored by Muse.
+    hooks = {event: [{"matcher": "*", "hooks": [{"type": "command", "command": command}]}]
+             for event in HOOK_EVENTS}
+    manifest = directory / f"{slot}-project-files.json"
+    install_project_files(
+        workspace, {MUSE_HOOKS: json.dumps({"hooks": hooks}, sort_keys=True).encode()},
+        manifest, reads="a lane's hooks, beside the operator's,")
+    try:
+        offset = journal.stat().st_size
+    except FileNotFoundError:
+        offset = 0
+    launched = None
+    if not resumed:
+        # A mark of this start's own: the session id it would otherwise derive from is not
+        # known until Muse reports it.
+        mark = message_token(uuid.uuid4().hex, "initial")
+        given = marked(prompt, mark)
+        args += ["--", given]
+        launched = {"token": mark, "typed_sha256": text_digest(given),
+                    "body_sha256": text_digest(prompt)}
+    name = pathlib.Path(executable).name
+    return Plan((executable, *args), session, resumed, journal,
+                Launcher(name, "executable", path=executable), offset, manifest, launched)
+
+
 def child_environment(environ: Mapping[str, str]) -> dict[str, str]:
     """The program's environment: the wrapper's, without any API-billing variable."""
 
@@ -597,7 +693,10 @@ def child_environment(environ: Mapping[str, str]) -> dict[str, str]:
 #: ``generation_id`` is one prompt's, and that prompt's stop report carries the same one.
 CURSOR_EVENTS = {"sessionStart": "SessionStart", "beforeSubmitPrompt": "UserPromptSubmit",
                  "stop": "Stop", "sessionEnd": "SessionEnd"}
-DIALECTS = ("claude", "cursor")
+#: Muse Code's hooks use Claude Code's event names and nearly its payload (observed, as
+#: above): ``session_id``, ``prompt``, ``last_assistant_message``, ``stop_hook_active``, and a
+#: ``turn_id`` that a prompt's report and that turn's stop report share.
+DIALECTS = ("claude", "cursor", "muse")
 
 
 def record_hook(journal: pathlib.Path, payload: Mapping[str, object],
@@ -621,13 +720,15 @@ def record_hook(journal: pathlib.Path, payload: Mapping[str, object],
             row["generation"] = payload["generation_id"]
         if event == "Stop" and isinstance(payload.get("status"), str):
             row["status"] = payload["status"]
+    if dialect == "muse" and isinstance(payload.get("turn_id"), str):
+        row["generation"] = payload["turn_id"]
     if event == "UserPromptSubmit" and isinstance(payload.get("prompt"), str):
         reported = str(payload["prompt"])
         row["prompt_sha256"] = text_digest(reported)
         row["tokens"] = TOKEN.findall(reported)[:16]
     if event == "SessionStart" and isinstance(payload.get("source"), str):
         row["source"] = payload["source"]
-    if event == "Stop" and dialect == "claude":
+    if event == "Stop" and dialect in ("claude", "muse"):
         # True when this stop ends a continuation another stop hook asked for.
         row["stop_hook_active"] = payload.get("stop_hook_active") is True
     if event == "Stop":
@@ -968,8 +1069,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     hook.add_argument("--journal", type=pathlib.Path, required=True)
     hook.add_argument("--dialect", choices=DIALECTS, default="claude")
     check = sub.add_parser("check-project", help="say what in a workspace already occupies "
-                           "the Cursor project paths a lane would write; exit 70 if anything")
+                           "the project paths a lane of --agent would write; exit 70 if "
+                           "anything")
     check.add_argument("--workspace", type=pathlib.Path, required=True)
+    check.add_argument("--agent", choices=sorted(PROJECT_FILES), default="cursor-agent")
     clean = sub.add_parser("clean-project", help="remove the project files a lane wrote, by "
                            "its manifest; prints any it left because they had changed")
     clean.add_argument("--manifest", type=pathlib.Path, required=True)
@@ -990,7 +1093,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "check-project":
         try:
-            found = project_collisions(args.workspace)
+            found = project_collisions(args.workspace, PROJECT_FILES[args.agent])
         except OSError as error:
             print(f"native-session: {error}", file=sys.stderr)
             return 70

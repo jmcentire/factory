@@ -118,17 +118,19 @@ AGENTS: Mapping[str, Agent] = {
     # hold any seat. Each runs on the operator's signed-in plan unless launched --metered, and its
     # check proves that sign-in the way the harness itself reports it, never a credential value.
     "agy": Agent("agy", "agy", "argv", False, "agy-plan"),
-    "muse": Agent("muse", "muse", "argv", False, "muse-plan"),
+    # Muse Code, interactive, hosted like Claude Code on a terminal the wrapper owns. Its
+    # first message is its launch argument; later ones are typed. Never `muse exec`.
+    "muse": Agent("muse", "muse", "terminal", False, "muse-usage"),
     # prime-agent bills OpenRouter per use by construction; it has no plan to sign in to.
     "prime-agent": Agent("prime-agent", "prime-agent", "argv", False, "registry", metered=True),
 }
 
 
 #: Lanes that stay resident and take later messages into the same native process.
-PERSISTENT_AGENTS = frozenset({"claude", "claude-ollama", "cursor-agent", "agy"})
+PERSISTENT_AGENTS = frozenset({"claude", "claude-ollama", "cursor-agent", "muse", "agy"})
 #: Of those, the ones hosted as a native terminal session rather than a stream: each
 #: reports its own lifecycle through hooks the wrapper adds beside the operator's.
-NATIVE_TERMINAL_AGENTS = frozenset({"claude", "claude-ollama", "cursor-agent"})
+NATIVE_TERMINAL_AGENTS = frozenset({"claude", "claude-ollama", "cursor-agent", "muse"})
 
 
 def agent(name: str) -> Agent:
@@ -563,23 +565,18 @@ def preflight(
         if result.returncode != 0 or "sign in" in shown.lower():
             raise PreflightRefused("agy is not signed in", remediation)
         return "agy-models"
-    if chosen.auth == "muse-plan":
+    if chosen.auth == "muse-usage":
+        # Muse's own account command says whether it is signed in ("no model turn", by its
+        # help). Its sign-in file is never opened here.
         remediation = "muse login   (once, as this user; META_API_KEY would bill the API instead)"
         if environ.get("META_API_KEY"):
             raise PreflightRefused("META_API_KEY would override Muse's account sign-in",
                                    "unset it for the lane, or launch it --metered")
-        base = pathlib.Path(environ.get("XDG_CONFIG_HOME")
-                            or pathlib.Path(environ.get("HOME", "~")) / ".config")
-        auth = base / "muse" / "auth.json"
-        try:
-            stored = json.loads(auth.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            stored = None
-        if not isinstance(stored, dict) or not stored.get("providers"):
-            raise PreflightRefused(f"Muse has no stored sign-in at {auth}", remediation)
-        _status([chosen.executable, "--version"], timeout=timeout, runner=runner,
-                remediation="install Muse Code", label="muse")
-        return "muse-auth-stored"
+        result = _status([chosen.executable, "usage"], timeout=timeout, runner=runner,
+                         remediation="install Muse Code", label="muse", env=environ)
+        if result.returncode != 0:
+            raise PreflightRefused("muse usage did not report a signed-in account", remediation)
+        return "muse-usage"
     if chosen.auth == "registry":
         _status([chosen.executable, "--version"], timeout=timeout, runner=runner,
                 remediation=f"install {chosen.executable} and sign it in as this user",
@@ -904,7 +901,15 @@ def run_lane(
             else:
                 # claude-ollama talks only to the loopback server its own variables name.
                 launcher = native_session.Launcher(argv[0], "executable", path=found)
-            if chosen is not None and chosen.dialect == "cursor":
+            if chosen is not None and chosen.dialect == "muse":
+                # Muse runs lane hooks from its workspace and takes its first message as
+                # its launch argument (it reports no start until a prompt is submitted).
+                assert prompt is not None
+                native_plan = native_session.muse_plan(
+                    argv[1:], executable=launcher.path, directory=native_dir or log.parent,
+                    slot=slot, workspace=pathlib.Path.cwd(),
+                    prompt=argv_prompt(prompt, pathlib.Path.cwd()), python=sys.executable)
+            elif chosen is not None and chosen.dialect == "cursor":
                 # Cursor reads lane hooks and the lane's Kindex only from its workspace.
                 native_plan = native_session.cursor_plan(
                     argv[1:], executable=launcher.path, directory=native_dir or log.parent,
@@ -1096,7 +1101,7 @@ def run_lane(
                     session_id=native_plan.session_id, journal=native_plan.journal,
                     journal_offset=native_plan.journal_offset,
                     launcher=native_plan.launcher.record(), note=note,
-                    diagnostic=startup_output)
+                    diagnostic=startup_output, launched=native_plan.launched)
         elif terminal:
             process = subprocess.Popen(argv, env=child_env)
             register()

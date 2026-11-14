@@ -135,12 +135,12 @@ class Harness:
                         extra: Sequence[str] = ()) -> Turn:
         """Keep one native process alive for successive messages.
 
-        Claude Code's is its interactive session, unchanged (``prompt_via`` is ``terminal``).
-        Agy's is structured stdin. Other harnesses need their own qualified transport before
-        they can opt in.
+        Claude Code's, Cursor's and Muse's is the interactive session itself, unchanged
+        (``prompt_via`` is ``terminal``). Agy's is structured stdin. Other harnesses need
+        their own qualified transport before they can opt in.
         """
 
-        if self.name not in ("claude", "claude-ollama", "cursor-agent", "agy"):
+        if self.name not in ("claude", "claude-ollama", "cursor-agent", "muse", "agy"):
             raise ValueError(f"{self.name} does not support persistent native input")
         built = self.turn(model=model, effort=effort, cwd=cwd, resume=resume, extra=extra)
         if built.prompt_via == "terminal":
@@ -469,59 +469,56 @@ class Antigravity(Harness):
         return LaneSetup(env={"HOME": str(private)})
 
 
+#: The name every native lane gives its own Kindex server, apart from any server of the
+#: operator's (which is usually named ``kindex``), so nothing addressed to one reaches the other.
+LANE_SERVER = signet_hooks.CURSOR_LANE_KINDEX
+
+
 class Muse(Harness):
-    """Meta's Muse Code. ``muse exec --json`` streams session events; the first carries the
-    session id, and ``--session-id`` continues it. ``META_API_KEY`` overrides the account sign-in,
-    so a plan lane never admits it."""
+    """Meta's Muse Code, interactive: the operator's own sign-in, settings, hooks and MCP
+    servers, all untouched and all still loaded. Never ``muse exec``.
+
+    What decides the shape was observed on Muse Code 1.4.20 with its echo provider (no model,
+    no sign-in), by this adapter's author and independently by the tester, 2026-11-13:
+
+    - The lane's Kindex is one more server for this run, ``-c mcpServers.<lane server>=...``.
+      Muse adds it beside the operator's servers; it refuses the whole map and changes no
+      file. The server is named apart from any of the operator's. In that form Muse refuses
+      a ``type`` key ("unknown key") and any literal ``env`` value ("secret leaves need
+      exactly one whole-value ``${VAR}``"), so the server's variables, which are paths and
+      not secrets, are set by ``/usr/bin/env`` in front of its command and reach only it.
+    - The lane's hooks are the project file ``.muse/hooks.json`` in the lane's own clone,
+      written and removed by ``native_session.muse_plan``. A per-run ``-c hooks=`` is never
+      used: it replaces the operator's hooks instead of adding to them.
+    - Muse asks its own workspace-trust question; no ``--trust-workspace`` is passed.
+    - Nothing is imposed on permissions: no ``--yolo`` (the launcher adds it only for
+      ``FACTORY_LANE_SANDBOX=off``), no ``--disable-request-user-input``.
+    - ``resume <id>`` continues the same session and is built whenever a session id is given.
+
+    ``META_API_KEY`` overrides the account sign-in, so a plan lane never admits it."""
 
     def turn(self, *, model: str, effort: str, cwd: Path, resume: str = "",
              last_message_file: str = "", max_turns: int = 400,
              extra: Sequence[str] = ()) -> Turn:
-        argv = ["muse", "exec", "--json", "--workspace", str(cwd), "--yolo",
-                "--disable-request-user-input", "--no-foreign-personal-context"]
+        argv = ["muse", *(["resume", resume] if resume else []), "--workspace", str(cwd)]
         argv += ["--model", model] if model else []
         argv += ["--reasoning-effort", effort] if effort else []
-        argv += ["--session-id", resume] if resume else []
         argv += list(extra)
-        return Turn(tuple(argv), "argv")
-
-    def outcome(self, stdout: str, last_message: str = "") -> Outcome:
-        session, text = "", ""
-        for line in stdout.splitlines():
-            event = _json_line(line)
-            if not event:
-                continue
-            session = session or self.session_in(line)
-            payload = event.get("payload")
-            if str(event.get("payload_type", "")).startswith("run.terminal") \
-                    and isinstance(payload, dict):
-                text = str(payload.get("text") or text)
-        return Outcome(text=text, session=session, cost_usd=0.0)
-
-    def session_in(self, line: str) -> str:
-        stream = _json_line(line).get("stream")
-        if isinstance(stream, dict) and stream.get("kind") == "session":
-            return str(stream.get("id") or "")
-        return ""
+        return Turn(tuple(argv), "terminal")
 
     def lane_setup(self, home: Path, *, model: str, server: Mapping[str, object] | None,
                    operator_home: Path, environ: Mapping[str, str]) -> LaneSetup:
-        # Muse reads $XDG_CONFIG_HOME/muse: the lane's holds a link to the operator's sign-in and
-        # a settings file naming only the lane's Kindex. Muse passes an MCP child a small env
-        # allowlist plus the literal env map, and never expands ${VAR}.
-        base = Path(environ.get("XDG_CONFIG_HOME") or operator_home / ".config")
-        config = home / "xdg"
-        auth = base / "muse" / "auth.json"
-        if auth.is_file():
-            _link(config / "muse" / "auth.json", auth)
-        servers: dict[str, object] = {}
-        if server is not None:
-            command, args, env = _server(server)
-            servers["kindex"] = {"type": "stdio", "command": command, "args": args, "env": env,
-                                 "mode": "optional"}
-        _write(config / "muse" / "settings.json", json.dumps(
-            {"schema_version": 1, "provider": "meta", "mcpServers": servers}))
-        return LaneSetup(env={"XDG_CONFIG_HOME": str(config)})
+        # Nothing of the operator's configuration is replaced or linked.
+        if server is None:
+            return LaneSetup()
+        command, args, env = _server(server)
+        if any(not name.isidentifier() for name in env):
+            raise ValueError("the lane Kindex record names a variable that is not a name")
+        if env:
+            command, args = "/usr/bin/env", [*(f"{name}={value}" for name, value in env.items()),
+                                             command, *args]
+        entry = {"command": command, "args": args, "mode": "optional"}
+        return LaneSetup(argv=("-c", f"mcpServers.{LANE_SERVER}={json.dumps(entry)}"))
 
 
 class PrimeAgent(Harness):
@@ -574,7 +571,7 @@ class PrimeAgent(Harness):
 
 #: The lane's Kindex as Cursor knows it. Not "kindex": an operator who has their own server of
 #: that name keeps it, and the lane's permission rule must not be able to match theirs.
-CURSOR_LANE_SERVER = signet_hooks.CURSOR_LANE_KINDEX
+CURSOR_LANE_SERVER = LANE_SERVER
 
 
 class CursorAgent(Harness):
@@ -688,13 +685,20 @@ _BLOCKERS = {
                     "which has not been exercised; a required Signet guard, not shown "
                     "enforcing end to end; and what the lane's Kindex returns for a seeded "
                     "search.",
-    "muse": "Muse. Established (probed live on muse 1.4.6, 2026-10-12, and its own help): "
-            "events sessionStart, userPromptSubmit, stop, notification, sessionEnd; hooks by "
-            "per-run `-c hooks=<json>` or project .muse/hooks.json (off until the workspace "
-            "is trusted); project MCP file <repository>/.mcp.json. Not established: whether "
-            "`-c hooks=` adds to or replaces the operator's hooks (clashing keys refuse the "
-            "run), and the userPromptSubmit payload. Its sign-in has no status command, so "
-            "the preflight still reads whether a sign-in is stored." + _TO_SHOW,
+    # The lane is Muse's own interactive session with the operator's configuration. What is
+    # open is acceptance and what an echo run cannot show, not conversion.
+    "muse": "Muse: hosted as its own interactive session from an interface observed on Muse "
+            "Code 1.4.20 with its echo provider (2026-11-13, by the adapter's author and "
+            "independently by the tester): start, a first message given at launch, typed "
+            "follow-up messages, turn-end reports, lane hooks beside the operator's, a "
+            "per-run lane server beside the operator's. Not yet accepted, and three things "
+            "are open. First, everything a signed-in model run would show and echo cannot: "
+            "a model calling the lane's Kindex, any tool-use hook, and so any Signet guard "
+            "(a launch that requires one is refused). Second, unattended resume: a resumed "
+            "session reports nothing until a prompt is typed, and Muse refuses a prompt "
+            "beside `resume`, so no lane command restarts an ended session and wrap-up and "
+            "review pauses are not offered. Third, no report of Muse asking the operator a "
+            "question was observed, so a lane waiting on one is not shown as such.",
     "prime-agent": "Prime: not installed on the machine this was assessed on; its interactive "
                    "program and any report or MCP interface are unassessed.",
     # Lane agents `codex` and `codex-ollama`. Their configuration defect is fixed (nothing of
@@ -753,8 +757,22 @@ HARNESSES: Mapping[str, Harness] = {
     "agy": Antigravity("agy", "agy", (), True,
                        api_env=("GEMINI_API_KEY", "GOOGLE_API_KEY", "AGY_LLM_GATEWAY_API_KEY"),
                        native_blocker=_BLOCKERS["agy"]),
-    "muse": Muse("muse", "muse", (), True, api_env=("META_API_KEY",),
-                 native_blocker=_BLOCKERS["muse"]),
+    # Not resumable by the Factory yet, for the reason its blocker gives. Muse's own resume is
+    # untouched: `turn(resume=<id>)` builds `resume <id>`, the same session and never a new one.
+    "muse": Muse(
+        "muse", "muse", (), False, api_env=("META_API_KEY",),
+        memory="beside-operator", dialect="muse", native_blocker=_BLOCKERS["muse"],
+        protocol_note=(
+            f"- Your Kindex is the MCP server named {LANE_SERVER}. It is this lane's own. "
+            "Do not call the\n  server named kindex: it is not this lane's memory. The file "
+            ".muse/hooks.json is this\n  lane's runtime configuration, not the work: do not "
+            "edit it, and never add it to a commit\n  (not with git add -f either).\n"),
+        start_requires=(
+            "Muse asks its own workspace-trust question in the lane's window for a clone it "
+            "has not been told to trust, and the Factory does not answer it or pass "
+            "--trust-workspace. The lane's first message is given to Muse at launch and is "
+            "submitted when that question is answered. Until the session reports starting "
+            "it is `starting` and nothing is typed to it.")),
     "prime-agent": PrimeAgent("prime-agent", "prime-agent", (), True,
                               api_env=("OPENROUTER_API_KEY",), plan=False,
                               native_blocker=_BLOCKERS["prime-agent"]),

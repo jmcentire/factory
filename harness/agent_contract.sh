@@ -62,7 +62,15 @@ case "$AGENT" in
     HELP=$(claude --help 2>/dev/null) || HELP=""
     needs "$HELP" claude "$VERSION" --session-id --resume --settings --mcp-config --name
     CONTRACT="claude-native-terminal-v1" ;;
-  agy|muse|prime-agent)
+  muse)
+    # Muse Code's own interactive session, hosted on a terminal (native_session.py). Only
+    # what that session uses is required; its headless subcommand is not, because it is
+    # never used.
+    VERSION=$(muse --version 2>/dev/null | head -1) || fail "muse CLI is not runnable ($(at muse))"
+    HELP=$(muse --help 2>/dev/null) || HELP=""
+    needs "$HELP" muse "$VERSION" --workspace --config --model --reasoning-effort resume
+    CONTRACT="muse-native-terminal-v1" ;;
+  agy|prime-agent)
     # A registry harness (harness/agents.py): the registry builds its headless turn.
     if [ -z "$EXECUTABLE" ]; then
       # The Factory's own interpreter (exits 69 with the fix when there is none), never PATH's.

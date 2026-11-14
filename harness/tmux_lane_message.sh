@@ -96,7 +96,7 @@ active = [row for row in rows if row.get("status") == "active"]
 if len(active) != 1 or type(active[0].get("persistent", False)) is not bool:
     raise SystemExit("lane-message: retained launch transport is missing or malformed")
 persistent = active[0].get("persistent", False)
-if active[0].get("agent") in {"claude", "claude-ollama", "cursor-agent"} and not persistent:
+if active[0].get("agent") in {"claude", "claude-ollama", "cursor-agent", "muse"} and not persistent:
     raise SystemExit(
         "lane-message: this lane was launched in print mode by an earlier Factory, and print "
         "mode is never used; start its native session with tmux_lane.sh launch "
@@ -107,7 +107,8 @@ if persistent:
     record = json.loads(turn.read_text())
     if (record.get("schema_version") != "factory-lane-turn/1"
             or record.get("agent") != active[0].get("agent")
-            or record.get("agent") not in {"claude", "claude-ollama", "cursor-agent", "agy"}
+            or record.get("agent") not in {"claude", "claude-ollama", "cursor-agent", "muse",
+                                           "agy"}
             or record.get("persistent") is not True):
         raise SystemExit("lane-message: launch and turn transports disagree")
 elif turn.is_file() and not turn.is_symlink():
