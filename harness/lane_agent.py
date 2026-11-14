@@ -825,20 +825,35 @@ def run_lane(
     if prompt is not None and not persistent:
         argv.append(argv_prompt(prompt, pathlib.Path.cwd()))
     child_env = dict(os.environ)
+    if native and session_agent == "claude":
+        # The operator's launcher on their subscription ("unset ANTHROPIC_API_KEY && cl"): no
+        # API-billing variable the launching shell happened to export reaches Claude Code,
+        # and the lane runs rather than refusing over a variable it can simply not pass on.
+        # Only the ambient environment is cleared here, before the lane's own file is read.
+        import native_session
+
+        child_env = native_session.child_environment(child_env)
     if env_file is not None:
         if env_file.stat().st_mode & 0o077:
             raise ValueError(f"credential file {env_file} is readable by others")
+        named = []
         for line in env_file.read_text(encoding="utf-8").splitlines():
             name, sep, value = line.partition("=")
             if sep and name.isidentifier():
                 child_env[name] = value
-    if native and session_agent == "claude":
-        # The operator's launcher on their subscription ("unset ANTHROPIC_API_KEY && cl"): no
-        # API-billing variable reaches Claude Code, whatever the launching shell exported, and
-        # the lane runs rather than refusing over a variable it can simply not pass on.
-        import native_session
-
-        child_env = native_session.child_environment(child_env)
+                named.append(name)
+        if native and session_agent == "claude":
+            # A variable in the lane's own file was put there on purpose. One that would
+            # bill Claude Code to an API key or point it at another endpoint is not dropped
+            # quietly, which would hide the mistake and run a different lane than the one
+            # asked for: it stops the lane. Names only; a value is never logged.
+            explicit = sorted(name for name in native_session.CLAUDE_API_ENV
+                              if name in named and child_env.get(name))
+            if explicit:
+                raise ValueError(
+                    f"credential file {env_file.name} sets " + ", ".join(explicit)
+                    + " for Claude Code, which runs only on the operator's subscription and "
+                    "is never given an API key or another endpoint")
     if plan_only and chosen is not None:
         forbidden = sorted(name for name in chosen.api_env if child_env.get(name))
         if forbidden:
