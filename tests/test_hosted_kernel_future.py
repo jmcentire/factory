@@ -5,8 +5,8 @@ No implementation inspection, no actual providers, no native sandbox override.
 """
 
 import json
-import sys
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -30,7 +30,23 @@ def eventually(check):
 
 
 @pytest.mark.parametrize("agent", ["agy"])
-@pytest.mark.parametrize("tamper", ["none", "changed", "missing", "record-missing", "record-schema", "record-session", "record-confinement", "all-invocations", "pythonpath-injection", "usercustomize-injection", "cwd-injection", "json-injection"])
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        "none",
+        "changed",
+        "missing",
+        "record-missing",
+        "record-schema",
+        "record-session",
+        "record-confinement",
+        "all-invocations",
+        "pythonpath-injection",
+        "usercustomize-injection",
+        "cwd-injection",
+        "json-injection",
+    ],
+)
 def test_kernel_only_hosted_launch_live_message_and_retained_restart(
     native_case, tmp_path, agent, tamper
 ):
@@ -63,20 +79,44 @@ def test_kernel_only_hosted_launch_live_message_and_retained_restart(
     record = control / "record"
     record.write_text("original")
     workspace = tmp_path / "workspace"
-    prepared = execute([sys.executable, str(H / "role_inputs.py"), "prepare",
-                        "--runs", str(case["runs"]), "--run", "native-acceptance",
-                        "--role", "coder", "--repo", str(workspace)], case["env"])
+    prepared = execute(
+        [
+            sys.executable,
+            str(H / "role_inputs.py"),
+            "prepare",
+            "--runs",
+            str(case["runs"]),
+            "--run",
+            "native-acceptance",
+            "--role",
+            "coder",
+            "--repo",
+            str(workspace),
+        ],
+        case["env"],
+    )
     assert prepared.returncode == 0, prepared.stderr
     workspace = Path(json.loads(prepared.stdout)["repository"])
-    planned = subprocess.run([sys.executable, str(H / "protocol_host.py"), "trust-roots",
-                              "--control", str(run.resolve() / "tmux-lanes")],
-                             capture_output=True, text=True, check=True)
+    planned = subprocess.run(
+        [
+            sys.executable,
+            str(H / "protocol_host.py"),
+            "trust-roots",
+            "--control",
+            str(run.resolve() / "tmux-lanes"),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
     roots = json.loads(planned.stdout)
     boundary = Boundary.parse(
         {
             "schema": "factory-seat-boundary/1",
             "role": "coder",
-            "denied_reads": list(dict.fromkeys([str(denied.resolve()), *roots["deny_read"], *roots["deny_write"]])),
+            "denied_reads": list(
+                dict.fromkeys([str(denied.resolve()), *roots["deny_read"], *roots["deny_write"]])
+            ),
             "protected_writes": [str(control.resolve()), str(run.resolve())],
             "allowed_sockets": [],
         }
@@ -94,7 +134,7 @@ if args and args[0] == 'usage':
     body = FAKE.replace('assert not {"-p",', auth + '\nassert not {"-p",')
     invocation_probe = f"""
 try:
-    with open({str(denied / 'oracle')!r}) as f: f.read()
+    with open({str(denied / "oracle")!r}) as f: f.read()
     guarded_invocation=False
 except PermissionError:
     guarded_invocation=True
@@ -128,8 +168,10 @@ log(invocation_guarded=guarded_invocation, invocation_args=args)
     )
     # Keep the live reply observable before the separate clean-end transition.
     # Immediate response+exit is an independent transport acknowledgment race.
-    body = body.replace('if (folder / "exit-after-completion").exists():',
-                        'if (folder / "exit-after-completion").exists():\n            time.sleep(1)')
+    body = body.replace(
+        'if (folder / "exit-after-completion").exists():',
+        'if (folder / "exit-after-completion").exists():\n            time.sleep(1)',
+    )
     provider.write_text("#!/usr/bin/python3\n" + body)
     provider.chmod(0o755)
     prompt = tmp_path / "brief"
@@ -170,7 +212,9 @@ log(invocation_guarded=guarded_invocation, invocation_args=args)
     sid = state()["session_id"]
     if tamper == "all-invocations":
         invocation_rows = [r for r in rows() if "invocation_guarded" in r]
-        assert invocation_rows and all(r["invocation_guarded"] for r in invocation_rows), invocation_rows
+        assert invocation_rows and all(r["invocation_guarded"] for r in invocation_rows), (
+            invocation_rows
+        )
         return
 
     def message():
@@ -214,25 +258,38 @@ log(invocation_guarded=guarded_invocation, invocation_args=args)
             retained.unlink()
         else:
             changed = json.loads(retained.read_text())
-            if tamper == "record-schema": changed["schema"] = "unknown/999"
-            if tamper == "record-session": changed["session_id"] = "ffffffff-ffff-4fff-8fff-ffffffffffff"
-            if tamper == "record-confinement": changed.pop("confined", None)
+            if tamper == "record-schema":
+                changed["schema"] = "unknown/999"
+            if tamper == "record-session":
+                changed["session_id"] = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+            if tamper == "record-confinement":
+                changed.pop("confined", None)
             retained.write_text(json.dumps(changed))
     elif tamper.endswith("injection"):
         injection = workspace / "injection"
         injection.mkdir()
         marker = workspace / "trusted-host-injection-executed"
-        (injection / ("usercustomize.py" if tamper == "usercustomize-injection" else "sitecustomize.py")).write_text(
-            "from pathlib import Path\nPath(" + repr(str(marker)) + ").write_text('executed')\n")
+        (
+            injection
+            / ("usercustomize.py" if tamper == "usercustomize-injection" else "sitecustomize.py")
+        ).write_text(
+            "from pathlib import Path\nPath(" + repr(str(marker)) + ").write_text('executed')\n"
+        )
         if tamper == "json-injection":
-            (workspace / "json.py").write_text("open(" + repr(str(marker)) + ", 'w').write('executed')\n")
+            (workspace / "json.py").write_text(
+                "open(" + repr(str(marker)) + ", 'w').write('executed')\n"
+            )
         elif tamper == "cwd-injection":
-            (workspace / "sitecustomize.py").write_text((injection / "sitecustomize.py").read_text())
+            (workspace / "sitecustomize.py").write_text(
+                (injection / "sitecustomize.py").read_text()
+            )
         else:
             case["env"]["PYTHONPATH"] = str(injection)
     resumed = message()
     if tamper.endswith("injection"):
-        assert not marker.exists(), "untrusted Python startup code executed outside provider boundary"
+        assert not marker.exists(), (
+            "untrusted Python startup code executed outside provider boundary"
+        )
     if tamper in ("cwd-injection", "json-injection") and resumed.returncode == 70:
         # An unprotected changed startup directory may be refused safely.
         assert len([r for r in rows() if r.get("spawn")]) == before
