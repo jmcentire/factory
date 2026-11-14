@@ -119,3 +119,25 @@ def test_complete_profile_attests_actual_child_without_prompt(kernel_probe,resum
     methods=[r['request']['method'] for r in rows(kernel_probe) if 'request' in r]
     assert methods == ['initialize'] + (['session/resume'] if resume else [])
     assert not (kernel_probe[1]/'coder-hosted.json').exists(), 'probe must not persist session'
+
+@pytest.mark.parametrize('entry',['confined-run','preflight'])
+def test_direct_provider_checks_refuse_incomplete_code_coverage(kernel_probe,entry):
+    b,path=policy(kernel_probe,'code')
+    _,control,workspace,_,server,_=kernel_probe
+    binding=json.dumps({'schema':'factory-lane-boundary/1','role':'coder',
+                        'contract':str(path),'digest':b.digest})
+    if entry=='confined-run':
+        result=call(['confined-run','--workspace',str(workspace),
+                     '--boundary-record',binding,'--boundary-role','coder',
+                     '--control',str(control),'--',str(server),'--version'])
+    else:
+        provider=workspace/'agy'
+        provider.write_text(server.read_text());provider.chmod(0o755)
+        env={k:v for k,v in os.environ.items() if not k.startswith('FACTORY_')}
+        env['PATH']=str(workspace)+os.pathsep+env['PATH']
+        result=subprocess.run([sys.executable,str(H/'lane_agent.py'),'preflight',
+                               '--agent','agy','--timeout','2','--cwd',str(workspace),
+                               '--boundary-record',binding,'--boundary-role','coder'],
+                              env=env,capture_output=True,text=True,timeout=15)
+    assert not rows(kernel_probe), 'incomplete trusted-code protection spawned provider'
+    assert result.returncode==70,result.stdout+result.stderr

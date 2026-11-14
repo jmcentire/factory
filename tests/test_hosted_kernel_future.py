@@ -30,7 +30,7 @@ def eventually(check):
 
 
 @pytest.mark.parametrize("agent", ["agy"])
-@pytest.mark.parametrize("tamper", ["none", "changed", "missing", "record-missing", "record-schema", "record-session", "record-confinement", "all-invocations", "pythonpath-injection", "usercustomize-injection", "cwd-injection"])
+@pytest.mark.parametrize("tamper", ["none", "changed", "missing", "record-missing", "record-schema", "record-session", "record-confinement", "all-invocations", "pythonpath-injection", "usercustomize-injection", "cwd-injection", "json-injection"])
 def test_kernel_only_hosted_launch_live_message_and_retained_restart(
     native_case, tmp_path, agent, tamper
 ):
@@ -186,7 +186,7 @@ log(invocation_guarded=guarded_invocation, invocation_args=args)
                 str(case["runs"]),
             ],
             case["env"],
-            cwd=workspace if tamper == "cwd-injection" else None,
+            cwd=workspace if tamper in ("cwd-injection", "json-injection") else None,
         )
 
     (case["bin_dir"] / "exit-after-completion").touch()
@@ -224,14 +224,16 @@ log(invocation_guarded=guarded_invocation, invocation_args=args)
         marker = workspace / "trusted-host-injection-executed"
         (injection / ("usercustomize.py" if tamper == "usercustomize-injection" else "sitecustomize.py")).write_text(
             "from pathlib import Path\nPath(" + repr(str(marker)) + ").write_text('executed')\n")
-        if tamper == "cwd-injection":
+        if tamper == "json-injection":
+            (workspace / "json.py").write_text("open(" + repr(str(marker)) + ", 'w').write('executed')\n")
+        elif tamper == "cwd-injection":
             (workspace / "sitecustomize.py").write_text((injection / "sitecustomize.py").read_text())
         else:
             case["env"]["PYTHONPATH"] = str(injection)
     resumed = message()
     if tamper.endswith("injection"):
         assert not marker.exists(), "untrusted Python startup code executed outside provider boundary"
-    if tamper == "cwd-injection" and resumed.returncode == 70:
+    if tamper in ("cwd-injection", "json-injection") and resumed.returncode == 70:
         # An unprotected changed startup directory may be refused safely.
         assert len([r for r in rows() if r.get("spawn")]) == before
         assert len([r for r in rows() if "prompt" in r]) == 2
