@@ -45,6 +45,7 @@ def eventually(check):
         "usercustomize-injection",
         "cwd-injection",
         "json-injection",
+        "editable-injection",
     ],
 )
 def test_kernel_only_hosted_launch_live_message_and_retained_restart(
@@ -275,7 +276,28 @@ log(invocation_guarded=guarded_invocation, invocation_args=args)
         ).write_text(
             "from pathlib import Path\nPath(" + repr(str(marker)) + ").write_text('executed')\n"
         )
-        if tamper == "json-injection":
+        if tamper == "editable-injection":
+            observed_paths = subprocess.run(
+                [
+                    case["env"]["FACTORY_PYTHON"],
+                    "-c",
+                    "import sys,json; print(json.dumps(sys.path))",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            relative = [
+                p for p in json.loads(observed_paths.stdout) if p and not Path(p).is_absolute()
+            ]
+            assert relative, "this qualification requires the installed editable startup path"
+            for item in relative:
+                startup = workspace / item
+                startup.mkdir(parents=True, exist_ok=True)
+                (startup / "sitecustomize.py").write_text(
+                    "open(" + repr(str(marker)) + ", 'w').write('executed')\n"
+                )
+        elif tamper == "json-injection":
             (workspace / "json.py").write_text(
                 "open(" + repr(str(marker)) + ", 'w').write('executed')\n"
             )
