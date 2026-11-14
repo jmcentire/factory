@@ -257,7 +257,8 @@ def test_registry_guard_configuration_binds_author_without_inheriting_environmen
             'FACTORY_SIGNET_CONTRACT':config['policy']['contract'],
             'FACTORY_SIGNET_DIGEST':config['policy']['contract_digest'],
             'FACTORY_AUTHOR_CUSTODY_CONFIG':str(path),'FACTORY_AUTHOR_CUSTODY_DIGEST':digest})
-    setting=json.loads((pathlib.Path(setup.env['CURSOR_CONFIG_DIR'])/'hooks.json').read_text())
+    assert 'CURSOR_CONFIG_DIR' not in setup.env and 'HOME' not in setup.env
+    setting=json.loads((base/'cursor-hooks.json').read_text())
     for event in ('preToolUse','beforeShellExecution','beforeMCPExecution'):
         hook=setting['hooks'][event][0]
         assert hook['failClosed'] and '--author-config' in hook['command']

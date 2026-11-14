@@ -148,7 +148,7 @@ class Lanes:
 # -- 1. agents and invocation shape ---------------------------------------------------------
 
 
-def test_cursor_agent_lane_runs_the_stream_mode_invocation_under_the_lane_wrapper(
+def test_cursor_agent_lane_runs_native_terminal_preserving_operator_settings(
     tmp_path: Path,
 ) -> None:
     lanes = Lanes(tmp_path)
@@ -157,17 +157,20 @@ def test_cursor_agent_lane_runs_the_stream_mode_invocation_under_the_lane_wrappe
     assert launched.returncode == 0, launched.stdout + launched.stderr
     lane = lanes.clone("coder").resolve()
     [call] = lanes.windows("coder")
-    assert ("-- agent -p --output-format stream-json --force --trust --approve-mcps "
-            f"--workspace {lane} --model grok-4.7-xhigh") in call
+    assert f"-- agent --workspace {lane} --model grok-4.7-xhigh" in call
+    for forbidden in (" -p ", "--output-format", "--force", "--trust", "--approve-mcps"):
+        assert forbidden not in call
+    assert "--persistent" in call
     assert "env -i" in call and "lane_agent.py run --slot coder" in call
     assert "--prompt-arg" in call and "coder-prompt.txt" in call
-    # A plan lane: the wrapper records its session as it streams and stops API billing.
+    # A plan lane: the resident wrapper records native identity and forbids API routing.
     assert "--session-agent cursor-agent" in call and "coder-thread-id" in call
     assert "--plan-only" in call and "coder-credentials.env" in call
-    # Its private HOME holds only the lane's Kindex, never the operator's MCP servers.
-    home = lanes.root / "tmux-lanes" / "coder-agent-home" / "home"
-    assert list(json.loads((home / ".cursor" / "mcp.json").read_text())["mcpServers"]) == \
-        ["kindex"]
+    # Additive staged project MCP does not replace the operator's HOME/config.
+    home = lanes.root / "tmux-lanes" / "coder-agent-home"
+    mcp = json.loads((home / "cursor-mcp.json").read_text())["mcpServers"]
+    assert list(mcp) == ["lane-kindex"]
+    assert str(lane) in mcp["lane-kindex"]["args"]
     turn = json.loads((lanes.root / "tmux-lanes" / "coder-turn.json").read_text())
     assert turn["agent"] == "cursor-agent" and turn["billing"] == "plan"
     # Plan billing removes the spending cap, not progress and completion observation.
@@ -177,8 +180,8 @@ def test_cursor_agent_lane_runs_the_stream_mode_invocation_under_the_lane_wrappe
     assert row["caps"]["wall_cap_s"] is None
     assert row["caps"]["enforcement"] == "none"
     assert row["status"] == "active" and row["agent"] == "cursor-agent"
-    assert row["model"] == "grok-4.7-xhigh" and row["prompt_via"] == "argv"
-    assert row["cli_contract"] == "cursor-agent-stream-resume-v1"
+    assert row["model"] == "grok-4.7-xhigh" and row["prompt_via"] == "terminal"
+    assert row["cli_contract"] == "cursor-agent-native-terminal-v1"
     assert row["auth_preflight"] == "cursor-agent-status"
     watch = dict(row["watch"])
     assert Path(watch.pop("runs_dir")).name == "runs"
@@ -186,7 +189,8 @@ def test_cursor_agent_lane_runs_the_stream_mode_invocation_under_the_lane_wrappe
     assert watch == {"read_allowance_s": 900, "stall_window_s": 1200, "poll_s": 30,
                      "wrap_s": 0, "review_every_s": 0, "review_wait_s": 900}
 
-    # Until the harness streams its session there is nothing to resume. Do not claim delivery
+    # Until the native harness reports its session there is no verified identity.
+    # Do not claim delivery
     # or prescribe replacement of a conversation that may still be starting.
     message = run(
         ["bash", str(HARNESS / "tmux_lane_message.sh"), "r1", "validator", "coder", "status",
@@ -217,8 +221,8 @@ def test_cursor_agent_without_a_named_model_runs_its_own_default(tmp_path: Path)
     launched = lanes.lane("coder", "--agent", "cursor-agent")
     assert launched.returncode == 0, launched.stdout + launched.stderr
     [call] = lanes.windows("coder")
-    assert "-- agent -p --output-format stream-json --force --trust --approve-mcps --workspace" \
-        in call and "--model" not in call
+    assert "-- agent --workspace" in call and "--model" not in call
+    assert " -p " not in call and "--force" not in call
     row = read_chain(lanes.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
     assert (row["model"], row["model_source"]) == ("", "agent")
 

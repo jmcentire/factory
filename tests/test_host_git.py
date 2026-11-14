@@ -423,11 +423,30 @@ def test_the_cli_hydrates_from_the_lfs_store_it_is_given(tmp_path: Path) -> None
     assert (destination / "art.png").read_bytes() == ART
 
 
-def test_endgame_delegates_to_safe_candidate_materialization() -> None:
-    """The command entrypoint uses the safe object reader; hostile config is tested above
-    and through the end-to-end candidate behavior in test_normal_workflow.py."""
-    shell = (ROOT / "harness" / "endgame.sh").read_text()
-    implementation = (ROOT / "harness" / "validate_candidate.py").read_text()
-    assert "validate_candidate.py" in shell and "git -C" not in shell
-    assert "from factory_runtime.host_git import materialize_commit" in implementation
-    assert "materialize_commit(" in implementation
+def test_endgame_materializes_committed_bytes_without_running_hostile_config(
+    tmp_path: Path,
+) -> None:
+    repository, commit = committed_repository(tmp_path, {"proof.txt": "committed bytes"})
+    task = tmp_path / "task.txt"
+    task.write_text("Validate committed synthetic bytes only.")
+    runs = tmp_path / "runs"
+    subprocess.run([sys.executable, str(ROOT / "harness/run_record.py"), "create",
+                    "--runs", str(runs), "--run", "safe", "--repo", str(repository),
+                    "--task-file", str(task)], check=True, capture_output=True)
+    marker = tmp_path / "hostile-config-ran"
+    git(repository, "config", "core.fsmonitor", marker_command(marker))
+    (repository / "proof.txt").write_text("uncommitted trap")
+    checked = tmp_path / "validation-ran"
+    command = ("from pathlib import Path; "
+               "assert Path('proof.txt').read_text() == 'committed bytes'; "
+               f"Path({str(checked)!r}).write_text('passed')")
+    result = subprocess.run(
+        ["bash", str(ROOT / "harness/endgame.sh"), "safe", commit,
+         "--runs", str(runs), "--repo", str(repository), "--", sys.executable, "-c", command],
+        env={**os.environ, "FACTORY_PYTHON": sys.executable},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert checked.read_text() == "passed"
+    assert not marker.exists()
+    assert (repository / "proof.txt").read_text() == "uncommitted trap"
