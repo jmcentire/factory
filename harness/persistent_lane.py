@@ -654,7 +654,8 @@ def run(
 #:              became of it cannot be observed any more. Never typed again.
 #: There is no "acknowledged" or "completed" here, because the session reports neither.
 OUTSTANDING = frozenset({"queued", "submitted"})
-#: The phases in which a session has itself reported that no turn is running.
+#: The phases whose last report is a stop (or the program's own waiting-for-input report).
+#: Not proof that no turn is running: a stop report precedes the decision to stop.
 BETWEEN_TURNS = frozenset({"stop-reported", "waiting-for-input"})
 #: What a caller may treat as the message having reached the session.
 RECEIVED = frozenset({"observed", "acknowledged"})  # "acknowledged": Agy's stream transport
@@ -844,10 +845,19 @@ def run_terminal(
     on screen later is the chat input: during a turn it can be a permission or question
     dialog, and keys typed then would answer it. So for such a program a later message is
     typed only while the session's last report is a stop report (or its own
-    waiting-for-input report): between turns, by the session's own word. A message asked for
-    during a turn is accepted and held, and typed when that turn's stop is reported. This
-    narrows the exposure and does not close it: a dialog the program raises outside any
-    turn it reported would not be seen.
+    waiting-for-input report), and one asked for after a prompt report is accepted and held
+    until the next stop report.
+
+    That narrows a risk. It is not readiness, and the name promises more than the rule
+    delivers. A stop report is sent before the program decides whether to stop: another
+    Stop hook, the operator's own included, may ask it to continue, and then a turn is
+    running again with no new prompt report (see "What the session's hooks can and cannot
+    establish" above). So "the last report is a stop" does not show that no turn is
+    running, nor that the chat input is what is on screen. What the rule does is keep
+    Factory text out of the stretch between a prompt report and the next stop report.
+    Typing an unattended follow-up into such a program is therefore not established as
+    safe, and stays unestablished until the program is shown to report either the point
+    after which it will not continue, or the dialog itself.
 
     ``launched`` is given when the first message was handed to the program as its launch
     argument rather than typed (Muse Code, which reports a session's start only with its
@@ -1156,9 +1166,10 @@ def run_terminal(
         waiting[identifier] = row["text"]
         result = {"state": "queued", "message_id": identifier}
         if between_turns and state["phase"] not in BETWEEN_TURNS:
-            result["held"] = ("until the session reports its turn ended: this program does "
-                              "not report when it is asking the operator something, so "
-                              "nothing is typed while a turn is running")
+            result["held"] = ("until the session's next stop report: this program was not "
+                              "observed to report when it is asking the operator something, "
+                              "so nothing is typed between a prompt report and the next "
+                              "stop report. A stop report is not proof the session is idle")
         deliveries[identifier] = result
         save()  # durable before any byte is typed
         return result

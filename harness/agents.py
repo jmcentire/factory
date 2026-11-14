@@ -114,9 +114,10 @@ class Harness:
     # How this provider's interactive program reports its lifecycle to the lane wrapper
     # (native_session.DIALECTS), or "" when it is not hosted as a native session.
     dialect: str = ""
-    # A later message is typed into this program's session only between turns, by its own
+    # A later message is typed into this program's session only while its last report is a
     # stop report. Set where the program was not observed to report that it is asking the
-    # operator something, so that nothing is typed while a dialog may be on screen.
+    # operator something. It narrows the chance of typing into a dialog; it does not show the
+    # session is idle, because a stop report precedes the decision to stop.
     type_between_turns: bool = False
     # What the provider's own program asks the operator when a lane starts, and what the
     # Factory does and does not approve for them. Printed and recorded at launch, so a
@@ -702,9 +703,13 @@ _BLOCKERS = {
             "session reports nothing until a prompt is typed, and Muse refuses a prompt "
             "beside `resume`, so no lane command restarts an ended session and wrap-up and "
             "review pauses are not offered. Third, no report of Muse asking the operator a "
-            "question was observed, so a lane waiting on one is not shown as such; a later "
-            "message is therefore typed only after Muse reports a turn ended, never during "
-            "one, and a dialog Muse raised outside a reported turn would still not be seen.",
+            "question was observed, so a lane waiting on one is not shown as such. A later "
+            "message is held until Muse's next stop report, which narrows the chance of "
+            "typing into a dialog and proves nothing: a stop report comes before Muse "
+            "decides whether to continue (another Stop hook, the operator's included, may "
+            "ask it to), so it does not show the session is idle or its chat input is on "
+            "screen. Unattended follow-up messages to a Muse lane are not established as "
+            "safe.",
     "prime-agent": "Prime: not installed on the machine this was assessed on; its interactive "
                    "program and any report or MCP interface are unassessed.",
     # Lane agents `codex` and `codex-ollama`. Their configuration defect is fixed (nothing of

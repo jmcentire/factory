@@ -266,18 +266,20 @@ author and independently by the tester on 2026-11-13. It is converted, not accep
   start's session did with the message is unknown, and unknown is not permission to give
   it again. Start a replacement lane, or remove the record knowing the message was not
   taken.
-- **Typed only between turns.** A start report does not show that what is on screen later
-  is the chat input: during a turn it can be a permission or question dialog, and typed
-  keys would answer it. Muse was not observed to report such a dialog. So a later message
-  is typed only while Muse's last report is a stop; one asked for during a turn is
-  accepted, shown as `queued` with `held`, and typed when that turn's stop arrives. The
-  Factory approves nothing and changes no approval setting to get past a dialog. This
-  narrows the exposure and does not close it: a dialog raised outside any turn Muse
-  reported would not be seen.
-- **Trust is the operator's.** For a clone Muse has not been told to trust, Muse asks in
-  the lane's window before anything runs. The Factory does not answer and passes no
-  `--trust-workspace`; until the session reports starting it is `starting` and nothing is
-  typed. Muse saves the answer itself. A launch prints this as "this start asks you".
+- **Follow-up typing is held, not proven safe.** A start report does not show that what is
+  on screen later is the chat input: during a turn it can be a permission or question
+  dialog, and typed keys would answer it. Muse was not observed to report such a dialog.
+  So a later message is typed only while Muse's last report is a stop; one asked for after
+  a prompt report is accepted, shown as `queued` with `held`, and typed at the next stop
+  report. The Factory approves nothing and changes no approval setting to get past a
+  dialog. This narrows a risk and establishes nothing about readiness. A stop report is
+  sent before Muse decides whether to stop: another Stop hook, the operator's own
+  included, may ask it to continue, and a turn is then running again with no new prompt
+  report. So a stop report does not show that no turn is running or that the chat input is
+  on screen, and unattended follow-up messages to a Muse lane are not established as safe.
+  Open, and not answerable on the echo provider alone: what Muse reports when a Stop hook
+  continues it, whether any report marks the point after which it will not continue, and
+  any report of a tool or question dialog.
 - **Hooks beside the operator's.** The lane's observation hooks are the project file
   `.muse/hooks.json` in the lane's own clone, which Muse runs in addition to the operator's
   hooks. It has the custody a Cursor lane's project files have: never written over a
