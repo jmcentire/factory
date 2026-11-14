@@ -87,7 +87,13 @@ case "$AGENT" in
       RUN_AGY=("${FACTORY_PYTHON:-python3}" "$D/protocol_host.py" confined-run
                --boundary-record "$FACTORY_CONTRACT_BOUNDARY_RECORD"
                --boundary-role "${FACTORY_CONTRACT_BOUNDARY_ROLE:-}"
-               --workspace "${FACTORY_CONTRACT_WORKSPACE:-$PWD}" -- agy)
+               --workspace "${FACTORY_CONTRACT_WORKSPACE:-$PWD}")
+      # The lane's control directories, one a line, when the launcher names them: the
+      # boundary must keep those from the provider as well, and is refused if it does not.
+      while IFS= read -r CONTROL_DIR; do
+        [ -z "$CONTROL_DIR" ] || RUN_AGY+=(--control "$CONTROL_DIR")
+      done <<< "${FACTORY_CONTRACT_CONTROL:-}"
+      RUN_AGY+=(-- agy)
     fi
     VERSION=$("${RUN_AGY[@]}" --version 2>/dev/null | head -1) || fail "agy CLI is not runnable ($(at agy))"
     HELP=$("${RUN_AGY[@]}" acp --help 2>&1) || HELP=""

@@ -4,10 +4,17 @@
 # real boundaries. Model approval, signatures and review-backlog holds are not prerequisites.
 set -euo pipefail
 # The Python helpers this script runs are the Factory's own code, run outside any lane's
-# boundary. What they import is decided here and by the checkout, never by a variable that
-# happened to be in the caller's environment: a directory named there could hold code a
-# lane was able to write.
-unset PYTHONPATH PYTHONSTARTUP PYTHONHOME PYTHONINSPECT
+# boundary, from wherever the operator happens to be, which can be a lane's clone. What they
+# import is decided here and by the checkout, from the first one on: never by a variable
+# that happened to be in the caller's environment (a directory named there could hold code
+# a lane was able to write), and never by the working directory. Safe-path mode keeps the
+# working directory off every helper's import path, the helpers' own directory is named
+# instead, and harness/trusted_startup runs first in each and drops any other relative
+# entry.
+unset PYTHONSTARTUP PYTHONHOME PYTHONINSPECT
+_factory_harness="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+export PYTHONSAFEPATH=1 PYTHONPATH="$_factory_harness/trusted_startup:$_factory_harness"
+unset _factory_harness
 # shellcheck source=harness/factory_python.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
@@ -563,7 +570,7 @@ PY
     IFS= read -r MIN_COMMITS && IFS= read -r WRAP_S && IFS= read -r REVIEW_S; } <<< "$CAPS" ||
     refuse 70 "lane caps could not be read back"
 
-  REPOSITORY_RECEIPT=$(PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" \
+  REPOSITORY_RECEIPT=$(PYTHONPATH="$PYTHONPATH:$REPO_ROOT" "$FACTORY_PYTHON" \
     "$REPO_ROOT/harness/lane_repository.py" validate --source "$REPOSITORY") || \
     refuse 70 "the lane repository is not a standalone clone" \
       "give each lane and each parallel instance its own clone (git clone <source> <dir>), never a git worktree: the Codex sandbox blocks writes to the parent repository's git directory"
@@ -602,7 +609,7 @@ PY
     # .muse/hooks.json or .agents/plugins/lane is no obstacle and is not looked for.
   fi
   if [ "$ACTION" = launch ]; then
-    PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" "$D/role_inputs.py" verify \
+    PYTHONPATH="$PYTHONPATH:$REPO_ROOT" "$FACTORY_PYTHON" "$D/role_inputs.py" verify \
       --runs "$RUNS_ARG" --run "$RUN" --role "$ROLE" --repo "$REPOSITORY" \
       ${REPLACE_REASON:+--replacing} >/dev/null || \
       refuse 70 "author inputs are not the prepared role projection" \
@@ -743,7 +750,8 @@ PY
   # inside that boundary, in the lane's clone, and so do the contract check's runs below.
   CONFINED_PREFLIGHT=()
   [ "$EARLY_BOUNDARY" = null ] || CONFINED_PREFLIGHT=(--boundary-record "$EARLY_BOUNDARY" \
-    --boundary-role "$ROLE" --cwd "$REPOSITORY")
+    --boundary-role "$ROLE" --cwd "$REPOSITORY" \
+    --control "$TMUX_ROOT" --control "$TMUX_ROOT/$SLOT-agent-home")
   AUTH=$("${LANE_ENV[@]}" "$FACTORY_PYTHON" "$D/lane_agent.py" preflight --agent "$AGENT" \
     --billing "$PREFLIGHT_BILLING" ${CONFINED_PREFLIGHT[@]+"${CONFINED_PREFLIGHT[@]}"} 2>&1)
   AUTH_RC=$?
@@ -760,6 +768,7 @@ PY
   # setup also runs to confirm or update an agent before a run).
   CONTRACT_REPORT=$(FACTORY_CONTRACT_BOUNDARY_RECORD="$EARLY_BOUNDARY" \
     FACTORY_CONTRACT_BOUNDARY_ROLE="$ROLE" FACTORY_CONTRACT_WORKSPACE="$REPOSITORY" \
+    FACTORY_CONTRACT_CONTROL="$TMUX_ROOT"$'\n'"$TMUX_ROOT/$SLOT-agent-home" \
     "$D/agent_contract.sh" "$AGENT" "$AGENT_EXECUTABLE" "$PERSISTENT" 2>&1) || \
     refuse 70 "$CONTRACT_REPORT" \
       "update that executable (its own update command, brew or npm), or put a current one first on PATH"
@@ -837,7 +846,7 @@ PY
   printf -v CLOCK_CMD '%q %q remaining --root %q --slot %q' \
     "$FACTORY_PYTHON" "$D/lane_watchdog.py" "$ROOT" "$SLOT"
   RESUMABLE="$AGENT_RESUMABLE"
-  PROMPT_DIGEST=$(LANE_PROTOCOL_NOTE="$PROTOCOL_NOTE" PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" - "$TASK_COPY" "$PROMPT" "$ROLE" "$SLOT" "$STANDARD_BLOCK" \
+  PROMPT_DIGEST=$(LANE_PROTOCOL_NOTE="$PROTOCOL_NOTE" PYTHONPATH="$PYTHONPATH:$REPO_ROOT" "$FACTORY_PYTHON" - "$TASK_COPY" "$PROMPT" "$ROLE" "$SLOT" "$STANDARD_BLOCK" \
     "$LANE_ENV_NOTICE" "$WALL_CAP_S" "$WRAP_S" "$REVIEW_S" "$RESUMABLE" "$CLOCK_CMD" \
     "$REPOSITORY" "$BRIEF_MANIFEST" "$ROOT" "$D" <<'PY'
 import hashlib, json, os, pathlib, sys
@@ -1477,7 +1486,7 @@ for MANIFEST in "$TMUX_ROOT/$SLOT-agent-home/$SLOT-project-files.json" \
   }
 done
 
-EXPORT=$(PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" "$REPO_ROOT/harness/lane_repository.py" freeze \
+EXPORT=$(PYTHONPATH="$PYTHONPATH:$REPO_ROOT" "$FACTORY_PYTHON" "$REPO_ROOT/harness/lane_repository.py" freeze \
   --source "$REPOSITORY" --store "$TMUX_ROOT/snapshots" --durable-through "$ROOT" \
   --projection-conf "${HARNESS_PROJECTION_CONF:-$FACTORY_WORKDIR/.factory/projection.conf}") || exit $?
 PLAN_GAPS=null

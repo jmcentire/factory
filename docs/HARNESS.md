@@ -495,12 +495,12 @@ stay in the run's own control tree and never go into the clone.
   the trusted side loads code from when it starts must be under a root it denies writing,
   unless nothing anywhere within it can be changed by this user (the whole tree is looked
   at, not its top): the Factory checkout, the interpreter's own trees, each entry of its
-  import path as it actually is (site-packages, whatever a `.pth` file added), the user's
-  site directory where one is in use, and the directory the launcher is run from. A
-  contract that leaves any of that out is refused by name (exit 70), by the launcher before
-  the provider's program is run for any reason, by the message command before a restart,
-  and again by the host. So a bounded lane is launched, and messaged, from a directory the
-  contract protects (the Factory checkout, in practice).
+  import path as it actually is (site-packages, whatever a `.pth` file added), and the
+  user's site directory where one is in use. A contract that leaves any of that out is
+  refused by name, by the launcher before the provider's program is run for any reason, by
+  the message command before a restart, by the host, and by each direct entry that runs
+  the provider's program under a boundary (`lane_agent.py preflight`,
+  `protocol_host.py confined-run`): none relies on another to have checked.
   `python harness/protocol_host.py trust-roots --control <dir>...` prints what a contract
   must cover; `check-boundary` checks one. A contract that is missing, changed or has the
   wrong digest fails the existing boundary admission (exit 77), also before any provider
@@ -511,11 +511,16 @@ stay in the run's own control tree and never go into the clone.
   account check, the version and the help text the launcher asks of it before a lane
   starts are run through the same boundary, in the lane's clone. Its start-up is the
   provider's code too.
-- **Nothing ambient decides what the trusted side imports.** `tmux_lane.sh` and
-  `tmux_lane_message.sh` drop `PYTHONPATH`, `PYTHONSTARTUP`, `PYTHONHOME` and
-  `PYTHONINSPECT` from their environment before they run any helper, and the lane wrapper
-  and the host, which run in the lane's clone, keep only absolute entries on their import
-  path (a relative one would be read against the clone).
+- **Nothing ambient decides what the trusted side imports, from its first start.**
+  `tmux_lane.sh` and `tmux_lane_message.sh` can be run from anywhere, a lane's clone
+  included, and run dozens of Python helpers outside any boundary. Before the first of
+  them they drop `PYTHONSTARTUP`, `PYTHONHOME` and `PYTHONINSPECT`, replace `PYTHONPATH`
+  with the harness's own directories, and set `PYTHONSAFEPATH`, so the working directory
+  is on no helper's import path; `harness/trusted_startup` then runs first in every
+  helper and drops any other relative entry (an editable install leaves one, which Python
+  reads against the working directory). The lane wrapper and the host, which run in the
+  lane's clone, do the same for themselves. A module planted in the clone is not imported
+  by any of them.
 - **The socket is not random.** Under a boundary it is `<slot>-hosted.sock` in the lane's
   control directory, which the contract already keeps from the provider.
 - **The child attests before the provider exists.** The process the boundary starts first
@@ -555,8 +560,11 @@ stay in the run's own control tree and never go into the clone.
   contract leaving out the control records or the code refused; a wrong digest refused; a
   restart refused, with nothing started, after the contract changed, with the contract
   gone, with a host record of another schema, of another session, or with its confinement
-  removed, and when run from an unprotected directory; a `sitecustomize.py` on a
-  `PYTHONPATH` given to the restart did not run. Antigravity's real server: `initialize`
+  removed; a `sitecustomize.py` on a `PYTHONPATH` given to the restart did not run; a
+  restart run from the lane's clone, with a `json.py` and a directory named like the
+  editable install's placeholder planted there, ran neither and succeeded; the direct
+  entries refused a contract that validates but leaves out the code or the named control
+  directory, with no run of the provider's program. Antigravity's real server: `initialize`
   answered under the profile.
   **Not run:** any real Antigravity session, prompt or tool under the boundary.
 - **Muse is refused under a boundary.** Its own shell sandbox cannot be applied inside one

@@ -162,8 +162,9 @@ def trust_roots(launch_dir: pathlib.Path | None = None) -> list[pathlib.Path]:
     """Every place the trusted side loads code from when it starts: this checkout, the
     interpreter's own trees, every entry of the import path as this interpreter actually
     has it (site-packages, anything a ``.pth`` file or ``PYTHONPATH`` added), the user's
-    site directory where it is in use (whether or not it exists yet), and, when given, the
-    directory a launcher is run from (which is on the import path of its inline helpers).
+    site directory where it is in use (whether or not it exists yet), and ``launch_dir``
+    when a caller has one that its helpers import from. (The lane launchers have none:
+    their helpers never import by way of the working directory, ``harness/trusted_startup``.)
 
     A provider that could write into any of them, or create one that is missing, could run
     code outside the boundary the next time the trusted side starts, so each must be out of
@@ -293,11 +294,17 @@ def confinement(record: object, role: str, workspace: pathlib.Path,
 
 
 def confined_argv(argv: Sequence[str], record: object, role: str,
-                  workspace: pathlib.Path) -> list[str]:
+                  workspace: pathlib.Path, control: Sequence[pathlib.Path] = ()) -> list[str]:
     """One run of the provider's program inside the boundary, for the runs that are not its
     session server (its account check, its version, its help). Every run of the provider's
-    program for a bounded lane goes inside: its start-up is the provider's code too."""
+    program for a bounded lane goes inside: its start-up is the provider's code too.
 
+    The boundary is held to the same things here as for the server (``confinement``): a
+    contract that validates and yet leaves the trusted side's code, or the control
+    directories named, within the provider's reach is refused before the command is built.
+    No caller is relied on to have checked."""
+
+    confinement(record, role, workspace, control)
     try:
         return validator_boundary.model_command(list(argv), record, role, workspace)
     except (validator_boundary.BoundaryError, OSError, ValueError, TypeError,
@@ -1457,11 +1464,10 @@ def send(args: argparse.Namespace) -> int:
 
 def cover(args: argparse.Namespace) -> int:
     """Say what a boundary contract must cover for a hosted lane whose control directories
-    are those given, launched from the directory this is run in: nothing is guessed by the
-    caller and nothing is random. The host's socket is ``<slot>-hosted.sock`` in the lane's
-    own control directory."""
+    are those given: nothing is guessed by the caller and nothing is random. The host's
+    socket is ``<slot>-hosted.sock`` in the lane's own control directory."""
 
-    reach = {str(root): _reachable(root) for root in trust_roots(pathlib.Path.cwd())}
+    reach = {str(root): _reachable(root) for root in trust_roots()}
     print(json.dumps({
         "deny_read": [str(pathlib.Path(item).resolve()) for item in args.control],
         "deny_write": [root for root, found in reach.items() if found is not None],
@@ -1536,8 +1542,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return cover(args)
     if args.command == "check-boundary":
         try:
-            confinement(args.boundary_record, args.boundary_role, args.workspace, args.control,
-                        launch_dir=pathlib.Path.cwd())
+            confinement(args.boundary_record, args.boundary_role, args.workspace, args.control)
         except BoundaryUnusable as error:
             print(f"hosted-session: {error}", file=sys.stderr)
             return 70
@@ -1548,7 +1553,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error("confined-run needs --boundary-record and a command after --")
         try:
             wrapped = confined_argv(command, args.boundary_record, args.boundary_role,
-                                    args.workspace)
+                                    args.workspace, args.control)
         except BoundaryUnusable as error:
             print(f"hosted-session: {error}", file=sys.stderr)
             return 70

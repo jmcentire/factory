@@ -457,13 +457,16 @@ def preflight(
     boundary_record: object = None,
     boundary_role: str = "",
     cwd: pathlib.Path | None = None,
+    control: Sequence[pathlib.Path] = (),
 ) -> str:
     """Return how sign-in was established, or raise PreflightRefused with the exact fix. A plan
     lane (the default) must be signed in to the operator's plan, not to a per-use API key.
 
     With ``boundary_record`` (a hosted lane under the kernel boundary) the provider's own
     account command runs inside that boundary, in ``cwd``: its start-up is the provider's
-    code, and no run of it for a bounded lane is left outside."""
+    code, and no run of it for a bounded lane is left outside. The boundary is first held
+    to what a hosted lane needs of it (``protocol_host.confinement``, with the lane's
+    ``control`` directories when given), here as everywhere."""
 
     chosen = agent(name)
     if name in ("muse", "agy"):
@@ -602,7 +605,8 @@ def preflight(
 
             try:
                 check = protocol_host.confined_argv(
-                    check, boundary_record, boundary_role, cwd or pathlib.Path.cwd())
+                    check, boundary_record, boundary_role, cwd or pathlib.Path.cwd(),
+                    control)
             except protocol_host.BoundaryUnusable as error:
                 raise PreflightRefused(str(error), "supply a boundary contract and digest "
                                        "that validate for this lane") from None
@@ -1458,6 +1462,7 @@ def main(argv: list[str] | None = None) -> int:
     check.add_argument("--boundary-record", type=json.loads, default=None)
     check.add_argument("--boundary-role", choices=("coder", "tester"), default="")
     check.add_argument("--cwd", type=pathlib.Path, default=None)
+    check.add_argument("--control", action="append", default=[], type=pathlib.Path)
     environment = commands.add_parser("environment")
     environment.add_argument("--path", required=True)
     environment.add_argument("--cache-env", action="append", default=[])
@@ -1536,7 +1541,8 @@ def main(argv: list[str] | None = None) -> int:
             how = preflight(arguments.agent, environ=os.environ, timeout=arguments.timeout,
                             billing=arguments.billing,
                             boundary_record=arguments.boundary_record,
-                            boundary_role=arguments.boundary_role, cwd=arguments.cwd)
+                            boundary_role=arguments.boundary_role, cwd=arguments.cwd,
+                            control=arguments.control)
             print(how)
             return 0
         wake = _Wake(arguments.ready_channel) if arguments.ready_channel else None

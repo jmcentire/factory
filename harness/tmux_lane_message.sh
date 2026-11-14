@@ -6,10 +6,17 @@
 # Validator sends a progress review, to a Coder lane, through the coder leak guard.
 set -euo pipefail
 # The Python helpers this script runs are the Factory's own code, run outside any lane's
-# boundary. What they import is decided here and by the checkout, never by a variable that
-# happened to be in the caller's environment: a directory named there could hold code a
-# lane was able to write.
-unset PYTHONPATH PYTHONSTARTUP PYTHONHOME PYTHONINSPECT
+# boundary, from wherever the operator happens to be, which can be a lane's clone. What they
+# import is decided here and by the checkout, from the first one on: never by a variable
+# that happened to be in the caller's environment (a directory named there could hold code
+# a lane was able to write), and never by the working directory. Safe-path mode keeps the
+# working directory off every helper's import path, the helpers' own directory is named
+# instead, and harness/trusted_startup runs first in each and drops any other relative
+# entry.
+unset PYTHONSTARTUP PYTHONHOME PYTHONINSPECT
+_factory_harness="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+export PYTHONSAFEPATH=1 PYTHONPATH="$_factory_harness/trusted_startup:$_factory_harness"
+unset _factory_harness
 # shellcheck source=harness/factory_python.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
