@@ -353,7 +353,10 @@ this one describe the earlier terminal route and its evidence; lanes no longer u
 restart an ended session, that requires a Signet guard or author custody
 (`FACTORY_REQUIRE_SIGNET=1`, a Signet contract or digest, `FACTORY_REQUIRE_AUTHOR_CUSTODY=1`,
 an author-custody config or digest) is refused with exit 77 before any provider check, any
-record and any process. The reason is specific: neither provider asks about every action
+record and any process. The refusal is made by `protocol_host` itself, which every hosted
+start goes through, so the direct entries refuse as the launcher does: `lane_agent.py run`
+(exit 77, nothing recorded), `lane_agent.py preflight` (exit 77, the provider's account
+command is not run) and `protocol_host.py run`. The reason is specific: neither provider asks about every action
 (what an existing grant, rule or permissive mode already allows is never presented), both
 skip a hook that fails or times out, and Muse 1.4.20 lists a per-connection hook method in
 its exported experimental schema that its servers do not serve (`hook/declare` answers
@@ -373,12 +376,19 @@ for either, and none is claimed.
   message to a running lane goes from the wrapper to the host over the host's own socket
   (the host is checked by PID and start time, and by session id), and the host gives it to
   the server: Muse as `turn/start` with `ifBusy: "queue"` under a command id that is the
-  message's own and is on disk before it is sent; Antigravity as `session/prompt`, one at
+  message's own and is on disk before it is sent (a record of those ids that is there
+  and damaged is refused, never replaced); Antigravity as `session/prompt`, one at
   a time, only after the previous prompt's answer. One message of the wrapper's may be
   unaccounted for at a time; another is answered `busy`.
-- **What is recorded.** `observed` when the provider has begun to act on the message:
-  Muse's `turn/started` for that command id; for Antigravity, which acknowledges nothing,
-  the first frame of the one prompt in flight, or its answer. The turn's end is a separate
+- **What is recorded.** `observed` only on a report that is that submission's own. Muse:
+  `turn/started` for that command id (or the turn id Muse's acknowledgement named). For
+  Antigravity an update names no prompt, so none is a receipt by arriving (a late frame of
+  the turn before, a mode or option notice): the receipt is the session's echo of the
+  message carrying its mark, or else the answer to that very `session/prompt` request, so
+  in practice a message to Antigravity is `submitted` while its turn runs and `observed`
+  when it ends. A prompt the server refuses is not received, and the host ends (exit 70).
+  A frame counts for the lane only if it names the lane's session id exactly; one naming
+  another, or none, settles nothing. The turn's end is a separate
   report carrying the provider's own word (`completed`, `failed`, `cancelled`; a stop
   reason), kept on the message as `response_stop`, and the reply's text goes to the lane
   log, so a lane's done line is seen. A failed or cancelled turn is not called done.
@@ -390,8 +400,9 @@ for either, and none is claimed.
   Antigravity `--dangerously-skip-permissions`), as before.
 - **Model and effort.** Muse: `--model` is its server's own option; effort is given on
   each turn. Antigravity: the lane's model and effort are put in force through the
-  session's own options, and a model the session does not offer is refused before any
-  prompt rather than run under another's name.
+  session's own options, and the server's answer must show them in force. A model the
+  session does not offer, or an answer that does not show it selected, is refused before
+  any prompt rather than run under another's name.
 - **Not resumable by the watcher.** The registry reports both as `restartable`: a message
   restarts an ended session, and nothing stops a live one for a pause or wrap-up, so
   `--review-every-minutes` and `--wrap-up-minutes` stay refused. A slot an earlier Factory

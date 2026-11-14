@@ -15,11 +15,13 @@ Invariants this program upholds:
   server ending) sends no prompt and ends this program with exit 70. ``session/load`` is
   never sent: Antigravity accepts an unknown id through it, and its own resume error
   suggests it. A new session is never made in place of a failed resume.
-- Reports are of this session only. A frame that names another session settles nothing.
-- A message is reported received only when the provider has begun to act on it: Muse's
-  ``turn/started`` for the message's own command id; for Antigravity, which acknowledges
-  nothing, the first frame of the one prompt in flight. Its end is a separate report with
-  the provider's own terminal word, and a failed or cancelled turn is never called done.
+- Reports are of this session only. A frame settles something only if it names this
+  session's id exactly; one that names another, or none, settles nothing.
+- A message is reported received only on a report that is that submission's own: Muse's
+  ``turn/started`` for the message's own command id; for Antigravity, whose updates name
+  no prompt, the session's echo of the message carrying its mark, or else the answer to
+  that very ``session/prompt`` request. Its end is a separate report with the provider's
+  own terminal word, and a failed or cancelled turn is never called done.
 - No decision is made for the operator. A permission or approval request is shown in the
   pane and held; a person answers it there, once, for that request only. No choice that
   lasts for a session or is saved to the operator's policy is ever sent, and nothing is
@@ -75,6 +77,34 @@ UUID = re.compile(r"[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
 
 class Refused(Exception):
     """The session cannot be hosted as asked; nothing was prompted."""
+
+
+class GuardRequired(ValueError):
+    """A guard or custody is required of this start, and a hosted session has neither."""
+
+
+#: What requires a guard or custody of a lane: a flag that is set, or a binding that is named.
+GUARD_FLAGS = ("FACTORY_REQUIRE_SIGNET", "FACTORY_REQUIRE_AUTHOR_CUSTODY")
+GUARD_BINDINGS = ("FACTORY_SIGNET_CONTRACT", "FACTORY_SIGNET_DIGEST",
+                  "FACTORY_AUTHOR_CUSTODY_CONFIG", "FACTORY_AUTHOR_CUSTODY_DIGEST")
+
+
+def refuse_guarded(environ: Mapping[str, str]) -> None:
+    """Refuse a hosted start that a guard or custody is required of.
+
+    This is the authority for that refusal: every way of starting a hosted session comes
+    through ``plan`` or ``run``, and both call it before anything is spawned or recorded.
+    The launcher's own refusal only says the same thing earlier. Fail closed: a flag set to
+    anything but empty or ``0`` is a requirement.
+    """
+
+    named = [name for name in GUARD_FLAGS if environ.get(name, "") not in ("", "0")]
+    named += [name for name in GUARD_BINDINGS if environ.get(name)]
+    if named:
+        raise GuardRequired(
+            "a guard or author custody is required (" + ", ".join(named) + "), and neither is "
+            "qualified for a hosted Muse or Antigravity session: no gate on every tool action "
+            "and no read isolation is established for it. Nothing was started")
 
 
 def uuid7() -> str:
@@ -175,7 +205,8 @@ def record_path(directory: pathlib.Path, slot: str) -> pathlib.Path:
 def plan(arguments: Sequence[str], *, dialect: str, executable: str,
          directory: pathlib.Path, slot: str, workspace: pathlib.Path, prompt: str,
          python: str = sys.executable, message_id: str = "",
-         api_env: Sequence[str] = ()) -> native_session.Plan:
+         api_env: Sequence[str] = (),
+         environ: Mapping[str, str] | None = None) -> native_session.Plan:
     """A start of a hosted session, as the lane wrapper's terminal driver takes any start.
 
     The program the wrapper runs is this file; the provider's server is its child. The
@@ -185,14 +216,18 @@ def plan(arguments: Sequence[str], *, dialect: str, executable: str,
     Nothing is written into the lane's repository.
     """
 
+    refuse_guarded(os.environ if environ is None else environ)
     settings = translate(dialect, arguments)
     resumed = bool(settings["resume"])
     if resumed and not message_id:
         raise ValueError("a hosted session is restarted only by the message that restarts "
                          "it; a resumed start with nothing to give is refused")
     if message_id and (not resumed or not native_session.MESSAGE_ID.fullmatch(message_id)):
-        raise ValueError("a launch message id names the message that restarts a resumed "
-                         "session, and nothing else")
+        raise ValueError(
+            "a launch message id names the message that restarts a resumed session, and "
+            "nothing else: give the kept session as the provider's own resume arguments "
+            "after the executable (`resume <id>` for Muse, `--conversation <id>` for "
+            "Antigravity), as the registry builds them")
     if "\0" in prompt:
         raise ValueError("the message holds a NUL byte and cannot be a launch argument")
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -286,6 +321,7 @@ class Host:
         self.flight: dict | None = None
         self.backlog: collections.deque[str] = collections.deque()
         self.items: dict[str, str] = {}  # Muse view item id -> kind
+        self.streamed: set[str] = set()  # Muse view items whose text was shown as it came
         self.asking: dict | None = None
         self.foreign = 0
         self.ended = False
@@ -410,10 +446,11 @@ class Host:
             return
         method, params = frame["method"], frame.get("params")
         params = params if isinstance(params, dict) else {}
-        named = params.get("sessionId")
-        if self.session and isinstance(named, str) and named != self.session:
-            # Another session's frame settles nothing here. A request among them is not
-            # granted: it gets the protocol's own word for "no decision".
+        if params.get("sessionId") != self.session or not self.session:
+            # Only a frame that names this lane's session, exactly, is this session's. One
+            # that names another, names none, or names it as anything but that string
+            # settles nothing here. A request among them is not granted: it gets the
+            # protocol's own word for "no decision".
             self.foreign += 1
             if "id" in frame:
                 self.write({"jsonrpc": "2.0", "id": frame["id"],
@@ -430,7 +467,13 @@ class Host:
 
     def take_msp(self, frame: dict, method: str, params: dict) -> None:
         if method == "turn/started":
-            turn = self.turns.get(str(params.get("commandId") or params.get("turnId")))
+            # This message's own turn: the command id given with it, or the turn id Muse's
+            # acknowledgement of it named. Nothing else is taken for its start.
+            named = params.get("commandId")
+            turn = self.turns.get(named) if isinstance(named, str) else None
+            if turn is None and isinstance(params.get("turnId"), str):
+                turn = next((t for t in self.turns.values()
+                             if t.get("turn") == params["turnId"]), None)
             if turn is not None and not turn["observed"]:
                 turn["observed"] = True
                 turn["turn"] = str(params.get("turnId"))
@@ -443,6 +486,7 @@ class Host:
         elif method == "item/delta":
             if (self.items.get(str(params.get("itemId"))) == "agentMessage"
                     and params.get("field") == "text" and isinstance(params.get("delta"), str)):
+                self.streamed.add(str(params.get("itemId")))
                 self.show(params["delta"])
         elif method == "item/completed":
             item = _dict(params.get("item"))
@@ -450,6 +494,9 @@ class Host:
             if item.get("kind") == "agentMessage" and turn is not None \
                     and isinstance(item.get("text"), str) and item["text"].strip():
                 turn["reply"] = item["text"]
+                if str(item.get("itemId")) not in self.streamed:
+                    # Its text never came as it was written, only now, whole: show it now.
+                    self.say("\n" + item["text"])
             elif item.get("kind") not in ("agentMessage", "userMessage", None):
                 self.say(f"\n[{item.get('kind')}] {str(item.get('status') or '')}")
         elif method == "turn/completed":
@@ -477,15 +524,38 @@ class Host:
             self.write({"jsonrpc": "2.0", "id": frame["id"],
                         "error": {"code": -32601, "message": "not served by this client"}})
 
+    def known_commands(self) -> dict[str, str]:
+        """The command ids already given out, by message. Absent means none yet. A record
+        that is there and cannot be trusted is refused: with it lost, a message already
+        given could be given again under a fresh id, which is the one thing it prevents."""
+
+        if self.commands.is_symlink():
+            raise Refused("the retained command-id record is a symlink; nothing was sent")
+        try:
+            raw = self.commands.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return {}
+        except OSError as error:
+            raise Refused(f"the retained command-id record cannot be read ({error}); "
+                          "nothing was sent") from None
+        try:
+            known = json.loads(raw)
+        except ValueError:
+            known = None
+        if not isinstance(known, dict) or not all(
+                isinstance(key, str) and re.fullmatch(r"[0-9a-f]{64}", key)
+                and isinstance(value, str) and UUID.fullmatch(value)
+                for key, value in known.items()):
+            raise Refused("the retained command-id record is damaged; nothing was sent, and "
+                          "no new command id is made in its place")
+        return known
+
     def give_msp(self, text: str) -> dict:
         """Give one message as a turn. The command id is the message's own and is on disk
         before it is sent, so the same message is never given under a second id."""
 
         key = hashlib.sha256(text.encode()).hexdigest()
-        try:
-            known = json.loads(self.commands.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            known = {}
+        known = self.known_commands()
         command = known.get(key) or uuid7()
         if key not in known:
             known[key] = command
@@ -495,8 +565,10 @@ class Host:
             "sessionId": self.session, "commandId": command, "ifBusy": "queue",
             "input": [{"type": "text", "text": text}],
             **({"reasoningEffort": self.args.effort} if self.args.effort else {})}, 30)
-        if result.get("status") != "accepted":
+        if result.get("status") != "accepted" or not isinstance(result.get("turnId"), str):
             raise Refused(f"turn/start was not accepted: {json.dumps(result)[:200]}")
+        self.turns[command].setdefault("turn", result["turnId"])
+        self.turns.setdefault(result["turnId"], self.turns[command])
         return result
 
     # -- Antigravity (ACP) ---------------------------------------------------------------
@@ -505,8 +577,17 @@ class Host:
         if method == "session/update":
             update = _dict(params.get("update"))
             if self.flight is not None:
-                self.prompt_seen()
                 content = _dict(update.get("content"))
+                # An update carries no word of which prompt it belongs to, so none of them
+                # is this message's receipt by merely arriving: a late frame of the turn
+                # before, a mode or option notice, anything. The one update that is this
+                # submission's own is the session's echo of the user's message carrying
+                # this message's mark. Otherwise the receipt is the answer to this very
+                # request (``prompt_answered``).
+                if update.get("sessionUpdate") == "user_message_chunk" \
+                        and isinstance(content.get("text"), str) \
+                        and self.flight["mark"] in native_session.TOKEN.findall(content["text"]):
+                    self.prompt_seen()
                 if update.get("sessionUpdate") == "agent_message_chunk" \
                         and isinstance(content.get("text"), str):
                     self.flight["reply"].append(content["text"])
@@ -557,7 +638,9 @@ class Host:
         if self.flight is None and self.backlog:
             text = self.backlog.popleft()
             self.say(f"\n[prompt] {text.splitlines()[0][:120]}")
+            marks = native_session.TOKEN.findall(text)
             self.flight = {"text": text, "turn": str(uuid.uuid4()), "observed": False,
+                           "mark": marks[-1] if marks else "",
                            "reply": [], "request": self.request("session/prompt", {
                                "sessionId": self.session,
                                "prompt": [{"type": "text", "text": text}]})}
@@ -687,8 +770,16 @@ class Host:
                               f"(offered: {', '.join(offered('thought_level')) or 'none named'})")
             wanted["thought_level"] = effort
         for name, value in wanted.items():
-            self.call("session/set_config_option", {
+            answer = self.call("session/set_config_option", {
                 "sessionId": self.session, "configId": name, "value": value})
+            # The server's own word that it is now in force. An answer that does not say so
+            # (no options returned, or another value) is not taken for one.
+            current = {str(o.get("id")): o.get("currentValue")
+                       for o in (answer.get("configOptions") or []) if isinstance(o, dict)}
+            if current.get(name) != value:
+                raise Refused(f"asked for {name} `{value}` and the server's answer does not "
+                              f"show it in force (it shows `{current.get(name)}`); nothing "
+                              "was prompted")
 
     def serve(self) -> int:
         self.open()
@@ -782,6 +873,11 @@ def _end(child: subprocess.Popen) -> None:
 
 
 def run(args: argparse.Namespace, provider: list[str]) -> int:
+    try:
+        refuse_guarded(os.environ)
+    except GuardRequired as error:
+        print(f"hosted-session: refused: {error}", flush=True)
+        return 77
     host = None
     restore = None
     if sys.stdin.isatty():

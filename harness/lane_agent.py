@@ -449,6 +449,17 @@ def preflight(
     lane (the default) must be signed in to the operator's plan, not to a per-use API key."""
 
     chosen = agent(name)
+    if name in ("muse", "agy"):
+        # A hosted session has no guard and no custody (protocol_host). Where one is required
+        # the lane is refused as such, before the provider's own account command is run.
+        import protocol_host
+
+        try:
+            protocol_host.refuse_guarded(environ)
+        except protocol_host.GuardRequired as error:
+            raise PreflightRefused(
+                str(error), "choose an agent with a qualified guard for this lane "
+                "(harness/agents.py describe)") from None
     if chosen.auth == "codex-login":
         home = environ.get("CODEX_HOME") or str(pathlib.Path(environ.get("HOME", "~")) / ".codex")
         quoted = shlex.quote(home)
@@ -930,7 +941,8 @@ def run_lane(
                     directory=native_dir or log.parent, slot=slot,
                     workspace=pathlib.Path.cwd(),
                     prompt=argv_prompt(prompt, pathlib.Path.cwd()), python=sys.executable,
-                    message_id=launch_message_id, api_env=chosen.api_env)
+                    message_id=launch_message_id, api_env=chosen.api_env,
+                    environ=child_env)
             elif chosen is not None and chosen.dialect == "codex":
                 # Codex runs lane hooks from its workspace, takes its first message as its
                 # launch argument and later ones through its own queue command.
@@ -981,14 +993,19 @@ def run_lane(
                     native_session.remove_project_files(native_plan.manifest)
                 except (OSError, ValueError):
                     pass
+            # A guard or custody required of a hosted session is a refusal of the start as
+            # such (77), not a start that could not be made (127).
+            import protocol_host
+
+            refused = 77 if isinstance(error, protocol_host.GuardRequired) else 127
             _append(log, f"lane-agent: could not start {argv[0]}: {error}\n".encode())
-            marker = f"__LANE_EXIT__ {slot} rc=127\n"
+            marker = f"__LANE_EXIT__ {slot} rc={refused}\n"
             _append(log, marker.encode())
-            record_exit(exits, slot=slot, rc=127, stopped=False)
+            record_exit(exits, slot=slot, rc=refused, stopped=False)
             if ready is not None:
                 ready()
             native_session.write_bounded(1, marker.encode())
-            return 127
+            return refused
         argv = list(native_plan.argv)
     argv = validator_boundary.model_command(
         argv, boundary_record, boundary_role, pathlib.Path.cwd())
