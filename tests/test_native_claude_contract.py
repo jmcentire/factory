@@ -198,7 +198,15 @@ def read_events(path):
 
 def start(case):
     result = execute(case['base'] + ['start'] + case['common'], case['env'])
-    assert result.returncode == 0, result.stdout + result.stderr
+    diagnostics = []
+    if result.returncode:
+        root = case['runs'] / 'native-acceptance'
+        # Only fixture-owned output. Keep hosted failures diagnosable even when
+        # pytest's temporary directory is not uploaded by the CI workflow.
+        for pattern in ('*-lane.log', '*-exits.jsonl', '*-process.json', '*-persistent.json'):
+            for path in sorted(root.glob(pattern)):
+                diagnostics.append(f'\n--- {path.name} ---\n' + path.read_text()[-12000:])
+    assert result.returncode == 0, result.stdout + result.stderr + ''.join(diagnostics)
 
 
 def launch(case):
