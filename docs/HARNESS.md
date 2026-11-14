@@ -310,11 +310,71 @@ author and independently by the tester on 2026-11-13. It is converted, not accep
   launch that requires one is refused), and any report of Muse asking the operator a
   question. Muse refreshes its own sign-in file when it starts; that is Muse's doing.
 
+### Antigravity lanes are Antigravity's own interactive session
+
+An `agy` lane runs `agy` in its clone on the same terminal host, with the operator's HOME,
+sign-in, settings, hooks, plugins and MCP servers intact: no `--print`, no private HOME, no
+links to the operator's state, and no `agy mcp add` or `agy plugin install`, which write the
+operator's configuration. It is a partial, author-lane adapter and is not accepted. The
+evidence is of two kinds, both on agy 1.5.8 in a trusted throwaway workspace on 2026-11-13,
+and they are not the same thing:
+
+- **Lifecycle probes, no model turn.** By the adapter's author and independently by the
+  tester: a probe plugin whose `PreInvocation` hook stopped each prompt before the model
+  (`terminationReason: TERMINAL_CUSTOM_HOOK`). These show how Antigravity loads a
+  workspace plugin and what its hooks report. They are not model turns and show nothing
+  about a response or a completion.
+- **Actual executions of this adapter.** By the author only: `lane_agent.py run
+  --persistent` hosting real `agy` twice, with the lane's own hooks, which do not stop the
+  model, on the operator's subscription. Each gave one start report, one prompt report
+  matched to the launch message, and one stop report with `terminationReason:
+  NO_TOOL_CALL`. A third direct run captured the raw stop payload. The model's reply was
+  not read or checked in any of them, and no tool was called.
+
+- **A plugin in the clone.** The lane's hooks and its Kindex are the plugin directory
+  `.agents/plugins/lane/` (`plugin.json`, `hooks.json`, `mcp_config.json`). Antigravity
+  finds it there by itself once the workspace is trusted, with no `plugins.json`, runs its
+  hooks beside the operator's and starts its server beside the operator's. The directory
+  has the custody the other lanes' project files have: the launch is refused if the target
+  already has a `lane` plugin of its own, the files are excluded from commits, removed at
+  exit and before a relaunch or a freeze, and refused in a candidate commit.
+- **Trust is the operator's.** Antigravity asks about a workspace it has not been told to
+  trust, and only for that exact directory; a child directory is asked about again. The
+  Factory does not answer.
+- **First message at launch.** Antigravity reports a session's start with its first
+  prompt, so the lane's first message is given at launch with `--prompt-interactive`, with
+  its mark. The hand-over is recorded before Antigravity is spawned and never repeated for
+  a slot, as for Muse.
+- **Reports.** `SessionStart` names the conversation. `PreInvocation` runs before every
+  model call and carries the latest user message, so it is the prompt report; a repeated
+  report of the same message is counted once. `Stop` is recorded with Antigravity's own
+  `fullyIdle`, `continuationActive` and `terminationReason`, as given.
+- **Later messages are not typed.** No report is taken to mean the session is ready for
+  input. `fullyIdle` was `true` on every stop seen, but none of those turns was continued
+  by a Stop hook, which is the case that matters (it is what swallowed a typed message in
+  Muse). A later message is kept `queued` with the reason and left for a person to enter:
+  a review, an answer or a wrap-up notice does not reach an Antigravity lane unattended.
+- **No completion line.** In the actual executions the stop report carried no model text
+  under any field, so a lane's done line is not seen from its reports.
+- **Permissions.** Nothing is imposed. `FACTORY_LANE_SANDBOX=off` is the one configuration
+  that adds `--dangerously-skip-permissions`.
+- **No Signet guard.** An Antigravity hook that fails is skipped rather than blocking, so a
+  hook by itself is not enforcement. A launch that requires a guard is refused for `agy`.
+- **Resume.** `--conversation <id>` is built whenever an id is given. No lane command
+  restarts an ended session; the registry reports `agy` as not resumable by the Factory.
+- **Coordinator seats.** An Antigravity seat is its own interactive session in its window,
+  started like any other seat's program and driven there. Nothing delivers a wake or a
+  message into it: the earlier delivery was print mode fed over stdin, which is never
+  used, and no supported route replaces it yet. So Antigravity cannot hold an unattended
+  coordinator seat today; starting one prints that.
+- **Not observed.** The name Antigravity gives the lane's server (`lane_kindex`, by its
+  changelog), a model calling it, any tool-use hook, and `--conversation` reporting.
+
 ### Memory isolation, said plainly
 
 A launch records `memory_isolation` and prints it. `lane-only` means the lane sees its
-scoped Kindex and none of the operator's MCP servers. `beside-operator` (Claude, Cursor, Muse
-and Codex lanes) means the operator's settings and MCP servers are intact and the lane's Kindex is
+scoped Kindex and none of the operator's MCP servers. `beside-operator` (Claude, Cursor, Muse,
+Antigravity and Codex lanes) means the operator's settings and MCP servers are intact and the lane's Kindex is
 added beside them: any memory server the operator configured is visible to the lane, so
 Coder and Tester independence rests on their separate inputs and clones, not on memory.
 That is the consequence of not suppressing the operator's configuration, and it is the
@@ -323,18 +383,16 @@ operator's to weigh.
 ### Providers not yet native, and exactly why
 
 Codex lanes (`codex`, `codex-ollama`) load the operator's whole Codex configuration but
-still run `codex exec`. Antigravity and Prime lanes still start in print mode with a
+still run `codex exec`. Prime lanes still start in print mode with a
 private configuration. Each launch records and prints `native_blocker`, asked by the lane
 agent's own name: it is empty only for `claude`, `claude-ollama` and `codex-interactive`,
-and `python harness/agents.py describe --agent <lane agent>` prints it. For `cursor-agent`
-and `muse` it says what was run and what is still open, and
-the registry reports both as not resumable by the Factory, so wrap-up and progress-review
-pauses, which continue a session, are not offered for them. The rest are not converted
-because doing so today would cost the lane its Kindex and any way to send it a message:
+and `python harness/agents.py describe --agent <lane agent>` prints it. For `cursor-agent`,
+`muse` and `agy` it says what was run and what is still open, and
+the registry reports all three as not resumable by the Factory, so wrap-up and progress-review
+pauses, which continue a session, are not offered for them. The rest:
 
 | Provider | Established, and from where | Not established |
 |---|---|---|
-| Antigravity | From its own `agy changelog`: hooks.json events `SessionStart`, `PreInvocation` (input carries `lastUserInput`), `Stop` (input carries `continuation_active`); follow-up messages queue until the turn ends by default; plugins may bundle MCP servers and a workspace may list plugins in `.agents/plugins.json`. | That a project `.agents/hooks.json` and a workspace plugin load without an edit to the operator's configuration or a trust prompt. `agy mcp add` writes the operator's configuration and is not an option. |
 | Prime | Nothing: the program is not installed where this was written. | Everything. |
 | Codex (`codex`, `codex-ollama`) | From `codex --help` and this harness's own use: the interactive program is `codex [PROMPT]` (lane agent `codex-interactive`); `codex resume [SESSION_ID]`; `codex queue` queues a message for an existing session; hooks given by `-c` are skipped until the operator trusts them. The operator's configuration is already intact. | Any report from the interactive program that it started, received a prompt or stopped, and that `codex queue` reaches a live interactive session. Until then a `codex-interactive` lane can be neither messaged nor resumed by the Factory, so it cannot replace `codex exec` for unattended work. |
 

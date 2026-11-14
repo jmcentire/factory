@@ -108,11 +108,24 @@ public API is still pre-1.0.
   wrap-up and progress-review pauses are not offered for it and a lane message does not
   restart an ended Muse session; a Muse lane launched in print mode by an earlier version
   is not resumed in print mode (`--replace-session`).
+- Antigravity author lanes run Antigravity's own interactive session on the same terminal
+  host, with the operator's HOME, sign-in, settings, hooks, plugins and MCP servers intact:
+  no `--print`, no private HOME, no links to the operator's state, and
+  `--dangerously-skip-permissions` only for `FACTORY_LANE_SANDBOX=off`. The lane's hooks and
+  its Kindex are a plugin in the clone, `.agents/plugins/lane/` (same custody as the other
+  lanes' project files); the first message is given at launch with `--prompt-interactive`
+  and its hand-over recorded before spawn. Partial and not accepted (`docs/HARNESS.md`).
+  Narrower than before, deliberately: later messages are not typed into an Antigravity
+  session, so reviews and answers do not reach the lane unattended; it is not resumable by
+  the Factory; a lane's done line is not seen, because Antigravity's stop report carries no
+  model text; there is no Signet guard, and a launch requiring one is refused.
+- Antigravity coordinator seats no longer run print mode fed over stdin. A seat is
+  Antigravity's own interactive session in its window, driven there; nothing delivers a wake
+  or a message into it, and starting one says so. Antigravity cannot hold an unattended
+  coordinator seat until it has a supported delivery route.
 - Not converted, each with its `native_blocker` recorded at launch (`docs/HARNESS.md`,
-  "Providers not yet native"): Antigravity and Prime still start in print mode with a
-  private configuration, because no qualified interface lets their interactive programs
-  report readiness or receipt, and converting now would cost the lane its Kindex and any way
-  to message it. Codex still runs `codex exec`.
+  "Providers not yet native"): Prime still starts in print mode with a private
+  configuration and is not installed where this was written. Codex still runs `codex exec`.
 
 ## [0.8.29] - 2026-11-09
 

@@ -117,7 +117,9 @@ AGENTS: Mapping[str, Agent] = {
     # Harnesses whose headless turn comes from the registry (harness/agents.py): any of them may
     # hold any seat. Each runs on the operator's signed-in plan unless launched --metered, and its
     # check proves that sign-in the way the harness itself reports it, never a credential value.
-    "agy": Agent("agy", "agy", "argv", False, "agy-plan"),
+    # Antigravity, interactive, hosted like Claude Code on a terminal the wrapper owns. Its
+    # first message is given at launch; nothing is typed after. Never `--print`.
+    "agy": Agent("agy", "agy", "terminal", False, "agy-plan"),
     # Muse Code, interactive, hosted like Claude Code on a terminal the wrapper owns. Its
     # first message is its launch argument; later ones are typed. Never `muse exec`.
     "muse": Agent("muse", "muse", "terminal", False, "muse-usage"),
@@ -130,7 +132,7 @@ AGENTS: Mapping[str, Agent] = {
 PERSISTENT_AGENTS = frozenset({"claude", "claude-ollama", "cursor-agent", "muse", "agy"})
 #: Of those, the ones hosted as a native terminal session rather than a stream: each
 #: reports its own lifecycle through hooks the wrapper adds beside the operator's.
-NATIVE_TERMINAL_AGENTS = frozenset({"claude", "claude-ollama", "cursor-agent", "muse"})
+NATIVE_TERMINAL_AGENTS = frozenset({"claude", "claude-ollama", "cursor-agent", "muse", "agy"})
 
 
 def agent(name: str) -> Agent:
@@ -906,6 +908,14 @@ def run_lane(
                 # its launch argument (it reports no start until a prompt is submitted).
                 assert prompt is not None
                 native_plan = native_session.muse_plan(
+                    argv[1:], executable=launcher.path, directory=native_dir or log.parent,
+                    slot=slot, workspace=pathlib.Path.cwd(),
+                    prompt=argv_prompt(prompt, pathlib.Path.cwd()), python=sys.executable)
+            elif chosen is not None and chosen.dialect == "agy":
+                # Antigravity loads lane hooks and the lane's Kindex from a plugin in its
+                # workspace and takes its first message at launch.
+                assert prompt is not None
+                native_plan = native_session.agy_plan(
                     argv[1:], executable=launcher.path, directory=native_dir or log.parent,
                     slot=slot, workspace=pathlib.Path.cwd(),
                     prompt=argv_prompt(prompt, pathlib.Path.cwd()), python=sys.executable)

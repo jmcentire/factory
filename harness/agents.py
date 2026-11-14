@@ -139,19 +139,17 @@ class Harness:
                         extra: Sequence[str] = ()) -> Turn:
         """Keep one native process alive for successive messages.
 
-        Claude Code's, Cursor's and Muse's is the interactive session itself, unchanged
-        (``prompt_via`` is ``terminal``). Agy's is structured stdin. Other harnesses need
-        their own qualified transport before they can opt in.
+        For Claude Code, Cursor, Muse and Antigravity it is the interactive session itself,
+        unchanged (``prompt_via`` is ``terminal``). Any other harness needs its own
+        qualified transport before it can opt in; none has a stream transport any more.
         """
 
         if self.name not in ("claude", "claude-ollama", "cursor-agent", "muse", "agy"):
             raise ValueError(f"{self.name} does not support persistent native input")
         built = self.turn(model=model, effort=effort, cwd=cwd, resume=resume, extra=extra)
-        if built.prompt_via == "terminal":
-            return built
-        # agy's --print requires a value even when input arrives through the stream.
-        argv = (*built.argv[:-1], "--input-format", "stream-json", "--print", "")
-        return Turn(argv, "stdin")
+        if built.prompt_via != "terminal":
+            raise ValueError(f"{self.name} has no native terminal turn")
+        return built
 
     def outcome(self, stdout: str, last_message: str = "") -> Outcome:
         raise NotImplementedError
@@ -200,12 +198,11 @@ class Harness:
 def persistent_input(agent_name: str, text: str, message_id: str) -> dict[str, object]:
     """Encode literal user text; callers serialize each frame as one JSON line.
 
-    Agy does not acknowledge an input ID, so its caller must allow only one in-flight
-    message at a time. Claude Code has no stream frame: its input is typed into its terminal.
+    No harness has a stream transport any more: Antigravity's was its print mode fed over
+    stdin, which is never used. Every resident session is the program's own interactive one,
+    and what reaches it is typed or given at launch.
     """
 
-    if agent_name == "agy":
-        return {"event": "user", "message": {"content": text}}
     raise ValueError(f"{agent_name} does not support persistent stream input")
 
 
@@ -249,30 +246,6 @@ def _write(path: Path, text: str) -> Path:
     path.write_text(text, encoding="utf-8")
     path.chmod(0o600)
     return path
-
-
-def _link(link: Path, target: Path) -> None:
-    """A lane-home link to one piece of the operator's sign-in. Replaced on relaunch."""
-
-    link.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if link.is_symlink():
-        link.unlink()
-    elif link.exists():
-        raise ValueError(f"{link} exists and is not a link; refusing to replace it")
-    link.symlink_to(target)
-
-
-def _keychain_home(home: Path, operator_home: Path) -> Path:
-    """A private HOME whose ``Library`` is the operator's, so a harness that keeps its sign-in
-    in the login keychain (cursor-agent, agy) still finds it while every dot-file it reads for
-    configuration is the lane's own."""
-
-    private = home / "home"
-    private.mkdir(parents=True, exist_ok=True, mode=0o700)
-    library = operator_home / "Library"
-    if library.is_dir():
-        _link(private / "Library", library)
-    return private
 
 
 def _mcp_servers(server: Mapping[str, object] | None) -> dict[str, object]:
@@ -405,72 +378,42 @@ class Codex(Harness):
 
 
 class Antigravity(Harness):
+    """Google's Antigravity CLI, interactive: the operator's own sign-in, settings, hooks,
+    plugins and MCP servers, all untouched and all still loaded. Never ``--print``.
+
+    The shape follows what was observed of agy 1.5.8 in a trusted throwaway workspace, with
+    prompts its own hook stopped before any model call (2026-11-13, by this adapter's author
+    and independently by the tester):
+
+    - The lane's hooks and its Kindex are a plugin in the lane's own clone,
+      ``.agents/plugins/lane/``, written and removed by ``native_session.agy_plan``.
+      Antigravity found it there by itself and ran its hooks beside the operator's. Nothing
+      is added with ``agy mcp add`` or ``agy plugin install``: both write the operator's
+      configuration.
+    - No private HOME and no links to the operator's state.
+    - Nothing is imposed on permissions: no ``--dangerously-skip-permissions`` (the launcher
+      adds it only for ``FACTORY_LANE_SANDBOX=off``).
+    - ``--conversation <id>`` continues the same conversation and is built whenever an id
+      is given."""
+
     def turn(self, *, model: str, effort: str, cwd: Path, resume: str = "",
              last_message_file: str = "", max_turns: int = 400,
              extra: Sequence[str] = ()) -> Turn:
-        argv = ["agy", "--output-format", "stream-json", "--dangerously-skip-permissions",
-                "--add-dir", str(cwd)]
+        # The lane wrapper runs it in the lane's clone, which is its workspace.
+        argv = ["agy"]
         argv += ["--model", model] if model else []
         argv += ["--effort", effort] if effort else []
         argv += ["--conversation", resume] if resume else []
         argv += list(extra)
-        argv += ["--print"]  # the prompt follows as the last argument
-        return Turn(tuple(argv), "argv")
-
-    def outcome(self, stdout: str, last_message: str = "") -> Outcome:
-        session, said = "", []
-        tokens = {"input": 0, "cached": 0, "output": 0}
-        for line in stdout.splitlines():
-            event = _json_line(line)
-            if not event:
-                continue
-            if "response" in event:  # --output-format json: one document
-                usage = event.get("usage") if isinstance(event.get("usage"), dict) else {}
-                assert isinstance(usage, dict)
-                return Outcome(
-                    text=str(event.get("response") or ""),
-                    session=str(event.get("conversation_id") or ""), cost_usd=0.0,
-                    tokens={"input": _int(usage.get("input_tokens")),
-                            "cached": _int(usage.get("cache_read_tokens")),
-                            "output": _int(usage.get("output_tokens"))})
-            session = session or self.session_in(line)
-            step = event.get("step_update")
-            if isinstance(step, dict) and step.get("step_type") == "agent_response":
-                said.append(str(step.get("text_delta") or ""))
-                usage = step.get("usage")
-                if isinstance(usage, dict):
-                    tokens["input"] += _int(usage.get("input_tokens"))
-                    tokens["cached"] += _int(usage.get("cache_read_tokens"))
-                    tokens["output"] += _int(usage.get("output_tokens"))
-        return Outcome(text="".join(said), session=session, cost_usd=0.0, tokens=tokens)
-
-    def session_in(self, line: str) -> str:
-        event = _json_line(line)
-        if event.get("event") == "init":
-            return str(event.get("conversation_id") or "")
-        return ""
+        return Turn(tuple(argv), "terminal")
 
     def lane_setup(self, home: Path, *, model: str, server: Mapping[str, object] | None,
                    operator_home: Path, environ: Mapping[str, str]) -> LaneSetup:
-        # agy reads its MCP servers from ~/.gemini/config/mcp_config.json and migrates
-        # ~/.gemini/antigravity-cli/mcp_config.json into it once. The lane's HOME links every
-        # piece of the operator's antigravity-cli state (the sign-in token among them) except
-        # the MCP configuration, writes the lane's own in both places, and marks the migration
-        # done. The operator's GEMINI.md, hooks and skills are not linked.
-        private = _keychain_home(home, operator_home)
-        source = operator_home / ".gemini" / "antigravity-cli"
-        state = private / ".gemini" / "antigravity-cli"
-        state.mkdir(parents=True, exist_ok=True, mode=0o700)
-        own = {"mcp_config.json", "mcp_oauth_tokens.json", "mcp"}
-        if source.is_dir():
-            for entry in source.iterdir():
-                if entry.name not in own:
-                    _link(state / entry.name, entry)
-        document = json.dumps({"mcpServers": _mcp_servers(server)})
-        _write(state / "mcp_config.json", document)
-        _write(private / ".gemini" / "config" / "mcp_config.json", document)
-        _write(private / ".gemini" / "config" / ".migrated", "")
-        return LaneSetup(env={"HOME": str(private)})
+        # The lane's Kindex as the plugin's own server file, for agy_plan to place in the
+        # clone. Antigravity names a plugin's server <plugin>_<server> (its changelog), so
+        # it cannot be taken for a server of the operator's.
+        _write(home / "agy-mcp.json", json.dumps({"mcpServers": _mcp_servers(server)}))
+        return LaneSetup()
 
 
 #: The name every native lane gives its own Kindex server, apart from any server of the
@@ -668,13 +611,32 @@ _TO_SHOW = (
     " To clear: one live interactive session showing a start report, a report carrying a "
     "typed prompt, a stop report, and the lane Kindex loading from the mechanism named.")
 _BLOCKERS = {
-    "agy": "Antigravity. Established (its own `agy changelog`): hooks.json events "
-           "SessionStart, PreInvocation (input carries lastUserInput), Stop (input carries "
-           "continuation_active); hook input carries hookEventName and cwd; follow-up "
-           "messages are queued until the turn ends by default; plugins may bundle MCP "
-           "servers and a workspace may list plugins in .agents/plugins.json. Not "
-           "established: that a project .agents/hooks.json and a workspace plugin load "
-           "without an edit to the operator's configuration or a trust prompt." + _TO_SHOW,
+    # The lane is Antigravity's own interactive session with the operator's configuration.
+    # What follows is what is open, not conversion.
+    "agy": "Antigravity: hosted as its own interactive session. Two kinds of evidence, both on "
+           "agy 1.5.8, 2026-11-13. Lifecycle probes with no model turn (the probe's own hook "
+           "stopped each prompt before the model; by the adapter's author and independently "
+           "by the tester): a plugin in a trusted workspace loaded by itself, its hooks ran "
+           "beside the operator's, its server started beside the operator's, a typed marked "
+           "message was reported in full. Actual executions of this adapter through the "
+           "lane wrapper (author only, twice, on the operator's subscription, hooks not "
+           "stopping the model): the first message given by --prompt-interactive was "
+           "reported and matched, one stop report followed with terminationReason "
+           "NO_TOOL_CALL, the plugin was removed at exit. The model's reply was not read or "
+           "checked. Open. First, nothing with a tool call has been run, and those stop "
+           "reports carried no model text, so a lane's done line is not seen from its "
+           "reports. Second, later messages are not typed: "
+           "Antigravity's Stop report carries fullyIdle and continuationActive, but what "
+           "they say when a Stop hook continues the turn was not observed, so no report is "
+           "taken as a safe moment; a later message is kept `queued` with the reason and "
+           "left for a person to enter, and a review, an answer or a wrap-up notice does "
+           "not reach an Antigravity lane unattended. Third, no lane command restarts an "
+           "ended session, so wrap-up and review pauses are not offered. Fourth, there is "
+           "no Signet guard: an Antigravity hook that fails is skipped rather than "
+           "blocking, so a hook alone is not enforcement, and a launch that requires a "
+           "guard is refused. Fifth, the lane's server is named by Antigravity "
+           "(<plugin>_<server>, per its changelog); that name and a model calling it were "
+           "not observed.",
     # The lane is Cursor's own interactive agent with the operator's configuration, and the
     # independent tester has run it against real Cursor. What follows is what is still open.
     "cursor-agent": "Cursor: hosted as its own interactive agent. The independent tester ran "
@@ -766,9 +728,25 @@ HARNESSES: Mapping[str, Harness] = {
     # still by `codex exec` (see LANE_VARIANTS for the interactive lane agent).
     "codex": Codex("codex", "codex", ("CODEX_HOME",), True, api_env=("OPENAI_API_KEY",),
                    memory="beside-operator", native_blocker=_BLOCKERS["codex"]),
-    "agy": Antigravity("agy", "agy", (), True,
-                       api_env=("GEMINI_API_KEY", "GOOGLE_API_KEY", "AGY_LLM_GATEWAY_API_KEY"),
-                       native_blocker=_BLOCKERS["agy"]),
+    # Not resumable by the Factory yet, for the reasons its blocker gives. Antigravity's own
+    # resume is untouched: `turn(resume=<id>)` builds `--conversation <id>`.
+    "agy": Antigravity(
+        "agy", "agy", (), False,
+        api_env=("GEMINI_API_KEY", "GOOGLE_API_KEY", "AGY_LLM_GATEWAY_API_KEY"),
+        memory="beside-operator", dialect="agy", native_blocker=_BLOCKERS["agy"],
+        withhold_followups=True,
+        protocol_note=(
+            "- Your Kindex is the MCP server this lane's own plugin provides (Antigravity "
+            "lists it as\n  lane_kindex). Do not call the server named kindex: it is not "
+            "this lane's memory. The\n  directory .agents/plugins/lane is this lane's "
+            "runtime configuration, not the work: do not\n  edit it, and never add it to a "
+            "commit (not with git add -f either).\n"),
+        start_requires=(
+            "Antigravity asks its own workspace-trust question in the lane's window for a "
+            "clone it has not been told to trust, and the Factory does not answer it. The "
+            "lane's first message is given to Antigravity at launch. Nothing is typed into "
+            "an Antigravity session after that: a later message to the lane is kept queued, "
+            "and you enter it in the lane's window yourself.")),
     # Not resumable by the Factory yet, for the reason its blocker gives. Muse's own resume is
     # untouched: `turn(resume=<id>)` builds `resume <id>`, the same session and never a new one.
     "muse": Muse(

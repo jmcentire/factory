@@ -96,7 +96,7 @@ active = [row for row in rows if row.get("status") == "active"]
 if len(active) != 1 or type(active[0].get("persistent", False)) is not bool:
     raise SystemExit("lane-message: retained launch transport is missing or malformed")
 persistent = active[0].get("persistent", False)
-if active[0].get("agent") in {"claude", "claude-ollama", "cursor-agent", "muse"} and not persistent:
+if active[0].get("agent") in {"claude", "claude-ollama", "cursor-agent", "muse", "agy"} and not persistent:
     raise SystemExit(
         "lane-message: this lane was launched in print mode by an earlier Factory, and print "
         "mode is never used; start its native session with tmux_lane.sh launch "

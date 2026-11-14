@@ -70,7 +70,14 @@ case "$AGENT" in
     HELP=$(muse --help 2>/dev/null) || HELP=""
     needs "$HELP" muse "$VERSION" --workspace --config --model --reasoning-effort resume
     CONTRACT="muse-native-terminal-v1" ;;
-  agy|prime-agent)
+  agy)
+    # Antigravity's own interactive session, hosted on a terminal (native_session.py). Only
+    # what that session uses is required; its print mode is not, because it is never used.
+    VERSION=$(agy --version 2>/dev/null | head -1) || fail "agy CLI is not runnable ($(at agy))"
+    HELP=$(agy --help 2>&1) || HELP=""
+    needs "$HELP" agy "$VERSION" --prompt-interactive --conversation --model --effort
+    CONTRACT="agy-native-terminal-v1" ;;
+  prime-agent)
     # A registry harness (harness/agents.py): the registry builds its headless turn.
     if [ -z "$EXECUTABLE" ]; then
       # The Factory's own interpreter (exits 69 with the fix when there is none), never PATH's.

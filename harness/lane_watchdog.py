@@ -112,12 +112,12 @@ REVIEW_EXPIRY_WAITS = 4
 # Lanes whose ended turn this watcher may continue with a lane message (wrap-up, review pause).
 # The agent registry owns that fact (harness/agents.py, `describe_lane`); this is the watcher's
 # own copy, kept because the watcher imports nothing but the standard library, and it names
-# exactly the lane agents the registry reports as resumable by the Factory. `cursor-agent` and
-# `muse` are not: nothing here restarts an ended session of either, and a launch offers no
-# wrap-up or review pause for a lane the registry does not report resumable. That is a
-# statement about what the Factory does, not about either program, whose own resume argument
-# the registry still builds.
-RESUMABLE_AGENTS = frozenset({"codex", "codex-ollama", "claude", "claude-ollama", "agy",
+# exactly the lane agents the registry reports as resumable by the Factory. `cursor-agent`,
+# `muse` and `agy` are not: nothing here restarts an ended session of any of them, and a
+# launch offers no wrap-up or review pause for a lane the registry does not report resumable.
+# That is a statement about what the Factory does, not about those programs, whose own resume
+# argument the registry still builds.
+RESUMABLE_AGENTS = frozenset({"codex", "codex-ollama", "claude", "claude-ollama",
                               "prime-agent"})
 # The count ends the marker: some harnesses run the next message straight on with no newline
 # ("commits=21Top finding"), and that is still a completion.

@@ -127,10 +127,10 @@ exec 4< <("$FACTORY_PYTHON" "$(dirname "${BASH_SOURCE[0]}")/model_settings.py" "
 exec 4<&-
 # Claude Code is a resident native terminal session for every action: it has no print mode here.
 # So is Cursor's agent: its interactive program, never `-p`. So is Muse Code: its interactive
-# session, never `muse exec`.
+# session, never `muse exec`. So is Antigravity: its interactive session, never `--print`.
 case "$ACTION:$AGENT" in
   launch:claude|qualify:claude|launch:claude-ollama|qualify:claude-ollama|\
-  launch:cursor-agent|qualify:cursor-agent|launch:muse|qualify:muse|launch:agy)
+  launch:cursor-agent|qualify:cursor-agent|launch:muse|qualify:muse|launch:agy|qualify:agy)
     PERSISTENT=1; PERSISTENT_ARGS=(--persistent) ;;
 esac
 case "$AGENT" in codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent) ;;
@@ -139,8 +139,8 @@ esac
 if [ "$PERSISTENT" = 1 ]; then
   case "$ACTION:$AGENT" in
     launch:claude|qualify:claude|launch:claude-ollama|qualify:claude-ollama|\
-    launch:cursor-agent|qualify:cursor-agent|launch:muse|qualify:muse|launch:agy) ;;
-    *) echo "tmux-lane: --persistent requires --agent claude, claude-ollama, cursor-agent, muse or (launch only) agy" >&2; exit 64 ;;
+    launch:cursor-agent|qualify:cursor-agent|launch:muse|qualify:muse|launch:agy|qualify:agy) ;;
+    *) echo "tmux-lane: --persistent requires --agent claude, claude-ollama, cursor-agent, muse or agy" >&2; exit 64 ;;
   esac
 fi
 case "$EFFORT" in ""|minimal|low|medium|high|xhigh|max) ;;
@@ -484,6 +484,11 @@ PY
       OCCUPIED=$("$FACTORY_PYTHON" "$D/native_session.py" check-project --workspace "$REPOSITORY" 2>&1) || \
         refuse 70 "the lane's repository has Cursor project configuration of its own, which is not edited or replaced: $OCCUPIED" \
           "a Cursor lane reads its hooks and its Kindex only from those paths and cannot run in this repository; choose another agent for this lane"
+    fi
+    if [ "$AGENT" = agy ]; then
+      OCCUPIED=$("$FACTORY_PYTHON" "$D/native_session.py" check-project --agent agy --workspace "$REPOSITORY" 2>&1) || \
+        refuse 70 "the lane's repository has an Antigravity plugin of its own at .agents/plugins/lane, which is not edited or added to: $OCCUPIED" \
+          "an Antigravity lane's hooks and Kindex reach it only as a plugin in that directory, so it cannot run in this repository; choose another agent for this lane"
     fi
     if [ "$AGENT" = muse ]; then
       OCCUPIED=$("$FACTORY_PYTHON" "$D/native_session.py" check-project --agent muse --workspace "$REPOSITORY" 2>&1) || \
@@ -1084,10 +1089,11 @@ PY
   if [ "$PERSISTENT" = 1 ]; then
     printf -v PERSISTENT_WRAP ' --persistent --run-root %q' "$ROOT"
     WRAP+="$PERSISTENT_WRAP"
-    case "$AGENT" in claude|claude-ollama|cursor-agent|muse)
+    case "$AGENT" in claude|claude-ollama|cursor-agent|muse|agy)
       # The session's own hook commands write its lifecycle journal here, so it is the lane's
       # private runtime, which a kernel boundary leaves writable, not the host control tree.
-      # For Cursor and Muse it also holds the record of the project files the session wrote.
+      # For Cursor, Muse and Antigravity it also holds the record of the project files the
+      # session wrote.
       printf -v NATIVE_WRAP ' --native-dir %q' "$AGENT_HOME"
       WRAP+="$NATIVE_WRAP" ;;
     esac
@@ -1140,6 +1146,11 @@ PY
         # Retain the explicit choice with the turn, so later resumes do not fall back to
         # the user's unrelated Cursor configuration.
         printf '%s\0' '--sandbox' 'disabled' >> "$SETUP_OUT"
+      fi
+      if [ "$AGENT" = agy ] && [ "${FACTORY_LANE_SANDBOX:-on}" = off ]; then
+        # Nothing is imposed on Antigravity's approvals otherwise. This is the one
+        # configuration that adds its native permissive flag, retained with the turn.
+        printf '%s\0' '--dangerously-skip-permissions' >> "$SETUP_OUT"
       fi
       if [ "$AGENT" = muse ] && [ "${FACTORY_LANE_SANDBOX:-on}" = off ]; then
         # Nothing is imposed on Muse's approvals or sandbox otherwise. This is the one

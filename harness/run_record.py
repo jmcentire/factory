@@ -609,7 +609,15 @@ def _start_locked(runs: Path, run: str) -> None:
         # Claude Code's own files are never read or written here. A folder it has not seen asks
         # its trust question in the seat's window, for the operator to answer; until the session
         # reports that it started, the seat's status is "starting" and nothing is typed into it.
-        native_stream = agent in {"claude", "agy"}
+        # Only Claude Code is hosted for a seat by the lane wrapper. An Antigravity seat is
+        # its own interactive session in its window, started below like any other seat's
+        # program and driven there: nothing delivers a wake or a message into it, because
+        # Antigravity has no supported route for that yet and its print mode is never used.
+        native_stream = agent == "claude"
+        if agent == "agy":
+            print(f"Factory {run}: the {role} seat is Antigravity's own interactive session. "
+                  "Wakes and messages are not delivered into it (no supported route yet, and "
+                  "print mode is never used): read and answer them in its window.")
         if native_stream:
             extra = ["--add-dir", str(root)]
             if os.environ.get("FACTORY_LANE_SANDBOX", "on") == "off":
@@ -626,10 +634,7 @@ def _start_locked(runs: Path, run: str) -> None:
             argv = list(built.argv)
             # Claude Code gets no permission mode from here: neither "default" forced over
             # the configured one, nor a bypass. FACTORY_LANE_SANDBOX=off is the configuration
-            # that adds its native permissive flag (above). Agy's entry carries that flag
-            # itself, so it is taken out when that configuration is not set.
-            if agent == "agy" and os.environ.get("FACTORY_LANE_SANDBOX", "on") != "off":
-                argv = [arg for arg in argv if arg != "--dangerously-skip-permissions"]
+            # that adds its native permissive flag (above).
             prompt_file = directory / "initial-prompt.txt"
             if not prompt_file.exists():
                 write_new(prompt_file, prompt.encode())
@@ -760,7 +765,7 @@ def _start_locked(runs: Path, run: str) -> None:
                 raise SeatStartFailed(seat)
             if waited.returncode:
                 raise SeatStartFailed(f"the {role} did not register: {waited.stderr.strip()}")
-        if any(agent in {"claude", "agy"} for agent in selected.values()):
+        if any(agent == "claude" for agent in selected.values()):
             wake = shlex.join([sys.executable, str(tools / "inbox_wake.py"),
                                "run", "--root", str(root)])
             subprocess.run([*tmux, "new-window", "-d", "-t", f"={run}",

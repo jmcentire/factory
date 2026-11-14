@@ -1004,6 +1004,9 @@ def run_terminal(
             "stop_hook_active": row.get("stop_hook_active") is True,
             "last_assistant_message": text if isinstance(text, str) else "",
             **({"status": row["status"]} if isinstance(row.get("status"), str) else {}),
+            # A provider's own remarks about the stop, as given. Not readiness.
+            **{name: row[name] for name in ("fully_idle", "continuation_active",
+                                            "termination_reason") if name in row},
             "session_id": state["session_id"], "source": "native-stop-hook",
         }) + "\n").encode())
 
@@ -1051,9 +1054,14 @@ def run_terminal(
                 state["phase"] = "started"
             ready_at = time.monotonic() + native_session.SETTLE_S
         elif kind == "UserPromptSubmit":
+            reported = row.get("prompt_sha256")
+            if "invocation" in row and reported and reported == state.get("last_prompt_sha256"):
+                # A provider that reports the user's message before every model call
+                # (Antigravity) repeats it within a turn. The same message is one prompt.
+                return
+            state["last_prompt_sha256"] = reported
             state["prompt_reports"] += 1
             tokens = row.get("tokens") if isinstance(row.get("tokens"), list) else []
-            reported = row.get("prompt_sha256")
             submitted = [key for key, record in deliveries.items()
                          if record.get("state") == "submitted"]
             # A report binds to the submitted message by its typed mark, or by being

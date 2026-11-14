@@ -378,10 +378,25 @@ _LANE_MARKS = {CURSOR_HOOKS: (b"native_session.py", b"--dialect"),
 MUSE_HOOKS = ".muse/hooks.json"
 MUSE_PROJECT_FILES = (MUSE_HOOKS,)
 _LANE_MARKS[MUSE_HOOKS] = (b"native_session.py", b"--dialect")
+#: Antigravity loads a plugin it finds in a trusted workspace's ``.agents/plugins/<name>/``:
+#: its ``hooks.json`` beside the operator's hooks, and the servers in its ``mcp_config.json``
+#: beside the operator's (observed 2026-11-13 on agy 1.5.8, by me and independently by the
+#: tester, with no ``plugins.json`` and nothing installed). The directory is the lane's for as
+#: long as its session runs.
+AGY_PLUGIN = ".agents/plugins/lane"
+AGY_MANIFEST = f"{AGY_PLUGIN}/plugin.json"
+AGY_HOOKS = f"{AGY_PLUGIN}/hooks.json"
+AGY_MCP = f"{AGY_PLUGIN}/mcp_config.json"
+AGY_PROJECT_FILES = (AGY_MANIFEST, AGY_HOOKS, AGY_MCP)
+_LANE_MARKS[AGY_HOOKS] = (b"native_session.py", b"--dialect")
 #: The project files a lane of each agent writes into its own clone, and what to call them.
 PROJECT_FILES: Mapping[str, tuple[str, ...]] = {"cursor-agent": CURSOR_PROJECT_FILES,
-                                                "muse": MUSE_PROJECT_FILES}
-PROJECT_LABEL = {"cursor-agent": "Cursor", "muse": "Muse"}
+                                                "muse": MUSE_PROJECT_FILES,
+                                                "agy": AGY_PROJECT_FILES}
+PROJECT_LABEL = {"cursor-agent": "Cursor", "muse": "Muse", "agy": "Antigravity"}
+#: Directories a lane owns outright: anything else in one is the target project's, and the
+#: lane does not add its files beside it.
+PROJECT_OWNED_DIRS: Mapping[str, tuple[str, ...]] = {"agy": (AGY_PLUGIN,)}
 
 
 def _sha(data: bytes) -> str:
@@ -389,7 +404,8 @@ def _sha(data: bytes) -> str:
 
 
 def project_collisions(workspace: pathlib.Path,
-                       relatives: Sequence[str] = CURSOR_PROJECT_FILES) -> list[str]:
+                       relatives: Sequence[str] = CURSOR_PROJECT_FILES,
+                       owned: Sequence[str] = ()) -> list[str]:
     """What in ``workspace`` already occupies the paths a lane would write, in words.
 
     For a launcher to ask before it reserves anything: a path that exists here is the target
@@ -413,6 +429,17 @@ def project_collisions(workspace: pathlib.Path,
             continue
         if reason not in found:
             found.append(reason)
+    for directory in owned:
+        held = root / directory
+        if held.is_symlink():
+            found.append(f"{directory} is a link")
+        elif held.is_dir():
+            names = {pathlib.PurePosixPath(relative).name for relative in relatives
+                     if relative.startswith(directory + "/")}
+            other = sorted(entry.name for entry in held.iterdir() if entry.name not in names)
+            if other:
+                found.append(f"{directory} already exists and holds the target project's own "
+                             f"{', '.join(other[:5])}")
     return found
 
 
@@ -470,8 +497,9 @@ def install_project_files(workspace: pathlib.Path, files: Mapping[str, bytes],
     planned: dict[str, str] = {}
     for relative, data in files.items():
         target = workspace / relative
-        parent = target.parent
-        if parent.is_symlink() or target.is_symlink() or workspace not in target.resolve().parents:
+        ancestors = [ancestor for ancestor in target.parents if workspace in ancestor.parents]
+        if (any(ancestor.is_symlink() for ancestor in ancestors) or target.is_symlink()
+                or workspace not in target.resolve().parents):
             raise ValueError(f"{relative} in the lane's repository is a link; refusing to write "
                              "through it")
         if target.exists():
@@ -496,10 +524,11 @@ def install_project_files(workspace: pathlib.Path, files: Mapping[str, bytes],
                              + "".join(line + "\n" for line in missing))
     for relative, data in files.items():
         target = workspace / relative
-        created = not target.parent.exists()
-        target.parent.mkdir(exist_ok=True)
-        if created:
-            planned[str(target.parent) + "/"] = "directory"
+        # Outermost first, so each directory this start creates is recorded as created.
+        for ancestor in reversed([a for a in target.parents if workspace in a.parents]):
+            if not ancestor.exists():
+                ancestor.mkdir()
+                planned[str(ancestor) + "/"] = "directory"
         temporary = target.with_name(f".{target.name}.factory-{os.getpid()}")
         temporary.write_bytes(data)
         os.replace(temporary, target)
@@ -679,6 +708,104 @@ def muse_plan(arguments: Sequence[str], *, executable: str, directory: pathlib.P
                 Launcher(name, "executable", path=executable), offset, manifest, launched)
 
 
+#: Refused for Antigravity: its print mode, a launch prompt of someone else's (the lane
+#: gives the first message itself), and "the most recent conversation", which names none.
+BANNED_AGY_FLAGS = ("-p", "--print", "--prompt", "--output-format", "--input-format",
+                    "--json-schema", "--print-timeout", "-i", "--prompt-interactive",
+                    "-c", "--continue")
+
+
+def agy_plan(arguments: Sequence[str], *, executable: str, directory: pathlib.Path,
+             slot: str, workspace: pathlib.Path, prompt: str,
+             python: str = sys.executable) -> Plan:
+    """A native start of Antigravity's interactive session.
+
+    ``arguments`` exclude the executable. The shape follows what was observed of agy 1.5.8
+    with a prompt its own hook stopped before any model call, and goes no further:
+
+    - The lane's hooks and its Kindex are a plugin in the lane's own clone,
+      ``.agents/plugins/lane/``, which Antigravity loads beside the operator's hooks and
+      servers once the workspace is trusted. Nothing of the operator's is written; no
+      ``agy mcp add`` and no ``agy plugin install``, which write the operator's files.
+    - Antigravity reports a session's start with its first prompt, so the first message is
+      given at launch (``--prompt-interactive``, the interactive program's own option),
+      with its mark. That option at launch was not among the observations; the typed form
+      was.
+    - Antigravity chooses its own conversation id; its start report names it.
+    - ``--conversation <id>`` continues that conversation and gets no launch message.
+    """
+
+    args = _split_values(list(arguments), ("--conversation",))
+    banned = sorted({_flag(part) for part in args if _flag(part) in BANNED_AGY_FLAGS})
+    if banned:
+        raise ValueError("native Antigravity session refuses " + ", ".join(banned))
+    session = ""
+    resumed = "--conversation" in args
+    if resumed:
+        index = args.index("--conversation")
+        session = args[index + 1] if index + 1 < len(args) else ""
+        try:
+            uuid.UUID(session)
+        except ValueError:
+            raise ValueError("native conversation id missing or malformed") from None
+    if "\0" in prompt:
+        raise ValueError("the first message holds a NUL byte and cannot be a launch argument")
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    journal = directory / f"{slot}-native-events.jsonl"
+    if journal.is_symlink():
+        raise ValueError("symlinked native event journal")
+    manifest = directory / f"{slot}-project-files.json"
+    recorded = set(_manifest(manifest))
+    plugin = workspace.resolve() / AGY_PLUGIN
+    if plugin.is_dir() and not plugin.is_symlink():
+        foreign = sorted(entry.name for entry in plugin.iterdir()
+                         if str(entry) not in recorded)
+        if foreign:
+            raise ValueError(
+                f"the lane's repository already has {AGY_PLUGIN} holding "
+                f"{', '.join(foreign[:5])}, which is the target project's own plugin and is "
+                "not edited or added to, so the lane cannot run as a native session in this "
+                "repository")
+    command = shlex.join([python, str(pathlib.Path(__file__).resolve()), "hook",
+                          "--dialect", "agy", "--journal", str(journal)])
+    # The shape Antigravity's own validator accepts and its loader ran: a named hook set,
+    # then event, then a list of command handlers.
+    hooks = {"lane": {event: [{"type": "command", "command": command}]
+                      for event in AGY_EVENTS}}
+    servers: dict[str, object] = {}
+    source = directory / "agy-mcp.json"
+    if source.exists():
+        document = json.loads(source.read_text(encoding="utf-8"))
+        found = document.get("mcpServers") if isinstance(document, dict) else None
+        if not isinstance(found, dict):
+            raise ValueError("the lane's Antigravity server file is malformed")
+        servers = found
+    files = {
+        AGY_MANIFEST: json.dumps({
+            "name": "lane", "version": "1",
+            "description": "Factory lane: its report hooks and its own Kindex. Written for "
+                           "this session and removed when it ends."}, sort_keys=True).encode(),
+        AGY_HOOKS: json.dumps(hooks, sort_keys=True).encode(),
+        AGY_MCP: json.dumps({"mcpServers": servers}, sort_keys=True).encode(),
+    }
+    install_project_files(workspace, files, manifest,
+                          reads="a lane's plugin (its hooks and its Kindex)")
+    try:
+        offset = journal.stat().st_size
+    except FileNotFoundError:
+        offset = 0
+    launched = None
+    if not resumed:
+        mark = message_token(uuid.uuid4().hex, "initial")
+        given = marked(prompt, mark)
+        args += ["--prompt-interactive", given]
+        launched = {"token": mark, "typed_sha256": text_digest(given),
+                    "body_sha256": text_digest(prompt)}
+    name = pathlib.Path(executable).name
+    return Plan((executable, *args), session, resumed, journal,
+                Launcher(name, "executable", path=executable), offset, manifest, launched)
+
+
 def child_environment(environ: Mapping[str, str]) -> dict[str, str]:
     """The program's environment: the wrapper's, without any API-billing variable."""
 
@@ -696,7 +823,13 @@ CURSOR_EVENTS = {"sessionStart": "SessionStart", "beforeSubmitPrompt": "UserProm
 #: Muse Code's hooks use Claude Code's event names and nearly its payload (observed, as
 #: above): ``session_id``, ``prompt``, ``last_assistant_message``, ``stop_hook_active``, and a
 #: ``turn_id`` that a prompt's report and that turn's stop report share.
-DIALECTS = ("claude", "cursor", "muse")
+DIALECTS = ("claude", "cursor", "muse", "agy")
+#: Antigravity's hook events (observed, as above), under the names the journal uses. Its
+#: payload is camelCase: ``hookEventName``, ``conversationId``, ``lastUserInput``.
+#: ``PreInvocation`` runs before every model call, each time carrying the latest user
+#: message, so it is the prompt report; a turn with several model calls sends several.
+AGY_EVENTS = {"SessionStart": "SessionStart", "PreInvocation": "UserPromptSubmit",
+              "Stop": "Stop"}
 
 
 def record_hook(journal: pathlib.Path, payload: Mapping[str, object],
@@ -708,6 +841,9 @@ def record_hook(journal: pathlib.Path, payload: Mapping[str, object],
     if dialect == "cursor":
         event = CURSOR_EVENTS.get(str(event))
         session = payload.get("conversation_id")
+    if dialect == "agy":
+        event = AGY_EVENTS.get(str(payload.get("hookEventName")))
+        session = payload.get("conversationId")
     if event not in HOOK_EVENTS:
         return
     row: dict[str, object] = {
@@ -722,6 +858,26 @@ def record_hook(journal: pathlib.Path, payload: Mapping[str, object],
             row["status"] = payload["status"]
     if dialect == "muse" and isinstance(payload.get("turn_id"), str):
         row["generation"] = payload["turn_id"]
+    if dialect == "agy" and event == "UserPromptSubmit":
+        # One user message is reported once per model call. The number is kept so a reader
+        # can tell the calls apart; the driver counts a repeated message once.
+        payload = {**payload, "prompt": payload.get("lastUserInput")}
+        if isinstance(payload.get("invocationNum"), int):
+            row["invocation"] = payload["invocationNum"]
+        else:
+            row["invocation"] = -1
+    if dialect == "agy" and event == "Stop":
+        # Antigravity's own words about this stop, kept as it gave them. None of them is
+        # taken to mean the session is ready for input.
+        for name, key in (("fully_idle", "fullyIdle"),
+                          ("continuation_active", "continuationActive")):
+            if isinstance(payload.get(key), bool):
+                row[name] = payload[key]
+        reason = payload.get("terminationReason")
+        if isinstance(reason, str):
+            row["termination_reason"] = reason[:200]
+        # A real turn's stop report carried no model text under any name (observed), so the
+        # journal has none for Antigravity and a lane's done line is not seen from it.
     if event == "UserPromptSubmit" and isinstance(payload.get("prompt"), str):
         reported = str(payload["prompt"])
         row["prompt_sha256"] = text_digest(reported)
@@ -1086,14 +1242,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 record_hook(args.journal, payload, args.dialect)
         except (OSError, ValueError):
             pass
-        if args.dialect == "cursor":
+        if args.dialect in ("cursor", "agy"):
             # Cursor reads a JSON reply; the empty object changes nothing (the form proven).
-            # Claude Code adds a prompt hook's output to the model's context, so it gets none.
+            # Antigravity reads one too: the empty object names no decision, no injected
+            # step and no termination. Claude Code adds a prompt hook's output to the
+            # model's context, so it gets none.
             sys.stdout.write("{}")
         return 0
     if args.command == "check-project":
         try:
-            found = project_collisions(args.workspace, PROJECT_FILES[args.agent])
+            found = project_collisions(args.workspace, PROJECT_FILES[args.agent],
+                                       PROJECT_OWNED_DIRS.get(args.agent, ()))
         except OSError as error:
             print(f"native-session: {error}", file=sys.stderr)
             return 70
