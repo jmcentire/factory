@@ -26,6 +26,13 @@ would switch a harness to per-use billing; a ``plan`` lane's environment never a
 preflight proves a plan sign-in (``lane_agent.py``), and a harness that announces its billing
 source in its first streamed event is stopped by the lane wrapper if that source is an API key.
 
+Claude Code is subscription-only (founder, 2026-11-13): it has no metered launch at all
+(``Harness.metered`` is False). Asking for one is refused where the request is made, in
+``admitted_env``, so no lane home, seat file, credential list or turn record is ever prepared
+for it and none of its API variables is ever copied anywhere. Its ``api_env`` remains the list
+of names the wrapper unsets and refuses. ``claude-ollama`` is a different entry: it names its
+loopback server on purpose and is unaffected.
+
 Invariant: an entry builds argv only — no shell, no string interpolation — and never puts a
 credential value on a command line; credentials pass by variable *name* so a launcher that clears
 the environment admits exactly those, through an owner-only file.
@@ -93,6 +100,7 @@ class Harness:
     resumable: bool
     api_env: tuple[str, ...] = ()  # variables that switch the harness to per-use API billing
     plan: bool = True  # the harness has a signed-in plan path
+    metered: bool = True  # the Factory may launch it on per-use billing; False: plan only
     # Whether a lane's memory is its own. "lane-only": the lane sees its scoped Kindex and no
     # MCP server of the operator's (a private configuration; the operator's settings are not
     # loaded). "beside-operator": the operator's settings and MCP servers are intact and the
@@ -152,6 +160,10 @@ class Harness:
             raise ValueError(f"billing must be one of {BILLINGS}, not {billing!r}")
         if billing == "plan" and not self.plan:
             raise ValueError(f"{self.name} has no signed-in plan path; launch it metered")
+        if billing == "metered" and not self.metered:
+            raise ValueError(
+                f"{self.name} runs only on the operator's signed-in subscription: it has no "
+                "metered launch and is never given an API key")
         return self.credential_env + (self.api_env if billing == "metered" else ())
 
     def lane_setup(self, home: Path, *, model: str, server: Mapping[str, object] | None,
@@ -672,7 +684,8 @@ HARNESSES: Mapping[str, Harness] = {
     "claude": ClaudeCode("claude", "claude", ("CLAUDE_CONFIG_DIR", "IS_SANDBOX"), True,
                          api_env=("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
                                   "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
-                                  "CLAUDE_CODE_USE_VERTEX"), memory="beside-operator"),
+                                  "CLAUDE_CODE_USE_VERTEX"), memory="beside-operator",
+                         metered=False),
     "claude-ollama": ClaudeOllama("claude-ollama", "claude", ("IS_SANDBOX",), True,
                                   memory="beside-operator"),
     # Codex lanes are launched by tmux_lane.sh, with the operator's whole configuration, and
@@ -826,6 +839,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "turn-record":
             chosen = harness(args.agent)
+            chosen.admitted_env(args.billing)  # a billing this harness has no launch for
             if args.persistent:
                 chosen.persistent_turn(model=args.model, effort=args.effort, cwd=Path.cwd())
             extra = [part for part in args.setup.read_text(encoding="utf-8").split("\0") if part]

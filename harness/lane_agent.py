@@ -493,6 +493,11 @@ def preflight(
     if chosen.auth == "claude-plan":
         import native_session
 
+        if billing == "metered":
+            raise PreflightRefused(
+                "Claude Code runs only on the operator's signed-in subscription; it has no "
+                "metered launch", "launch the lane without --metered")
+
         launcher: native_session.Launcher | None
         try:
             launcher = native_session.resolve_launcher(environ, executable=chosen.executable)

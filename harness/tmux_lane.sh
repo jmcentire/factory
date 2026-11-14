@@ -226,7 +226,12 @@ if [ "$ACTION" != "freeze" ]; then
     codex-interactive) AGENT_RESUMABLE=0 ;;
     *) DESCRIBED=$("$FACTORY_PYTHON" "$D/agents.py" describe --agent "$AGENT" | tr '\0' ' ')
        case "$DESCRIBED" in resumable*) AGENT_RESUMABLE=1 ;; *) AGENT_RESUMABLE=0 ;; esac
-       case "$DESCRIBED" in *metered-only*) METERED=true ;; esac ;;
+       case "$DESCRIBED" in *metered-only*) METERED=true ;; esac
+       if [ "$METERED" = true ]; then
+         # A harness with no metered launch says so here, before anything is prepared for it.
+         UNMETERED=$("$FACTORY_PYTHON" "$D/agents.py" credential-env --agent "$AGENT" --billing metered 2>&1 >/dev/null) || \
+           refuse 64 "${UNMETERED#agents: }" "launch the lane without --metered"
+       fi ;;
   esac
   # Whether this lane's memory is its own, and what (if anything) keeps this provider from
   # running as its own interactive program with the operator's configuration: both come from

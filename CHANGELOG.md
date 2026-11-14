@@ -24,6 +24,11 @@ public API is still pre-1.0.
   Claude Code, and the lane runs. A Claude lane whose credential file contains such a
   variable is refused: it stops, naming the variable and never its value, before Claude Code
   starts.
+- Claude Code has no metered launch anywhere. The registry refuses `metered` billing for it
+  where the request is made, so lane setup, seat setup, the credential list and the turn
+  record no longer prepare one or copy any of its API variables; `tmux_lane.sh --metered`
+  and the metered sign-in preflight refuse it with that reason. `claude-ollama` and every
+  other provider are unchanged.
 - API-billing variables are unset for Claude Code and none is set. `claude-ollama` reaches the
   loopback Ollama server with `ANTHROPIC_AUTH_TOKEN`, not `ANTHROPIC_API_KEY`.
 - Messages to a Claude session are typed into its terminal, each with a typed mark. States
