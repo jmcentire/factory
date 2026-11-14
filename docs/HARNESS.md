@@ -305,10 +305,20 @@ author and independently by the tester on 2026-11-13. It is converted, not accep
   to: unattended resume is not supported, the registry reports Muse as not resumable by the
   Factory, and wrap-up and progress-review pauses are not offered for it. That is less than
   the print-mode lane did, and it is the cost of not using print mode.
+- **No Signet guard, and why.** A launch that requires a guard is refused for `muse`.
+  Observed on 1.4.20 with the echo provider and a user shell action (`!touch …`, which
+  Muse reports as tool `shell`): `PreToolUse` fires, also under `--yolo`; an explicit deny
+  with a reason blocks the tool, and so does exit 2. The tool runs when the hook exits 1,
+  prints something that is not JSON, exceeds its timeout, or cannot be started. Muse has
+  no fail-closed option: an entry carrying a field it does not know (`failClosed`,
+  `required`) is disabled with a warning and the tool runs. So a hook can decide but
+  cannot be the thing that enforces. A user shell action is not held for approval even in
+  `--approval-mode untrusted`, and the permission hook is not consulted for it, so Muse's
+  approval path cannot be exercised without a model.
 - **Not established.** Anything a signed-in model run would show: a model calling
-  `lane-kindex`, any tool-use hook (so there is no Signet guard for a Muse lane, and a
-  launch that requires one is refused), and any report of Muse asking the operator a
-  question. Muse refreshes its own sign-in file when it starts; that is Muse's doing.
+  `lane-kindex`, a model's own tool call through these hooks, and any report of Muse
+  asking the operator a question. Muse refreshes its own sign-in file when it starts; that
+  is Muse's doing.
 
 ### Antigravity lanes are Antigravity's own interactive session
 
@@ -358,8 +368,13 @@ and they are not the same thing:
   under any field, so a lane's done line is not seen from its reports.
 - **Permissions.** Nothing is imposed. `FACTORY_LANE_SANDBOX=off` is the one configuration
   that adds `--dangerously-skip-permissions`.
-- **No Signet guard.** An Antigravity hook that fails is skipped rather than blocking, so a
-  hook by itself is not enforcement. A launch that requires a guard is refused for `agy`.
+- **No Signet guard.** A launch that requires a guard is refused for `agy`. No tool-use
+  hook has been seen firing: a user shell action typed in the session (`!touch …`) ran
+  with no hook called at all, so nothing triggers `PreToolUse` without a model, and what
+  happens when the hook fails is unobserved on this version. Antigravity does have native
+  permission rules (`command(...)`, `mcp(server/tool)`, a `strict` tool-permission
+  setting, by its changelog) that do not depend on a hook running; whether a lane can set
+  them for one session, and how a hook's approval combines with them, is not established.
 - **Resume.** `--conversation <id>` is built whenever an id is given. No lane command
   restarts an ended session; the registry reports `agy` as not resumable by the Factory.
 - **Coordinator seats.** An Antigravity seat is allowed. It is not refused, and it is not
