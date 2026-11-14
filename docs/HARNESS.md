@@ -100,6 +100,23 @@ started through the operator's launcher on a terminal the lane wrapper owns
   is no "acknowledged" or "completed". Asking again reports the state and never types a
   message twice, across wrapper restarts too. One message of the wrapper's is unaccounted
   for at a time; that is its custody rule, not a claim about the session.
+- **A session that has ended is restarted on its own conversation, not replaced.** When a
+  lane message finds the lane's pane ended (the session finished or was closed, or the
+  watcher ended it for a review pause or a wrap-up, whose exit it verifies first),
+  `tmux_lane_message.sh` asks the registry whether the Factory can restart that program.
+  For Claude Code it starts the hosted session again in the pane with Claude Code's own
+  `--resume <uuid>`, under the wrapper, launcher, settings, Kindex, boundary and custody
+  the launch recorded (the launch record's `native` entry), and with a watcher as at first
+  launch. The conversation's delivery record is kept, so the first prompt is never given
+  again. The message is given only after the session reports starting, and is recorded
+  delivered only on the session's own prompt report. If the session does not report
+  starting within 90s (it may be asking its folder-trust question) the command exits 75
+  with the message still planned; if the program ends first it exits 70. A lane whose
+  program the registry does not report as resumable (Cursor, Muse, Antigravity,
+  interactive Codex) is refused with exit 70 and the message stays planned: the operator
+  continues it with the program's own resume, or starts a new session with
+  `--replace-session`. A lane launched before the `native` entry was recorded is refused
+  the same way. Shown with a stand-in program that calls no model, not with Claude Code.
 - **What the hooks can establish.** They are observation hooks added beside the operator's
   own, which run in parallel and may reject a prompt or make the session continue past a
   stop. A prompt report means the prompt reached the session, not that it was accepted. A

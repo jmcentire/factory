@@ -917,7 +917,7 @@ PY
   fi
   DIALOGUE_BASELINE=$("$FACTORY_PYTHON" "$D/lane_admission.py" --root "$ROOT" --run "$RUN" \
     --role "$ROLE" --action baseline) || refuse 70 "cannot retain dialogue baseline"
-  PLANNED=$(LANE_START_REQUIRES="$START_REQUIRES" LANE_MEMORY_ISOLATION="$MEMORY_ISOLATION" LANE_NATIVE_BLOCKER="$NATIVE_BLOCKER" LANE_DIALOGUE_BASELINE="$DIALOGUE_BASELINE" LANE_PERSISTENT="$PERSISTENT" LANE_AUTHOR_CUSTODY="$AUTHOR_CUSTODY" LANE_KERNEL_BOUNDARY="$BOUNDARY_RECORD" LANE_INDEPENDENCE="$INDEPENDENCE" "$FACTORY_PYTHON" - "$RUN" "$ROLE" "$AGENT" "$REPOSITORY" \
+  PLANNED=$(LANE_START_REQUIRES="$START_REQUIRES" LANE_MEMORY_ISOLATION="$MEMORY_ISOLATION" LANE_NATIVE_BLOCKER="$NATIVE_BLOCKER" LANE_DIALOGUE_BASELINE="$DIALOGUE_BASELINE" LANE_PERSISTENT="$PERSISTENT" LANE_NATIVE_DIR="$AGENT_HOME" LANE_CLAUDE_LAUNCHER="${FACTORY_CLAUDE_LAUNCHER:-}" LANE_AUTHOR_CUSTODY="$AUTHOR_CUSTODY" LANE_KERNEL_BOUNDARY="$BOUNDARY_RECORD" LANE_INDEPENDENCE="$INDEPENDENCE" "$FACTORY_PYTHON" - "$RUN" "$ROLE" "$AGENT" "$REPOSITORY" \
     "$PROMPT" "$PROMPT_DIGEST" "$TASK_DIGEST" "$PROFILE_DIGEST" \
     "$REPOSITORY_RECEIPT" "$AGENT_VERSION" "$MODEL" "$KINDEX" \
     "$LANE" "$SLOT" "$INSTANCE" "$ROUND" "$ACTION" "$METERED" "$PROMPT_VIA" "$AGENT_TTY" \
@@ -956,6 +956,12 @@ print(json.dumps({
     "dialogue_baseline": int(os.environ["LANE_DIALOGUE_BASELINE"]),
     "agent": agent,
     **({"persistent": True} if os.environ["LANE_PERSISTENT"] == "1" else {}),
+    # What a lane message needs to restart an ended hosted session as it was started
+    # (tmux_lane_message.sh): where its hook settings and journal live, and the command the
+    # operator starts Claude Code with (null: none was named, so the default applies again).
+    **({"native": {"dir": os.environ["LANE_NATIVE_DIR"],
+                   "claude_launcher": os.environ["LANE_CLAUDE_LAUNCHER"] or None}}
+       if os.environ["LANE_PERSISTENT"] == "1" else {}),
     # What the lane actually ran, for provenance: the model, where it came from (operator,
     # codex-config, agy-config or agent), and config overrides, which a resume reuses.
     "model": model,

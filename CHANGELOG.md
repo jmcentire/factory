@@ -128,6 +128,17 @@ public API is still pre-1.0.
   Factory; `FACTORY_LANE_SANDBOX=off` is the explicit per-run choice that also passes
   `--dangerously-bypass-hook-trust`. Author lane only, not accepted, not resumable by the
   Factory; `codex` and `codex-ollama` still run `codex exec` (`docs/HARNESS.md`).
+- A lane message to a hosted session that has ended restarts that session on its own
+  conversation instead of failing. Since hosted sessions replaced print mode, a Claude Code
+  lane that had finished, been closed, or been ended by the watcher for a review pause or a
+  wrap-up could not be continued: the message command only spoke to the live process and
+  exited 70 ("persistent process exited or identity is stale"). It now restarts the session
+  in its pane with Claude Code's own `--resume`, as the launch recorded it, waits for the
+  session to report starting, and records the message delivered only on the session's own
+  prompt report. A pause or wrap-up needs its exit verified for a hosted lane as for any
+  other. Programs the registry does not report as resumable are refused (exit 70) with the
+  message left planned. A message a busy session could not take is now said to be not
+  given, rather than "do not resend".
 - `tmux_lane_message.sh --native-session-file` is removed and refused by name. It handed an
   exited interactive Codex session to `codex exec resume`, a non-interactive run, after
   reading Codex's own session file. A `codex-interactive` lane that an earlier Factory
