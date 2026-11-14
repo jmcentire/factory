@@ -2093,6 +2093,9 @@ def test_startup_preflight_failure_preserves_task_and_allows_retry(tmp_path, mon
     calls = []
 
     def fake_run(argv, **kwargs):
+        # Read-only custody observation; this fixture has no live old owners.
+        if argv == ["ps", "-A", "-o", "pid=,ppid=,lstart=,stat=,time="]:
+            return subprocess.CompletedProcess(argv, 0, "", "")
         calls.append(argv)
         return subprocess.CompletedProcess(argv, 1 if "has-session" in argv else 0)
 

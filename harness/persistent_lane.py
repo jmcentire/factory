@@ -857,7 +857,17 @@ def run_terminal(
     which typed input is safe (Muse Code). Then this wrapper types nothing into the session
     at all: its first message went in as the launch argument, and a later message is
     accepted, kept ``queued`` with ``held`` saying why, and never typed. A person can still
-    enter it in the session's own window.
+    enter it in the session's own window, and that is how it is delivered: when the
+    session's own prompt report is exactly the held message followed by its own mark, the
+    message becomes ``observed`` (``via: operator-entered``), its receipt is written to the
+    dialogue journal, and the next message is accepted. The wrapper writes that one entry
+    to a file for the person to paste. A report of anything else is the operator's own
+    input and settles nothing: the message without its mark (the same words can be an old
+    submission reported again, or a later model call of a turn already under way, and a
+    second message with the same words would be settled by either), other text that
+    carries the mark, or the message with another message's mark. Exactness is that of
+    ``native_session.text_digest``: line endings and whitespace at the two ends are not
+    compared, everything else is.
 
     Why nothing short of that. A start report does not show that what is on screen later is
     the chat input. A stop report does not either: it is sent before the program decides
@@ -1019,6 +1029,13 @@ def run_terminal(
     typing: list | None = None
     digests: dict[str, str] = {}  # message id -> digest of exactly what was typed
     bodies: dict[str, str] = {}  # message id -> digest of the message without its mark
+    for identifier, record in deliveries.items():
+        # A held message carried over from an earlier wrapper of this conversation is still
+        # recognised when a person enters it.
+        if (record.get("state") == "queued" and record.get("held") and identifier in waiting
+                and isinstance(record.get("token"), str)):
+            digests[identifier] = native_session.text_digest(
+                native_session.marked(waiting[identifier], record["token"]))
     if handed is not None and deliveries[handed].get("via") == "launch-argument":
         digests[handed] = launched["typed_sha256"]
         bodies[handed] = launched["body_sha256"]
@@ -1157,8 +1174,32 @@ def run_terminal(
                            and record.get("via") == "provider-queue"
                            and record.get("token") in tokens
                            and reported and reported == record.get("typed_sha256")]
+            entered = False
+            if not matched and withhold_followups:
+                # A held message is never typed here. A person may enter it in the session's
+                # own window, and then the session's own report is the receipt: the reported
+                # prompt must be exactly the message with its own mark after it. The mark
+                # is what makes the report fresh: it names this session and this message,
+                # so an earlier submission reported again, a later model call of a turn
+                # already under way, or another message with the same words cannot carry
+                # it. The words alone settle nothing, and neither does the mark around
+                # other words.
+                held = [key for key, record in deliveries.items()
+                        if record.get("state") == "queued" and record.get("held")]
+                matched = [(key, "exact") for key in held
+                           if reported and reported == digests.get(key)]
+                entered = bool(matched)
             if len(matched) == 1:
                 identifier, how = matched[0]
+                if entered:
+                    # No longer waiting, no longer held, and never to be typed by anyone.
+                    waiting.pop(identifier, None)
+                    deliveries[identifier] = {
+                        name: value for name, value in deliveries[identifier].items()
+                        if name not in ("held", "enter_file")}
+                    used = held_entry(identifier)
+                    if used is not None and not used.is_symlink():
+                        used.unlink(missing_ok=True)  # entered; pasting it again is not a message
                 deliveries[identifier] = dict(
                     deliveries[identifier],
                     state="observed",
@@ -1172,6 +1213,8 @@ def run_terminal(
                     # Settled late: its queue command's outcome had been left unknown.
                     **({"settled_from": "unknown"}
                        if deliveries[identifier].get("state") == "unknown" else {}),
+                    # Entered by a person in the session's own window, not by this wrapper.
+                    **({"via": "operator-entered", "settled_from": "held"} if entered else {}),
                 )
                 state["current_message_id"] = identifier
                 if identifier != "initial" and slot not in {"validator", "orchestrator"}:
@@ -1246,6 +1289,38 @@ def run_terminal(
             },
         )
 
+    def held_entry(identifier):
+        """Where the one thing to enter for a held message is kept, or None when the
+        message's id cannot name a file."""
+
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", identifier):
+            return None
+        return journal.parent / f"{slot}-held-{identifier}.txt"
+
+    def hold(identifier, text, record):
+        """What recognises a held message when a person enters it: its exact text followed
+        by this message's own mark, and nothing less.
+
+        The text alone is not enough. A report of the same words may be an earlier
+        submission reported again, or a later model call of a turn that has already
+        started, and a second message with the same words would be settled by either. The
+        mark is made from this session and this message's id, so a prompt that carries it
+        was submitted for this message and after it was held. Nothing here types anything:
+        the entry is written to a file for a person to paste.
+        """
+
+        marker = token_for(identifier)
+        entry = native_session.marked(text, marker)
+        digests[identifier] = native_session.text_digest(entry)
+        record.update({"token": marker, "enter_sha256": digests[identifier]})
+        target = held_entry(identifier)
+        if target is not None and not target.is_symlink():
+            descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+                                 | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                stream.write(entry)
+            record["enter_file"] = str(target)
+
     def accept(row):
         identifier = row["message_id"]
         reopen(row)
@@ -1255,7 +1330,13 @@ def run_terminal(
             result["held"] = ("not typed, and it will not be typed automatically: this "
                               "program reports no point at which typed input is safe (a "
                               "stop report comes before it decides whether to continue). "
-                              "Enter the message in the session's own window to deliver it")
+                              "To deliver it, enter in the session's own window exactly "
+                              "what its entry file holds: the message followed by its "
+                              "mark. When the session itself reports that prompt, the "
+                              "message is recorded as received. The message without its "
+                              "mark settles nothing: the same words may be an earlier "
+                              "submission reported again")
+            hold(identifier, row["text"], result)
         deliveries[identifier] = result
         save()  # durable before any byte is typed
         return result
@@ -1359,12 +1440,15 @@ def run_terminal(
             return {"state": "busy", "message_id": identifier,
                     "reason": "the session is asking the operator a question on screen"}
         if typing is not None or waiting or outstanding():
-            held = withhold_followups and any(
-                record.get("held") for record in deliveries.values())
+            held = sorted(key for key, record in deliveries.items()
+                          if record.get("held")) if withhold_followups else []
             return {"state": "busy", "message_id": identifier,
                     "reason": ("an earlier message is held for a person to enter: this "
-                               "program takes no later message automatically"
-                               if held else "an earlier message is not yet accounted for")}
+                               "program takes no later message automatically. Once the "
+                               "session reports exactly that message, later ones are "
+                               "accepted"
+                               if held else "an earlier message is not yet accounted for"),
+                    **({"held_message_ids": held} if held else {})}
         return accept(row)
 
     with tempfile.TemporaryDirectory(prefix="factory-live-", dir="/tmp") as directory:

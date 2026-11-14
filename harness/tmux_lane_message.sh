@@ -556,8 +556,18 @@ deliver_hosted() {
   case "$DELIVERY_RC:$DELIVERY_STATE" in
     75:*'"held":'*)
       # Recorded, not typed, and not going to be typed: say exactly that, and keep the
-      # not-delivered exit code so no caller takes it for a delivery.
-      echo "lane-message: $MESSAGE_ID is recorded for $RUN:$SLOT as queued and HELD, not delivered: this lane's program takes no later message automatically, nothing was typed and nothing will be. Enter the message in the lane's own window to deliver it. Do not resend it; its state: harness/persistent_lane.py status --root $ROOT --slot $SLOT" >&2
+      # not-delivered exit code so no caller takes it for a delivery. The one thing that
+      # delivers it is the message followed by its own mark, which the lane wrapper wrote to
+      # a file; the words alone would not tell a fresh submission from an old one reported
+      # again, so they settle nothing.
+      ENTER_FILE=$(printf '%s' "$DELIVERY_STATE" | "$FACTORY_PYTHON" -c \
+        'import json, sys; print(json.loads(sys.stdin.read()).get("enter_file") or "")' 2>/dev/null) || ENTER_FILE=""
+      if [ -n "$ENTER_FILE" ]; then
+        HOW="enter exactly the contents of $ENTER_FILE (the message followed by its mark) in the lane's own window"
+      else
+        HOW="enter the text of $RETAINED_MESSAGE followed by a space and its mark, [factory-message:<the token in the line above>], in the lane's own window"
+      fi
+      echo "lane-message: $MESSAGE_ID is recorded for $RUN:$SLOT as queued and HELD, not delivered: this lane's program takes no later message automatically, nothing was typed and nothing will be. To deliver it, $HOW, at a moment you judge the session ready. When the session itself reports exactly that prompt, the message is recorded as received and later messages are accepted. The message without its mark, or anything else you enter, is yours and settles nothing. To see whether it has been received, read its state: harness/persistent_lane.py status --root $ROOT --slot $SLOT. Do not send it again: once it is received this command would plan a new message, not report this one" >&2
       exit 75 ;;
   esac
   case "$DELIVERY_RC:$DELIVERY_STATE" in
@@ -834,6 +844,21 @@ PY
     printf -v RESUME_CMD '%q %q --config %q --digest %q --shell-command %q' \
       "$FACTORY_PYTHON" "$D/author_custody.py" "$AUTHOR_CONFIG" "$AUTHOR_DIGEST" "$RESUME_CMD"
   fi
+  # The lane's earlier process may still be stopping although its pane is gone (a window that
+  # was closed, a tmux server that ended): its wrapper waits for its program and writes its
+  # exit record last, into the one exits journal every life of the slot shares, whose rows
+  # name no process. A new life started now would have that record land beside its own start
+  # and be read as its own end. So the earlier owner is waited for, by the exact processes
+  # its receipt names and for a bounded time, and it is never signalled.
+  "$FACTORY_PYTHON" "$D/lane_watchdog.py" previous-owner --receipt "$TMUX_ROOT/$SLOT-process.json" || {
+    OWNER_RC=$?
+    if [ "$OWNER_RC" = 75 ]; then
+      echo "lane-message: the previous process of $RUN:$SLOT is still stopping (named above), so nothing was started and $MESSAGE_ID is planned and NOT delivered. It was not signalled. Run this command again once it has ended" >&2
+      exit 75
+    fi
+    echo "lane-message: cannot tell whether the previous process of $RUN:$SLOT has stopped (above), so nothing was started and $MESSAGE_ID is planned and NOT delivered" >&2
+    exit 70
+  }
   # The new life reads only what the resumed turn writes: the log's size now, before the turn
   # starts, so the earlier turn's done line is never reported again as this turn's.
   LOG_OFFSET=0

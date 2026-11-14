@@ -139,6 +139,29 @@ public API is still pre-1.0.
   other. Programs the registry does not report as resumable are refused (exit 70) with the
   message left planned. A message a busy session could not take is now said to be not
   given, rather than "do not resend".
+- A restart no longer mistakes the previous life's exit for the new one's. A seat's or
+  lane's exits journal is one file for every life of the slot and its rows name no
+  process, and a wrapper writes its exit record last, after its tmux window is gone. When
+  a run was stopped and `run_record.py start` run again at once, the old record could land
+  after the new start had begun; the start then reported "the <role> stopped during
+  startup", closed the healthy new session and exited 70. `start` now waits up to 15
+  seconds for the exact processes the seat's process receipt names (PID and start time)
+  to end before it starts anything, and refuses (exit 70) if one is still running or if
+  that cannot be told. A lane message that restarts an ended lane session does the same
+  (exit 75, message left planned). The earlier life is never signalled.
+  `lane_watchdog.py previous-owner` runs the check by itself.
+- A held message to a Muse or Antigravity lane settles when a person enters it. These
+  lanes take no later message automatically: one is recorded `queued` and `held` and the
+  operator is told to enter it in the lane's window. Until now doing so changed nothing:
+  the message stayed held and every later message was answered `busy`, for good. Now,
+  when the session's own prompt report is exactly the held message followed by its own
+  mark, it becomes `observed` (`via: operator-entered`), its receipt is recorded, and the
+  next message is accepted. The lane writes that one entry to a file and the message
+  command names it. The words without the mark settle nothing: messages often share
+  their words, and a report of them cannot be told from an earlier one repeated; no
+  provider counter is taken as proof of a fresh submission. Nothing is typed
+  automatically and no claim of unattended delivery is added. Run against Muse's echo
+  provider; not against Antigravity.
 - An ended `cursor-agent` session is restarted by a lane message, with Cursor's own
   `--resume=<id>` and the message as its launch argument (`agent ... -- <message>`),
   because a resumed Cursor session that is given nothing reports nothing. The hand-over is

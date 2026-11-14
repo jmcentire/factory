@@ -39,6 +39,25 @@ with the command that retries the start on the same record:
 python harness/run_record.py start --runs <runs> --run <run>
 ```
 
+A start that follows an earlier life of the same run waits for that life to finish
+stopping. A seat's wrapper, once signalled, waits for its program and writes its exit
+record last, which can be seconds after its tmux session is gone; and a seat's exits
+journal is one file for every life of the seat, its rows naming no process. A new life
+started in that time would have the old life's exit record land beside its own start and
+be taken for it: the launcher would report "the <role> stopped during startup" and close
+a healthy new session. So before anything is started, the launcher looks at the exact
+processes the seat's process receipt names (`<role>-process.json`: the wrapper and its
+program, each by PID and start time) and waits up to 15 seconds for them to end. If one is
+still running then, the start is refused (exit 70) with its PID and the retry command;
+if the receipt or the process table cannot be read, it is refused the same way. The
+earlier life is never signalled, and no session is replaced. A lane message that restarts
+an ended lane session does the same for the lane's slot (exit 75 while its earlier
+process is still stopping, with the message left planned), so the lane's watcher never
+counts an earlier life's exit record against the new one.
+`python harness/lane_watchdog.py previous-owner --receipt <file>` is the same check on its
+own: exit 0 when the earlier owner has stopped or there is none, 75 while it runs, 70
+when it cannot be told.
+
 Start runs from a shell outside any sandbox. On macOS the run's tmux server and every
 seat inherit the launching shell's sandbox, and an agent there cannot save its state; the
 launcher warns when it detects one.
@@ -342,6 +361,36 @@ author and independently by the tester on 2026-11-13. It is converted, not accep
   session-message send` refused an ordinary process: `sender_unverified`), a review, an
   answer or a wrap-up notice does not reach a Muse lane unattended. The Factory approves
   nothing and changes no hook or approval setting to get around this.
+- **A held message is delivered by a person, and then it settles.** `tmux_lane_message.sh`
+  answers a held message with exit 75, says it was not typed, and names its entry file
+  (`<slot>-held-<message id>.txt` in the lane's own directory, owner-only), which holds the
+  one thing that delivers it: the message followed by its own mark,
+  `[factory-message:<mark>]`. The operator pastes that entry in the lane's window when
+  they judge the session ready. Nothing is typed for them and no moment is chosen for
+  them. When the session's own prompt report is exactly that entry, the message becomes
+  `observed` with `via: operator-entered`, its receipt goes into the dialogue journal,
+  `persistent_lane.py status` shows it, the entry file is removed, and the next message to
+  the lane is accepted (and held in its turn). Until then a further message is answered
+  `busy` and names the held one.
+  **The words without the mark settle nothing.** Messages often have the same words (every
+  status request does), and a report of those words cannot be told from an earlier
+  submission reported again, or from a later model call of a turn already under way. The
+  mark is made from the session and the message's id, so a prompt that carries it was
+  submitted for that message and after it was held. No counter of the provider's is taken
+  as proof of a fresh submission. Also settling nothing: the entry of an earlier message,
+  a mark that is no message's, and the mark around other words. Each is the operator's own
+  input and is counted as foreign. The message command is not the way to look for the
+  receipt: once a message is received, the same words sent again are a new message.
+  "Exactly" ignores line endings and whitespace at the two ends, and nothing else.
+  Run against Muse Code 1.4.20 with its echo provider (no account, no model), through the
+  lane wrapper, 2026-11-14, with two messages of the same two-line words: the words alone
+  left the first held; its entry file, pasted, settled it and the file was removed; the
+  second was then accepted with a different mark; the first message's entry entered again,
+  the words alone, and the words with a mark that was nobody's each left the second held;
+  its own entry settled it. Before this change no entry settled anything: the first
+  message stayed held for good and every later one was `busy`.
+  Not run: the message command itself against a Muse lane (the launcher needs Muse's
+  account sign-in), or a signed-in model.
 - **Hooks beside the operator's.** The lane's observation hooks are the project file
   `.muse/hooks.json` in the lane's own clone, which Muse runs in addition to the operator's
   hooks. It has the custody a Cursor lane's project files have: never written over a
@@ -426,6 +475,30 @@ and they are not the same thing:
   by a Stop hook, which is the case that matters (it is what swallowed a typed message in
   Muse). A later message is kept `queued` with the reason and left for a person to enter:
   a review, an answer or a wrap-up notice does not reach an Antigravity lane unattended.
+- **A held message is delivered by a person, and then it settles.** `tmux_lane_message.sh`
+  answers a held message with exit 75, says it was not typed, and names its entry file
+  (`<slot>-held-<message id>.txt` in the lane's own directory, owner-only), which holds the
+  one thing that delivers it: the message followed by its own mark,
+  `[factory-message:<mark>]`. The operator pastes that entry in the lane's window when
+  they judge the session ready. Nothing is typed for them and no moment is chosen for
+  them. When the session's own prompt report is exactly that entry, the message becomes
+  `observed` with `via: operator-entered`, its receipt goes into the dialogue journal,
+  `persistent_lane.py status` shows it, the entry file is removed, and the next message to
+  the lane is accepted (and held in its turn). Until then a further message is answered
+  `busy` and names the held one.
+  **The words without the mark settle nothing.** Messages often have the same words (every
+  status request does), and a report of those words cannot be told from an earlier
+  submission reported again, or from a later model call of a turn already under way. The
+  mark is made from the session and the message's id, so a prompt that carries it was
+  submitted for that message and after it was held. No counter of the provider's is taken
+  as proof of a fresh submission. Also settling nothing: the entry of an earlier message,
+  a mark that is no message's, and the mark around other words. Each is the operator's own
+  input and is counted as foreign. The message command is not the way to look for the
+  receipt: once a message is received, the same words sent again are a new message.
+  "Exactly" ignores line endings and whitespace at the two ends, and nothing else.
+  For Antigravity this is the same code as for Muse and was not run against Antigravity:
+  only the mapping of its prompt report (`PreInvocation`, `lastUserInput`) to the text
+  that is compared was checked.
 - **No completion line.** In the actual executions the stop report carried no model text
   under any field, so a lane's done line is not seen from its reports.
 - **Permissions.** Nothing is imposed. `FACTORY_LANE_SANDBOX=off` is the one configuration

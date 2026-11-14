@@ -307,6 +307,65 @@ def process_snapshot() -> dict[int, dict[str, Any]] | None:
     return rows or None
 
 
+#: How long a new start waits for the previous owner of a slot to finish stopping. A wrapper
+#: that was signalled passes the signal on, waits up to 5s for its program, kills it and waits
+#: 5s more, then writes its exit record: this is a little more than that.
+PREVIOUS_OWNER_WAIT_S = 15.0
+
+
+def previous_owner(receipt: pathlib.Path,
+                   snapshot: Mapping[int, Mapping[str, Any]] | None) -> list[dict[str, Any]] | None:
+    """The processes a slot's process receipt names that are still running, each exactly that
+    process: the recorded PID with the recorded start time, and not a zombie. ``[]`` when
+    there is no receipt or none of them is running; ``None`` when it cannot be told (the
+    receipt is unreadable or is not a receipt, or the process table could not be read).
+
+    Why a start asks. A slot's exits journal is one file for every life of the slot, and its
+    rows name no process. A wrapper writes its row last, after its program has ended, which
+    can be seconds after its tmux window is gone. A new life started in that time would have
+    the old life's exit row land beside its own start and be taken for it. Nothing here
+    signals anything: the previous owner is only looked at.
+    """
+
+    if receipt.is_symlink():
+        return None
+    try:
+        document = json.loads(receipt.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError):
+        return None
+    if not isinstance(document, dict) or document.get("schema") != "factory-worker-process/1":
+        return None
+    if snapshot is None:
+        return None
+    alive = []
+    for role in ("wrapper", "worker"):
+        identity = document.get(role)
+        if (not isinstance(identity, dict) or type(identity.get("pid")) is not int
+                or not isinstance(identity.get("started"), str)):
+            return None
+        row = snapshot.get(identity["pid"])
+        if (row is not None and row.get("started") == identity["started"]
+                and not str(row.get("state", "")).startswith("Z")):
+            alive.append({"role": role, "pid": identity["pid"], "started": identity["started"]})
+    return alive
+
+
+def await_previous_owner(receipt: pathlib.Path, wait_s: float = PREVIOUS_OWNER_WAIT_S,
+                         poll_s: float = 0.2) -> list[dict[str, Any]] | None:
+    """Wait, for at most ``wait_s``, until the slot's previous owner has stopped. Returns what
+    ``previous_owner`` last saw: ``[]`` when it is gone, the processes still running when the
+    wait ran out, ``None`` when it cannot be told."""
+
+    deadline = time.monotonic() + max(0.0, wait_s)
+    while True:
+        seen = previous_owner(receipt, process_snapshot())
+        if not seen or time.monotonic() >= deadline:
+            return seen
+        time.sleep(poll_s)
+
+
 def process_tree(snapshot: Mapping[int, Mapping[str, Any]],
                  identities: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Extend only matching recorded identities; keep orphans and never adopt a reused PID."""
@@ -1141,7 +1200,26 @@ def main(argv: list[str] | None = None) -> int:
     clock = commands.add_parser("remaining", help="a lane's time left on its wall-clock cap")
     clock.add_argument("--root", type=pathlib.Path, required=True)
     clock.add_argument("--slot", required=True)
+    owner = commands.add_parser(
+        "previous-owner",
+        help="wait until the processes a slot's process receipt names have stopped; exit 0 "
+             "when they have (or there is no receipt), 75 when one is still running, 70 when "
+             "it cannot be told. Nothing is signalled")
+    owner.add_argument("--receipt", type=pathlib.Path, required=True)
+    owner.add_argument("--wait-seconds", type=float, default=PREVIOUS_OWNER_WAIT_S)
     arguments = parser.parse_args(argv)
+    if arguments.command == "previous-owner":
+        seen = await_previous_owner(arguments.receipt, arguments.wait_seconds)
+        if seen is None:
+            print(f"lane-watchdog: cannot tell whether the previous owner of "
+                  f"{arguments.receipt.name} has stopped (unreadable receipt or process "
+                  "table)", file=sys.stderr)
+            return 70
+        if seen:
+            print("lane-watchdog: still running: " + ", ".join(
+                f"{row['role']} pid {row['pid']}" for row in seen), file=sys.stderr)
+            return 75
+        return 0
     if arguments.command == "close":
         try:
             for slot in close_superseded(arguments.root, arguments.lane, arguments.by):
