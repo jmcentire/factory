@@ -124,6 +124,13 @@ class Harness:
     start_requires: str = ""
     # A line this provider's lanes need in their protocol prompt, or "".
     protocol_note: str = ""
+    # An ended session of this program is restarted by a lane message, on its own
+    # conversation, while `resumable` stays false: the restart of a session that ended was
+    # shown, and the watcher ending a live one to pause it or wrap it up was not. So the
+    # watcher offers no pause for such a lane and never ends one to continue it; only a
+    # message to a session that has already ended restarts it. `describe` prints
+    # `restartable`.
+    restart_by_message: bool = False
     # Why this provider's lanes are not yet its own interactive program with the operator's
     # configuration intact, or are but have not been accepted for unattended work; "" only
     # when neither is open. Stated where the registry is read, so the
@@ -675,11 +682,37 @@ _BLOCKERS = {
                     "sent by tmux_lane_message.sh, reported `observed` with matching text in "
                     "the same session; the generated permission file was accepted and "
                     "lane-kindex was listed ready beside the operator's servers. At aae71ef "
-                    "the model called the lane server's scope_info, read-only. Still open: "
-                    "unattended resume (no lane command resumes a session, and a resumed "
-                    "session reported nothing until prompted); a Cursor coordinator seat, "
-                    "which has not been exercised; a required Signet guard, not shown "
-                    "enforcing end to end; and what the lane's Kindex returns for a seeded "
+                    "the model called the lane server's scope_info, read-only. Restarting an "
+                    "ended session is built and partly shown. Observed of Cursor itself "
+                    "(cursor-agent 2026.11.13, 2026-11-14, four one-word turns in a workspace "
+                    "Cursor already trusted, by the adapter's author; the hook capture was "
+                    "read independently): `agent --resume=<id>` given nothing reported "
+                    "nothing; given a message after `--` it reported that message at once on "
+                    "the same conversation id, byte for byte, with no start report; a "
+                    "message then typed into it was reported too. So a lane message to an "
+                    "ended session restarts it that way, the message recorded as handed "
+                    "over before the program exists and never handed over twice. That path "
+                    "was run through tmux_lane.sh and tmux_lane_message.sh with a stand-in "
+                    "program that calls no model, and once against Cursor itself "
+                    "(2026-11-14, a new synthetic workspace, no API key, no blanket "
+                    "option): Cursor asked its trust question once, at first launch, and "
+                    "one shell command was approved once; after a clean end a lane message "
+                    "restarted the same conversation id with no question asked and was "
+                    "reported exactly; a follow-up typed into the restarted session was "
+                    "reported; three prompt reports, three generation ids, each bound to "
+                    "one message. That is all that is claimed: a Cursor lane is "
+                    "`restartable` (a message restarts a session that has ended), not "
+                    "`resumable`. The watcher ending a live Cursor session to pause it or "
+                    "wrap it up, and continuing it, was not run, so no pause is offered "
+                    "for a Cursor lane and the watcher never ends one for that. A "
+                    "restarted program that ends before reporting leaves that one message "
+                    "`unknown`, and another message is needed to restart the session. Not "
+                    "run against Cursor, and not claimed: a restart after a crash or after "
+                    "the session was ended by a signal; a restart whose program fails; a "
+                    "restart in a workspace Cursor was not asked to trust at launch; a "
+                    "required Signet guard on a first or a restarted session, not shown "
+                    "enforcing end to end. Also open: a Cursor coordinator seat, which has "
+                    "not been exercised, and what the lane's Kindex returns for a seeded "
                     "search.",
     # The lane is Muse's own interactive session with the operator's configuration. What is
     # open is acceptance and what an echo run cannot show, not conversion.
@@ -856,12 +889,16 @@ HARNESSES: Mapping[str, Harness] = {
     "prime-agent": PrimeAgent("prime-agent", "prime-agent", (), True,
                               api_env=("OPENROUTER_API_KEY",), plan=False,
                               native_blocker=_BLOCKERS["prime-agent"]),
-    # Not resumable by the Factory yet: no lane command restarts an ended Cursor session, and
-    # a resumed session reported nothing until it was given a prompt. Cursor's own resume is
-    # untouched: `turn(resume=<id>)` builds `--resume=<id>`, the same conversation and never a
-    # new one, and a lane message to a running session is typed into that session.
+    # Restartable, not resumable. A lane message to a session that has ended restarts it
+    # with Cursor's own `--resume=<id>` and that message as its launch argument, because a
+    # resumed session given nothing reports nothing (tmux_lane_message.sh,
+    # native_session.cursor_plan); that was run against Cursor itself after a clean end.
+    # The watcher ending a live Cursor session and continuing it (a review pause, a wrap-up)
+    # was not run, so `resumable` stays false and no pause is offered. A message to a
+    # running session is typed into it, as before.
     "cursor-agent": CursorAgent(
         "cursor-agent", "agent", (), False, api_env=("CURSOR_API_KEY",),
+        restart_by_message=True,
         memory="beside-operator", dialect="cursor", native_blocker=_BLOCKERS["cursor-agent"],
         protocol_note=(
             f"- Your Kindex is the MCP server named {CURSOR_LANE_SERVER}. It is this lane's own. "
@@ -969,7 +1006,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list", help="the registered harnesses")
-    describe = sub.add_parser("describe", help="resumable, plan, memory isolation, the "
+    describe = sub.add_parser("describe", help="resumable | restartable | single, plan, "
+                              "memory isolation, the "
                               "native blocker (or empty), what a start asks of the "
                               "operator (or empty) and the lane protocol note (or empty), "
                               "NUL-separated")
@@ -1044,7 +1082,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "describe":
             # A lane agent name (codex-interactive, codex-ollama) answers for itself.
             chosen, blocker, resumable = describe_lane(args.agent)
-            sys.stdout.write(f"{'resumable' if resumable else 'single'}\0"
+            # resumable: the watcher may end and continue it, and a message restarts an
+            # ended one. restartable: only the second. single: neither.
+            word = ("resumable" if resumable
+                    else "restartable" if chosen.restart_by_message else "single")
+            sys.stdout.write(f"{word}\0"
                              f"{'plan' if chosen.plan else 'metered-only'}\0"
                              f"memory:{chosen.memory}\0{blocker}\0{chosen.start_requires}\0"
                              f"{chosen.protocol_note}\0")

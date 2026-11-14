@@ -7518,7 +7518,8 @@ def test_a_resumed_lane_keeps_the_model_it_launched_with(tmp_path: Path) -> None
     # The tmux recorder cannot emit native receipts. A queued resume command is
     # inspectable, but must not be reported as delivered.
     assert literal.returncode == 70, literal.stdout + literal.stderr
-    assert "NOT delivered" in literal.stderr
+    assert "NOT recorded as delivered" in literal.stderr
+    assert "never handed over again" in literal.stderr
     assert tmux_log.exists(), literal.stderr
     first = next(line for line in tmux_log.read_text().splitlines() if "respawn-pane" in line)
     assert "gpt coder $(touch MODEL_EXECUTED)" in shlex.split(first)
@@ -7526,7 +7527,8 @@ def test_a_resumed_lane_keeps_the_model_it_launched_with(tmp_path: Path) -> None
     tmux_log.unlink()
     resumed = probe("gpt-coder")
     assert resumed.returncode == 70, resumed.stdout + resumed.stderr
-    assert "NOT delivered" in resumed.stderr
+    assert "NOT recorded as delivered" in resumed.stderr
+    assert "never handed over again" in resumed.stderr
     respawn = next(line for line in tmux_log.read_text().splitlines() if "respawn-pane" in line)
     assert "-m gpt-coder" in respawn
     assert "codex resume" in respawn and "--ask-for-approval never" in respawn
@@ -7535,7 +7537,8 @@ def test_a_resumed_lane_keeps_the_model_it_launched_with(tmp_path: Path) -> None
     tmux_log.unlink()
     carried = probe("gpt-mine", ['model="gpt-mine"', 'model_reasoning_effort="high"'])
     assert carried.returncode == 70, carried.stdout + carried.stderr
-    assert "NOT delivered" in carried.stderr
+    assert "NOT recorded as delivered" in carried.stderr
+    assert "never handed over again" in carried.stderr
     respawn = next(line for line in tmux_log.read_text().splitlines() if "respawn-pane" in line)
     carried_args = '-c model=\\"gpt-mine\\" -c model_reasoning_effort=\\"high\\"'
     assert f" {carried_args} " in respawn
@@ -7578,7 +7581,8 @@ def test_a_lane_whose_window_is_gone_is_resumed_in_a_new_window_not_queued(
         env,
     )
 
-    assert probe.returncode == 70 and "NOT delivered" in probe.stderr
+    assert probe.returncode == 70 and "NOT recorded as delivered" in probe.stderr
+    assert "never handed over again" in probe.stderr
     assert tmux_log.exists(), probe.stderr
     calls = tmux_log.read_text()
     assert "new-window -t r1 -n coder" in calls and "codex resume" in calls

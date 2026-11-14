@@ -1501,9 +1501,9 @@ def test_review_pauses_are_for_resumable_coder_launches_and_can_be_turned_off(
     lanes = Lanes(tmp_path)
     refused = lanes.lane("tester", "--review-every-minutes", "10")
     assert refused.returncode == 64 and "Coder launch only" in refused.stderr
-    # Cursor is still documented as unsupported for unattended ended-session
-    # recovery. Native Codex now has a qualified same-conversation resume path.
-    refused = lanes.lane("coder", "--agent", "cursor-agent", "--review-every-minutes", "10")
+    # AGY remains unsupported for unattended restart. Native Codex has
+    # watcher-compatible recovery; Cursor only supports already-ended recovery.
+    refused = lanes.lane("coder", "--agent", "agy", "--review-every-minutes", "10")
     assert refused.returncode == 64 and "need a resumable lane" in refused.stderr
     native = Lanes(tmp_path / "native-codex")
     _codex_stub(native.stub, signed_in=True)
@@ -1515,6 +1515,21 @@ def test_review_pauses_are_for_resumable_coder_launches_and_can_be_turned_off(
     [native_call] = native.windows("coder")
     assert "--session-agent codex-interactive" in native_call
     assert "codex exec" not in native_call
+    cursor = Lanes(tmp_path / "native-cursor")
+    _cursor_stub(cursor.stub, signed_in=True)
+    refused_cursor = cursor.lane("coder", "--agent", "cursor-agent",
+                                 "--review-every-minutes", "10")
+    assert refused_cursor.returncode == 64
+    assert "need a resumable lane" in refused_cursor.stderr
+    assert cursor.windows("coder") == []
+    accepted_cursor = cursor.lane("coder", "--agent", "cursor-agent",
+                                  "--review-every-minutes", "0")
+    assert accepted_cursor.returncode == 0, accepted_cursor.stdout + accepted_cursor.stderr
+    cursor_row = read_chain(cursor.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
+    assert cursor_row["watch"]["review_every_s"] == 0
+    [cursor_call] = cursor.windows("coder")
+    assert "--session-agent cursor-agent" in cursor_call and "--persistent" in cursor_call
+    assert "--print" not in cursor_call
     assert lanes.lane("coder", "--review-every-minutes", "0").returncode == 0
     prompt = (lanes.root / "tmux-lanes" / "coder-prompt.txt").read_text(encoding="utf-8")
     assert "pauses this lane" not in prompt and "capped at" not in prompt
@@ -1662,7 +1677,8 @@ def test_a_lanes_commands_get_the_cache_and_runtime_on_launch_and_resume(tmp_pat
     # This command-recording tmux stub does not run a native process or emit
     # its receipt. Inspect preserved launch inputs without pretending delivery.
     assert resumed.returncode == 70, resumed.stdout + resumed.stderr
-    assert "NOT delivered" in resumed.stderr
+    assert "NOT recorded as delivered" in resumed.stderr
+    assert "never handed over again" in resumed.stderr
     respawn = next(line for line in lanes.tmux_log.read_text().splitlines()
                    if "respawn-pane" in line)
     assert _policy(respawn) == expected

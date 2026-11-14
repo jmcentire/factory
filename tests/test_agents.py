@@ -368,13 +368,16 @@ def test_cursor_stream_wrapper_refuses_without_starting(tmp_path: Path) -> None:
 def test_cursor_does_not_silently_replace_a_requested_resume(tmp_path: Path) -> None:
     cursor = agents.harness("cursor-agent")
     assert not cursor.resumable
-    # Factory does not promise automatic lane restart, but an explicitly
-    # requested native resume must retain the exact conversation identity.
+    assert cursor.restart_by_message
+    # Clean-ended native restart is supported, not watcher-induced pauses.
+    # It must retain the exact
+    # requested conversation rather than silently starting a new one.
     made = cursor.turn(model="", effort="", cwd=tmp_path, resume="existing-session")
     assert "--resume=existing-session" in made.argv or (
         "--resume" in made.argv
         and made.argv[made.argv.index("--resume") + 1] == "existing-session"
     )
+    assert not {"-p", "--print"} & set(made.argv)
 
 
 @pytest.mark.parametrize("plan_only", [True, False])

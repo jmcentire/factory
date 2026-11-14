@@ -113,10 +113,13 @@ REVIEW_EXPIRY_WAITS = 4
 # The agent registry owns that fact (harness/agents.py, `describe_lane`); this is the watcher's
 # own copy, kept because the watcher imports nothing but the standard library, and it names
 # exactly the lane agents the registry reports as resumable by the Factory. `cursor-agent`,
-# `muse` and `agy` are not: nothing here restarts an ended session of any of them, and a
-# launch offers no wrap-up or review pause for a lane the registry does not report resumable.
-# That is a statement about what the Factory does, not about those programs, whose own resume
-# argument the registry still builds.
+# `muse` and `agy` are not: this watcher never ends a session of any of them in order to
+# continue it, and a launch offers no wrap-up or review pause for a lane the registry does
+# not report resumable. (`cursor-agent` is what the registry calls restartable: a lane
+# message to a Cursor session that has already ended restarts it. That is the message
+# command's doing, after an end this watcher did not cause for that purpose.) It is a
+# statement about what the Factory does, not about those programs, whose own resume argument
+# the registry still builds.
 RESUMABLE_AGENTS = frozenset({"codex", "codex-ollama", "codex-interactive", "claude",
                               "claude-ollama", "prime-agent"})
 # The count ends the marker: some harnesses run the next message straight on with no newline
