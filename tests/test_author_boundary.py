@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import platform
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -129,8 +130,10 @@ def test_launch_retains_model_child_binding(tmp_path, route):
     assert not (root / "tmux-lanes/coder-kindex-home").exists()
     command = next(row for row in tmux_log.read_text().splitlines() if "-n coder" in row)
     assert command.count("--boundary-record") == 1
-    assert command.index("codex_lane_session.py") < command.index("--boundary-record")
-    assert "--boundary-role" not in command  # outer trusted writer is not the model child
+    assert command.index("lane_agent.py") < command.index("--boundary-record")
+    assert "--boundary-role coder" in command
+    assert "--persistent" in command and "--session-agent codex-interactive" in command
+    assert "codex exec" not in command
 
 
 @pytest.mark.parametrize("family", ["boundary", "signet"])
@@ -173,24 +176,31 @@ def test_resume_uses_retained_binding_and_refuses_drift_before_respawn(tmp_path)
     operator, root, env, tmux_log = fixture.operator, fixture.root, fixture.env, fixture.tmux_log
     lane = fixture.clone("coder")
     record = binding(tmp_path)
+    from tests.test_codex_ended_native_recovery import PROVIDER
+    provider = fixture.stub / "codex"
+    provider.write_text(f"#!{sys.executable}\n" + PROVIDER)
+    launched = fixture.lane("coder", "--boundary-contract", record["contract"],
+                            "--boundary-digest", record["digest"])
+    assert launched.returncode == 0, launched.stdout + launched.stderr
     launch_dir = root / "tmux-lanes"
-    launch_dir.mkdir()
-    (launch_dir / "coder-thread-id").write_text("12345678-1234-4234-8234-123456789abc\n")
-    row = {"schema_version": "factory-tmux-lane-launch/1", "status": "active", "run_id": "r1",
-           "role": "coder", "agent": "codex", "model": "gpt-coder", "repository": str(lane),
-           "kernel_boundary": record}
     journal = launch_dir / "coder-launch.jsonl"
-    journal.write_text(json.dumps(row) + "\n")
+    row = json.loads(journal.read_text().splitlines()[-1])
+    assert row["agent"] == "codex-interactive" and row["persistent"]
+    _run_recorded_native_author(tmux_log, lane, root)
     args = ["bash", str(HARNESS / "tmux_lane_message.sh"), "r1", "validator", "coder", "status",
             "--runs", str(root.parent)]
     # Ambient replacement cannot substitute for the retained host binding.
     env.update(FACTORY_REQUIRE_BOUNDARY="1", FACTORY_BOUNDARY_CONTRACT="/replacement-not-used",
                FACTORY_BOUNDARY_DIGEST="0" * 64)
     resumed = run(args, operator, env)
-    assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+    assert resumed.returncode == 70, resumed.stdout + resumed.stderr
+    assert "NOT delivered" in resumed.stderr
+    # Recording a respawn is not an observed native prompt receipt.
     command = next(row for row in tmux_log.read_text().splitlines() if "respawn-pane" in row)
     assert record["digest"] in command and "replacement-not-used" not in command
     assert command.count("--boundary-record") == 1
+    assert "resume" in command and "12345678-1234-4234-8234-123456789abc" in command
+    assert "codex exec" not in command
     tmux_log.unlink()
     document = json.loads(Path(record["contract"]).read_text())
     document["role"] = "tester"
@@ -203,3 +213,43 @@ def test_resume_uses_retained_binding_and_refuses_drift_before_respawn(tmp_path)
     journal.write_text(json.dumps(row) + "\n")
     missing = run(args, operator, env)
     assert missing.returncode == 77 and "required retained author boundary" in missing.stderr
+
+
+def _run_recorded_native_author(tmux_log, repository, root):
+    """Execute the public launcher command with only a test-owned native provider.
+
+    The tmux recorder does not run programs. Execute its admitted author command
+    so native lifecycle hooks, not invented state JSON, establish a clean exit.
+    """
+    command = next(line for line in tmux_log.read_text().splitlines() if "-n coder" in line)
+    argv = shlex.split(command.split(" && ", 1)[1].removeprefix("exec "))
+    result = subprocess.run(argv, cwd=repository, text=True, capture_output=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    state = json.loads((root / "tmux-lanes/coder-persistent.json").read_text())
+    assert state["phase"] == "exited"
+    assert state["deliveries"]["initial"]["state"] == "observed"
+    assert state["session_id"] == "12345678-1234-4234-8234-123456789abc"
+
+
+@pytest.mark.parametrize("agent", ["codex", "codex-interactive"])
+def test_unhosted_codex_cannot_resume_even_with_retained_boundary(tmp_path, agent):
+    from tests.test_lane_controls import Lanes
+
+    fixture = Lanes(tmp_path)
+    lane = fixture.clone("coder")
+    record = binding(tmp_path)
+    folder = fixture.root / "tmux-lanes"
+    folder.mkdir()
+    session = folder / "coder-thread-id"
+    session.write_text("12345678-1234-4234-8234-123456789abc\n")
+    journal = folder / "coder-launch.jsonl"
+    journal.write_text(json.dumps({"status": "active", "run_id": "r1", "role": "coder",
+        "agent": agent, "repository": str(lane), "kernel_boundary": record}) + "\n")
+    before = journal.read_bytes(), session.read_bytes()
+    result = run(["bash", str(HARNESS / "tmux_lane_message.sh"), "r1", "validator",
+                  "coder", "status", "--runs", str(fixture.root.parent)],
+                 fixture.operator, fixture.env)
+    assert result.returncode != 0 and "replace-session" in result.stderr
+    assert (journal.read_bytes(), session.read_bytes()) == before
+    calls = fixture.tmux_log.read_text()
+    assert "respawn-pane" not in calls and "codex exec" not in calls
