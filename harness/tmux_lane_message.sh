@@ -603,6 +603,25 @@ if [ "$PERSISTENT" = 1 ]; then
         echo "lane-message: $RUN:$SLOT's $AGENT session has ended, and its launch (by an earlier Factory) did not record what a restart needs, so $MESSAGE_ID is planned and NOT delivered. Start a new hosted session with tmux_lane.sh launch --replace-session '<why>'" >&2
         exit 70
       }
+      if [ "$AGENT" = codex-interactive ]; then
+        # Codex takes the message that restarts it as its launch argument. One an earlier
+        # wrapper already gave, whatever became of it, does not restart the session again.
+        GIVEN=$("$FACTORY_PYTHON" - "$TMUX_ROOT/$SLOT-persistent.json" "$MESSAGE_ID" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+try:
+    record = (json.loads(path.read_text()).get("deliveries") or {}).get(sys.argv[2]) \
+        if path.is_file() and not path.is_symlink() else None
+except (OSError, ValueError, AttributeError):
+    raise SystemExit("lane-message: the lane's delivery record cannot be read")
+print(record.get("state", "") if isinstance(record, dict) and record.get("state") != "queued" else "")
+PY
+        ) || exit 70
+        [ -z "$GIVEN" ] || {
+          echo "lane-message: $MESSAGE_ID was already given to $RUN:$SLOT's session by an earlier start (recorded $GIVEN) and is never given twice, so it cannot restart the ended session. A message with other content, or from another sender, can; or start a new session with tmux_lane.sh launch --replace-session '<why>'" >&2
+          exit 75
+        }
+      fi
       HOSTED_RESUME=1 ;;
     *) echo "lane-message: cannot determine whether $RUN:$WINDOW is live" >&2; exit 70 ;;
   esac
@@ -622,11 +641,12 @@ SAFE_CODEX_HOME="${CODEX_HOME:-$SAFE_HOME/.codex}"
 LOCAL_ARGS=""
 if [ "$AGENT" = "codex-ollama" ]; then
   printf -v LOCAL_ARGS -- '--oss --local-provider ollama -m %q' "$MODEL"
-elif [ "$AGENT" = codex ] && [ "${#MODEL_CONFIG[@]}" -eq 0 ] && [ -n "$MODEL" ]; then
+elif case "$AGENT" in codex|codex-interactive) true ;; *) false ;; esac && [ "${#MODEL_CONFIG[@]}" -eq 0 ] && [ -n "$MODEL" ]; then
   printf -v LOCAL_ARGS -- '-m %q' "$MODEL"
 fi
 # A Codex lane launched with --effort recorded it (agents.py turn-record); resume at the same.
-if [ -f "$TURN_RECORD" ] && [ ! -L "$TURN_RECORD" ] && [ "$AGENT" = codex ]; then
+# (An interactive Codex lane is here only to have its ended hosted session restarted.)
+if [ -f "$TURN_RECORD" ] && [ ! -L "$TURN_RECORD" ] && case "$AGENT" in codex|codex-interactive) true ;; *) false ;; esac; then
   TURN_EFFORT=$("$FACTORY_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("effort",""))' "$TURN_RECORD")
   case "$TURN_EFFORT" in ""|minimal|low|medium|high|xhigh|max) ;; *) echo "lane-message: the turn record's effort is malformed" >&2; exit 70 ;; esac
   [ -z "$TURN_EFFORT" ] || LOCAL_ARGS="${LOCAL_ARGS:+$LOCAL_ARGS }-c model_reasoning_effort=$TURN_EFFORT"
@@ -717,6 +737,23 @@ elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
     "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
     "$RETAINED_MESSAGE" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$WINDOW" "$BOUNDARY_CODEX_ARGS" "$RESUME_ARGS" "$RESUME_POLICY" "$REPOSITORY" \
     'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_C" "$THREAD_ID" ;;
+    codex-interactive)
+      # Reached only to restart an ended hosted session (an unhosted one was refused above).
+      # Codex's own `resume`, options first and the session id last, with this message as
+      # its launch argument: a resumed Codex session that is given nothing reports nothing
+      # (native_session.codex_plan). The wrapper records the hand-over before the program
+      # exists, under this message's id, so it is never given twice.
+      RESUME_POLICY="--ask-for-approval never"
+      CODEX_HOOK_TRUST_ARG=""
+      if [ "$LANE_SANDBOX" = off ]; then
+        RESUME_POLICY="--dangerously-bypass-approvals-and-sandbox"
+        CODEX_HOOK_TRUST_ARG="--dangerously-bypass-hook-trust"
+      fi
+      printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q --persistent --run-root %q --native-dir %q%s --session-agent codex-interactive --session-file %q --prompt-arg %q --launch-message-id %q -- codex resume --no-daemon --no-alt-screen %s %s %s -C %q -c %q -c %q -c %q %s %q' \
+        "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_agent.py" "$SLOT" "$LANE_LOG" "$LANE_EXITS" \
+        "$ROOT" "$NATIVE_DIR" "$BOUNDARY_MODEL_ARGS" "$THREAD_FILE" "$RETAINED_MESSAGE" "$MESSAGE_ID" \
+        "$RESUME_POLICY" "$CODEX_HOOK_TRUST_ARG" "$RESUME_ARGS" "$REPOSITORY" \
+        'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_C" "$THREAD_ID" ;;
     *)
       # A registry harness resumes its own session with the arguments, env file and billing it
       # launched with (its turn record); the wrapper keeps recording the session and billing.

@@ -69,6 +69,8 @@ WAITING = "idle_prompt"
 #: that choice itself (``cl`` passes its own permissive flags).
 PERMISSION_FLAGS = ("--dangerously-skip-permissions", "--allow-dangerously-skip-permissions")
 PASTE_START, PASTE_END = b"\x1b[200~", b"\x1b[201~"
+#: A lane message's id, where one names a file or a launch argument's record.
+MESSAGE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}")
 EVENT_LIMIT = 4 * 1024 * 1024
 MESSAGE_LIMIT = 256 * 1024
 
@@ -843,7 +845,7 @@ _CODEX_SESSION_WORDS = ("resume",)
 
 def codex_plan(arguments: Sequence[str], *, executable: str, directory: pathlib.Path,
                slot: str, workspace: pathlib.Path, prompt: str,
-               python: str = sys.executable) -> Plan:
+               python: str = sys.executable, message_id: str = "") -> Plan:
     """A native start of Codex's interactive session.
 
     ``arguments`` exclude the executable. The shape follows what was observed of codex-cli
@@ -859,7 +861,15 @@ def codex_plan(arguments: Sequence[str], *, executable: str, directory: pathlib.
     - Codex chooses its own session id. Its hooks also report sessions of its own that this
       lane did not start (a memory-writing agent was seen), so the lane's session is the one
       whose prompt report carries the launch mark, not the first to report a start.
-    - ``resume <id>`` continues that session and is given no launch message here.
+    - ``resume ... <id>`` continues that session, on the same session id, and its hooks go
+      on reporting it (observed 2026-11-14). A resumed session that is given nothing reports
+      nothing, not even a start, and was seen to stop on Codex's own update question. One
+      given a message, as its launch argument or through ``codex queue``, reported its start
+      and that message at once. So the message that restarts a session is its launch
+      argument: with ``message_id`` the resumed start carries ``prompt`` after the session
+      id, marked for that message, and the plan says so in ``launched``. The session id is
+      the last argument before it, as in Codex's own usage line. Without ``message_id`` a
+      resumed start is given nothing, as before.
     """
 
     args = list(arguments)
@@ -869,11 +879,15 @@ def codex_plan(arguments: Sequence[str], *, executable: str, directory: pathlib.
     session = ""
     resumed = args[:1] == ["resume"]
     if resumed:
-        session = args[1] if len(args) > 1 else ""
+        session = args[-1] if len(args) > 1 else ""
         try:
             uuid.UUID(session)
         except ValueError:
-            raise ValueError("native session id missing or malformed") from None
+            raise ValueError("native session id missing or malformed: `resume` takes its "
+                             "options first and the session id last") from None
+    if message_id and (not resumed or not MESSAGE_ID.fullmatch(message_id)):
+        raise ValueError("a launch message id names the message that restarts a resumed "
+                         "session, and nothing else")
     if "\0" in prompt:
         raise ValueError("the first message holds a NUL byte and cannot be a launch argument")
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -899,6 +913,13 @@ def codex_plan(arguments: Sequence[str], *, executable: str, directory: pathlib.
         args += ["--", given]
         launched = {"token": mark, "typed_sha256": text_digest(given),
                     "body_sha256": text_digest(prompt)}
+    elif message_id:
+        # The mark a typed or queued message of this id would carry in this session.
+        mark = message_token(session, message_id)
+        given = marked(prompt, mark)
+        args += ["--", given]
+        launched = {"token": mark, "typed_sha256": text_digest(given),
+                    "body_sha256": text_digest(prompt), "message_id": message_id}
     name = pathlib.Path(executable).name
     return Plan((executable, *args), session, resumed, journal,
                 Launcher(name, "executable", path=executable), offset, manifest, launched)

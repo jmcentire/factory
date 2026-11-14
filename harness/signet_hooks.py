@@ -403,7 +403,9 @@ def main(argv: list[str] | None = None) -> int:
 
 def resume_arguments(record: Any) -> str:
     if (not isinstance(record, dict) or record.get("schema_version") != "factory-lane-turn/1"
-            or record.get("agent") != "codex"):
+            # Both Codex lane agents run the `codex` client; the interactive one's record
+            # is read when its hosted session is restarted.
+            or record.get("agent") not in ("codex", "codex-interactive")):
         raise ValueError("invalid retained Codex turn")
     extra = record.get("extra", [])
     if extra == []:

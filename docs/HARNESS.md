@@ -112,8 +112,8 @@ started through the operator's launcher on a terminal the lane wrapper owns
   delivered only on the session's own prompt report. If the session does not report
   starting within 90s (it may be asking its folder-trust question) the command exits 75
   with the message still planned; if the program ends first it exits 70. A lane whose
-  program the registry does not report as resumable (Cursor, Muse, Antigravity,
-  interactive Codex) is refused with exit 70 and the message stays planned: the operator
+  program the registry does not report as resumable (Cursor, Muse, Antigravity) is
+  refused with exit 70 and the message stays planned: the operator
   continues it with the program's own resume, or starts a new session with
   `--replace-session`. A lane launched before the `native` entry was recorded is refused
   the same way. Shown with a stand-in program that calls no model, not with Claude Code.
@@ -448,12 +448,30 @@ through `lane_agent.py`. It is an author-lane adapter and is not accepted.
   works but reports nothing: it stays `starting` and its first message stays `submitted`.
   A per-run `-c projects."<folder>".trust_level="trusted"` did not suppress the folder
   question.
-- **Not observed.** A message queued while a turn is running or while a Stop hook is
-  deciding; any tool call, tool hook or Signet guard in the interactive session; a resumed
-  session; `tmux_lane.sh` end to end.
-- **Not resumable by the Factory.** `agents.py turn --agent codex-interactive --resume <id>`
-  builds `codex resume <id>`, but no lane command restarts an ended session, so wrap-up
-  and progress-review pauses are not offered.
+- **Codex's own resume and queue, observed (2026-11-14, four one-word turns, one
+  session).** `codex resume <options> <id>` keeps the session id and its hooks go on
+  reporting it. Given no message, the resumed session reported nothing, not even a start,
+  and first stopped on Codex's own "Update available" question. `codex queue` to that
+  silent session then produced its start report (`source: resume`), the message and its
+  stop. `codex resume <options> <id> -- <message>` produced start, message and stop at
+  once, with no update question. A message queued while a Stop hook was held for 15s was
+  reported as its own prompt, mark intact, in the second the hook returned.
+- **An ended session is restarted by a lane message.** `tmux_lane_message.sh` restarts it
+  in its pane with `codex resume`, the lane's own options, the session id last, and the
+  message after `--` as the launch argument, because a resumed session given nothing
+  reports nothing. The wrapper records that hand-over before the program exists, under
+  the message's own id, and a message is never handed over twice: if the restarted
+  program ends before reporting, that message is `unknown` and a message with other
+  content, or from another sender, is needed to restart the session. The registry
+  therefore reports `codex-interactive` as resumable by the Factory, and wrap-up and
+  progress-review pauses are offered for it. Run through `tmux_lane.sh` and
+  `tmux_lane_message.sh` with a stand-in program that calls no model: live message by
+  queue, ended, restarted with the message `observed`, a failed restart, no repeat, and a
+  restart by another sender's message. **Not run against Codex:** this adapter's restart,
+  and a watcher's pause or wrap-up of a Codex session.
+- **Not observed.** A message queued while the model is in the middle of a turn; any tool
+  call, tool hook or Signet guard in the interactive session; `tmux_lane.sh` end to end
+  with Codex itself.
 - **No `codex exec` behind it.** `tmux_lane_message.sh --native-session-file`, which handed
   an exited interactive session to `codex exec resume` after reading Codex's own session
   file, is removed and refused by name. A `codex-interactive` lane that an earlier Factory
@@ -477,9 +495,9 @@ still run `codex exec`; the hosted interactive lane agent is `codex-interactive`
 private configuration. Each launch records and prints `native_blocker`, asked by the lane
 agent's own name: it is empty only for `claude` and `claude-ollama`,
 and `python harness/agents.py describe --agent <lane agent>` prints it. For `cursor-agent`,
-`muse`, `agy` and `codex-interactive` it says what was run and what is still open, and
-the registry reports all four as not resumable by the Factory, so wrap-up and progress-review
-pauses, which continue a session, are not offered for them. The rest:
+`muse`, `agy` and `codex-interactive` it says what was run and what is still open. The
+registry reports `cursor-agent`, `muse` and `agy` as not resumable by the Factory, so wrap-up
+and progress-review pauses, which continue a session, are not offered for them. The rest:
 
 | Provider | Established, and from where | Not established |
 |---|---|---|

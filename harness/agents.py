@@ -395,11 +395,14 @@ class CodexInteractive(Harness):
     def turn(self, *, model: str, effort: str, cwd: Path, resume: str = "",
              last_message_file: str = "", max_turns: int = 400,
              extra: Sequence[str] = ()) -> Turn:
-        argv = ["codex", *(["resume", resume] if resume else []),
+        argv = ["codex", *(["resume"] if resume else []),
                 "--no-daemon", "--no-alt-screen", "-C", str(cwd)]
         argv += ["-m", model] if model else []
         argv += ["-c", f"model_reasoning_effort={json.dumps(effort)}"] if effort else []
         argv += list(extra)
+        # `codex resume [OPTIONS] [SESSION_ID] [PROMPT]`: the id after the options, which is
+        # the form that was run (2026-11-14) and the one `native_session.codex_plan` reads.
+        argv += [resume] if resume else []
         return Turn(tuple(argv), "terminal")
 
 
@@ -718,9 +721,10 @@ _BLOCKERS = {
              "queue` queues a message for an existing session, and hooks given by `-c` are "
              "skipped until the operator trusts them. The interactive program is now "
              "hosted as the lane agent codex-interactive, which reports its start, prompts "
-             "and stops and takes a later message through `codex queue`; this exec lane is "
-             "not converted, because that adapter is not accepted and cannot be restarted "
-             "by the Factory yet." + _TO_SHOW,
+             "and stops, takes a later message through `codex queue`, and is restarted by "
+             "a lane message with Codex's own resume; this exec lane is not converted, "
+             "because that adapter is not accepted: its restart has been run only against "
+             "a stand-in program, and no lane with a tool call has been run on it." + _TO_SHOW,
     # The lane agent `codex-interactive`: Codex's own interactive session, hosted. What is
     # open is stated, not hidden.
     "codex-interactive": "Codex interactive: hosted as its own interactive session from an "
@@ -733,13 +737,26 @@ _BLOCKERS = {
                          "skips a hook it has not been told to trust: without that trust "
                          "(given by the operator through Codex's own review, or for one "
                          "run by the caller's explicit permissive choice) the lane reports "
-                         "nothing and stays `starting`. Second, a message queued while a "
-                         "turn is running, or while a Stop hook is deciding, was not "
-                         "observed; it stays `submitted` until Codex reports it. Third, no "
-                         "lane command restarts an ended session, so wrap-up and review "
-                         "pauses are not offered. Fourth, no tool call was run, so nothing "
-                         "about a tool hook or a Signet guard in the interactive session "
-                         "was observed here.",
+                         "nothing and stays `starting`. Second, a message queued while "
+                         "the model is in the middle of a turn was not observed; it stays "
+                         "`submitted` until Codex reports it. (One queued while a Stop hook "
+                         "was deciding was reported as its own prompt when the hook "
+                         "returned: 2026-11-14, one observation.) Third, restarting an "
+                         "ended session is built and only partly shown. Observed of Codex "
+                         "itself (2026-11-14, four one-word turns): `codex resume "
+                         "<options> <id>` keeps the session id; given nothing it reports "
+                         "nothing and stopped on Codex's own update question; given a "
+                         "message after `--` it reported its start and that message at "
+                         "once. So a lane message to an ended session restarts it that "
+                         "way, the message recorded as handed over before the program "
+                         "exists and never handed over twice. That path was run through "
+                         "tmux_lane.sh and tmux_lane_message.sh with a stand-in program "
+                         "that calls no model; this adapter's restart has not been run "
+                         "against Codex. A restarted program that ends before reporting "
+                         "leaves that one message `unknown`, and another message is "
+                         "needed to restart the session. Fourth, no tool call was run, so "
+                         "nothing about a tool hook or a Signet guard in the interactive "
+                         "session was observed here.",
 }
 #: Lane agents that share a registry entry, and the blocker each really has. `codex-ollama`
 #: runs `codex exec` like `codex`. (`codex-interactive` has a registry entry of its own.)
@@ -780,10 +797,11 @@ HARNESSES: Mapping[str, Harness] = {
                    memory="beside-operator", native_blocker=_BLOCKERS["codex"]),
     # Not resumable by the Factory yet, for the reasons its blocker gives. Antigravity's own
     # resume is untouched: `turn(resume=<id>)` builds `--conversation <id>`.
-    # Not resumable by the Factory yet: no lane command restarts an ended session. Codex's own
-    # resume is untouched: `turn(resume=<id>)` builds `codex resume <id>`.
+    # Resumable by the Factory: a lane message to an ended session restarts it with Codex's
+    # own resume and that message as its launch argument (tmux_lane_message.sh). What of that
+    # was run against Codex itself, and what only against a stand-in, is in its blocker.
     "codex-interactive": CodexInteractive(
-        "codex-interactive", "codex", ("CODEX_HOME",), False, api_env=("OPENAI_API_KEY",),
+        "codex-interactive", "codex", ("CODEX_HOME",), True, api_env=("OPENAI_API_KEY",),
         memory="beside-operator", dialect="codex",
         native_blocker=_BLOCKERS["codex-interactive"],
         start_requires=(

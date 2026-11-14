@@ -661,8 +661,14 @@ RECEIVED = frozenset({"observed", "acknowledged"})  # "acknowledged": Agy's stre
 INTENT_SCHEMA = "factory-launch-intent/1"
 
 
-def intent_path(root: pathlib.Path, slot: str) -> pathlib.Path:
-    return state_path(root, slot).with_name(f"{slot}-launch-intent.json")
+def intent_path(root: pathlib.Path, slot: str, message_id: str = "") -> pathlib.Path:
+    """The slot's record of a message handed over at launch: the first message's, or, for a
+    restart that hands over a later message, that message's own."""
+
+    if message_id and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", message_id):
+        raise ValueError("launch message id is malformed")
+    name = f"{slot}-launch-intent-{message_id}.json" if message_id else f"{slot}-launch-intent.json"
+    return state_path(root, slot).with_name(name)
 
 
 def record_launch_intent(root: pathlib.Path, slot: str, launched: dict) -> None:
@@ -677,9 +683,14 @@ def record_launch_intent(root: pathlib.Path, slot: str, launched: dict) -> None:
     hand the message over again, so this start is refused. Nothing here ever clears the
     record: a different lane (another slot) is the way to start over, or a person removes
     the file knowing what the earlier session did.
+
+    A restart that hands a later message to a resumed session (``launched["message_id"]``)
+    is recorded the same way, under that message's own id: a message is handed over at
+    launch once, whichever message it is.
     """
 
-    path = intent_path(root, slot)
+    handed = str(launched.get("message_id") or "")
+    path = intent_path(root, slot, handed)
     if path.is_symlink():
         raise ValueError(f"launch record {path.name} is a symlink; refusing to start")
     try:
@@ -691,9 +702,10 @@ def record_launch_intent(root: pathlib.Path, slot: str, launched: dict) -> None:
             when = None
         stamp = (datetime.datetime.fromtimestamp(when, datetime.UTC).isoformat(timespec="seconds")
                  if isinstance(when, (int, float)) else "an unreadable time")
+        which = f"message {handed}" if handed else "its first message"
         raise ValueError(
-            f"an earlier start of this lane handed its first message to the program as its "
-            f"launch argument (recorded {stamp}), and a first message is never handed over "
+            f"an earlier start of this lane handed {which} to the program as its "
+            f"launch argument (recorded {stamp}), and a message is never handed over "
             f"twice. What that start's session did with it may not have been observed. "
             f"Continue that session if it reported one, start a replacement lane, or remove "
             f"{path} deliberately once you know the message was not taken") from None
@@ -701,6 +713,7 @@ def record_launch_intent(root: pathlib.Path, slot: str, launched: dict) -> None:
         json.dump({"schema": INTENT_SCHEMA, "slot": slot, "token": launched["token"],
                    "typed_sha256": launched["typed_sha256"], "at": time.time(),
                    "wrapper_pid": os.getpid(),
+                   **({"message_id": handed} if handed else {}),
                    "meaning": "written before the program was spawned; by itself it does not "
                               "say the program took the message, only that it may have"},
                   stream, sort_keys=True)
@@ -921,24 +934,46 @@ def run_terminal(
                     record,
                     state="unknown",
                     last_state=record.get("state"),
-                    detail="typed by an earlier wrapper process; what became of it was not "
-                    "observed and it is never typed again",
+                    detail=("given" if record.get("via") in ("launch-argument", "provider-queue")
+                            else "typed") + " by an earlier wrapper process; what became of "
+                    "it was not observed and it is never given again",
                 )
             deliveries[identifier] = record
         for key in carried:
             if isinstance(prior.get(key), (int, float)):
                 carried[key] = prior[key]
-    if launched is not None and "initial" not in deliveries:
+    # The message handed to the program as its launch argument: the first one, or, when an
+    # ended session is restarted, the message that restarts it.
+    handed = (launched.get("message_id") or "initial") if launched is not None else None
+    if handed is not None and (handed not in deliveries or (
+            # Accepted by an earlier wrapper and never given: this start gives it, at launch.
+            handed != "initial" and deliveries[handed].get("state") == "queued")):
         # Handed over at launch: from that moment its outcome is uncertain, exactly as for
         # a typed message from its first byte, and it is never given again.
-        deliveries["initial"] = {
-            "state": "submitted", "message_id": "initial", "token": launched["token"],
+        deliveries[handed] = {
+            "state": "submitted", "message_id": handed, "token": launched["token"],
             "typed_sha256": launched["typed_sha256"], "at": time.time(),
             "via": "launch-argument"}
+    if handed not in (None, "initial"):
+        # A restart: ``prompt`` is that later message, not the first one. If this
+        # conversation's first message has no record here, it is not known and is never
+        # given, least of all with another message's text.
+        deliveries.setdefault("initial", {
+            "state": "unknown", "message_id": "initial",
+            "detail": "this wrapper restarted a conversation whose first message's record "
+                      "it was not given; nothing is typed for it"})
     deliveries.setdefault("initial", {"state": "queued", "message_id": "initial"})
     waiting: dict[str, str] = {}  # accepted, not yet typed: message id -> text
     for identifier, record in deliveries.items():
         if record.get("state") != "queued":
+            continue
+        if identifier == "initial" and handed not in (None, "initial"):
+            # ``prompt`` is the message that restarts the session, not the first message,
+            # whose text this wrapper does not have.
+            deliveries[identifier] = dict(
+                record, state="unknown", last_state="queued",
+                detail="never given by the wrapper that accepted it; the wrapper that "
+                       "restarted this conversation does not have its text")
             continue
         try:
             waiting[identifier] = (
@@ -970,7 +1005,7 @@ def run_terminal(
         "reported_active_s": carried["reported_active_s"],
         "turn_started_at": time.time(),
         "stop_reported_at": None,
-        "current_message_id": "initial",
+        "current_message_id": handed or "initial",
         "current_input_id": (launched["typed_sha256"] if launched is not None
                              else native_session.text_digest(prompt)),
         "capabilities": [],
@@ -984,9 +1019,9 @@ def run_terminal(
     typing: list | None = None
     digests: dict[str, str] = {}  # message id -> digest of exactly what was typed
     bodies: dict[str, str] = {}  # message id -> digest of the message without its mark
-    if launched is not None and deliveries["initial"].get("via") == "launch-argument":
-        digests["initial"] = launched["typed_sha256"]
-        bodies["initial"] = launched["body_sha256"]
+    if handed is not None and deliveries[handed].get("via") == "launch-argument":
+        digests[handed] = launched["typed_sha256"]
+        bodies[handed] = launched["body_sha256"]
     ready_at = None
     events = native_session.Journal(journal, journal_offset)
 

@@ -139,6 +139,12 @@ public API is still pre-1.0.
   other. Programs the registry does not report as resumable are refused (exit 70) with the
   message left planned. A message a busy session could not take is now said to be not
   given, rather than "do not resend".
+- An ended `codex-interactive` session is restarted by a lane message with Codex's own
+  `codex resume`, the message given as the resume's launch argument, because a resumed
+  Codex session that is given nothing reports nothing (observed). The hand-over is recorded
+  before the program exists and a message is never handed over twice. The registry now
+  reports `codex-interactive` as resumable by the Factory. Shown with a stand-in program;
+  not yet run against Codex. `codex` and `codex-ollama` still run `codex exec`.
 - `tmux_lane_message.sh --native-session-file` is removed and refused by name. It handed an
   exited interactive Codex session to `codex exec resume`, a non-interactive run, after
   reading Codex's own session file. A `codex-interactive` lane that an earlier Factory

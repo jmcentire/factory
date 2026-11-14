@@ -229,8 +229,7 @@ if [ "$ACTION" != "freeze" ]; then
   # A lane whose session a lane message can resume: a Codex exec thread, or a registry harness's
   # session (harness/agents.py), which the lane wrapper records the moment the harness streams it.
   case "$AGENT" in
-    codex|codex-ollama) AGENT_RESUMABLE=1 ;;
-    codex-interactive) AGENT_RESUMABLE=0 ;;
+    codex|codex-ollama|codex-interactive) AGENT_RESUMABLE=1 ;;
     *) DESCRIBED=$("$FACTORY_PYTHON" "$D/agents.py" describe --agent "$AGENT" | tr '\0' ' ')
        case "$DESCRIBED" in resumable*) AGENT_RESUMABLE=1 ;; *) AGENT_RESUMABLE=0 ;; esac
        case "$DESCRIBED" in *metered-only*) METERED=true ;; esac

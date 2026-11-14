@@ -809,6 +809,7 @@ def run_lane(
     run_root: pathlib.Path | None = None,
     ready: Callable[[], None] | None = None,
     native_dir: pathlib.Path | None = None,
+    launch_message_id: str = "",
 ) -> int:
     """Run one lane process to its end and record that end.
 
@@ -847,6 +848,9 @@ def run_lane(
                        or run_root is None or session_file is None or prompt is None):
         raise ValueError("persistent mode requires Claude/Agy, run root, session file and prompt")
     native = persistent and session_agent in NATIVE_TERMINAL_AGENTS
+    if launch_message_id and not (native and chosen is not None and chosen.dialect == "codex"):
+        # Never dropped quietly: only Codex's resume is known to take a message this way.
+        raise ValueError("--launch-message-id is for a resumed interactive Codex session only")
     if prompt is not None and not persistent:
         argv.append(argv_prompt(prompt, pathlib.Path.cwd()))
     child_env = dict(os.environ)
@@ -918,10 +922,13 @@ def run_lane(
                 # Codex runs lane hooks from its workspace, takes its first message as its
                 # launch argument and later ones through its own queue command.
                 assert prompt is not None
+                # A restart of an ended session is `resume ... <id>` and carries the message
+                # that restarts it, under that message's own id (``--launch-message-id``).
                 native_plan = native_session.codex_plan(
                     argv[1:], executable=launcher.path, directory=native_dir or log.parent,
                     slot=slot, workspace=pathlib.Path.cwd(),
-                    prompt=argv_prompt(prompt, pathlib.Path.cwd()), python=sys.executable)
+                    prompt=argv_prompt(prompt, pathlib.Path.cwd()), python=sys.executable,
+                    message_id=launch_message_id)
             elif chosen is not None and chosen.dialect == "agy":
                 # Antigravity loads lane hooks and the lane's Kindex from a plugin in its
                 # workspace and takes its first message at launch.
@@ -943,7 +950,16 @@ def run_lane(
             # stops the start, so nothing typed once can be typed again.
             import persistent_lane
 
-            persistent_lane.retained(run_root, slot, native_plan.session_id)
+            prior = persistent_lane.retained(run_root, slot, native_plan.session_id)
+            restarting = (native_plan.launched or {}).get("message_id")
+            earlier = (prior.get("deliveries") or {}).get(restarting) if restarting else None
+            if earlier is not None and earlier.get("state") != "queued":
+                # Already given to this conversation by an earlier wrapper, whatever became
+                # of it. A message is given once; it does not restart a session a second time.
+                raise ValueError(
+                    f"message {restarting} was already given to this conversation (recorded "
+                    f"{earlier.get('state')}) and is never given twice; restart the session "
+                    "with a new message")
             if native_plan.launched is not None:
                 # The first message reaches the program the moment it is spawned. That it
                 # is about to be handed over is on disk first, and never twice for a slot.
@@ -1369,6 +1385,9 @@ def main(argv: list[str] | None = None) -> int:
     runner.add_argument("--log", type=pathlib.Path, required=True)
     runner.add_argument("--exits", type=pathlib.Path, required=True)
     runner.add_argument("--prompt-arg", type=pathlib.Path)
+    runner.add_argument("--launch-message-id", default="",
+                        help="for a resumed native session whose program takes the message "
+                             "that restarts it as its launch argument: that message's id")
     runner.add_argument("--terminal", action="store_true")
     runner.add_argument("--env-file", type=pathlib.Path)
     runner.add_argument("--session-agent", default="")
@@ -1453,6 +1472,7 @@ def main(argv: list[str] | None = None) -> int:
                 run_root=arguments.run_root,
                 ready=wake,
                 native_dir=arguments.native_dir,
+                launch_message_id=arguments.launch_message_id,
             )
         except (OSError, ValueError, UnicodeDecodeError, KeyError, TypeError) as error:
             if wake is not None and not wake.sent:
