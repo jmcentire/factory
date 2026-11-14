@@ -487,9 +487,10 @@ def test_interactive_codex_runs_the_tui_without_its_daemon(tmp_path: Path) -> No
     assert launched.returncode == 0, launched.stdout + launched.stderr
     [call] = lanes.windows("coder")
     assert "--terminal --prompt-arg" in call
-    assert "-- codex --no-daemon --no-alt-screen --strict-config --ask-for-approval never" in call
+    assert "-- codex --no-daemon --no-alt-screen --ask-for-approval never" in call
     assert "never exec" not in call and "codex_lane_session" not in call
-    assert "--disable apps" in call
+    assert "--disable apps" not in call
+    assert "--strict-config" not in call and "--ignore-user-config" not in call
 
 
 @pytest.mark.parametrize("explicit", [False, True])
@@ -526,7 +527,8 @@ def test_codex_exec_stays_the_default_author_lane(tmp_path: Path) -> None:
     [call] = lanes.windows("coder")
     assert "lane_agent.py run --slot coder" in call
     assert "codex_lane_session.py" in call and "codex --ask-for-approval never exec" in call
-    assert "--disable apps" in call
+    assert "--disable apps" not in call
+    assert "--strict-config" not in call and "--ignore-user-config" not in call
     row = read_chain(lanes.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
     assert row["agent"] == "codex" and row["metered"] is False
     assert row["caps"]["wall_cap_s"] is None
@@ -557,6 +559,9 @@ def test_claude_sign_in_is_checked_in_the_operators_profile(tmp_path: Path) -> N
     lanes = Lanes(tmp_path)
     profile = tmp_path / "wander-claude"
     _stub(lanes.stub, "claude", (
+        'if [ "${1:-}" = --help ]; then echo "--name --effort --session-id --resume --settings '
+        '--mcp-config --add-dir --model"; exit 0; fi\n'
+        'if [ "${1:-}" = --version ]; then echo "2.1.323 (Claude Code)"; exit 0; fi\n'
         'if [ "${1:-}" = auth ]; then\n'
         f'  if [ "${{CLAUDE_CONFIG_DIR:-}}" = "{profile}" ]; then\n'
         '    echo \'{"loggedIn": true, "authMethod": "claude.ai"}\'\n'

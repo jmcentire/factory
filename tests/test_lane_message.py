@@ -220,7 +220,8 @@ def test_a_busy_lane_never_gets_a_delivery_receipt_for_a_queued_message(tmp_path
     receipts = [row for row in journal if row["record_type"] == "message-delivered"]
     assert [row["transport"] for row in receipts] == ["resume"]
     assert receipts[0]["message_id"] == journal[1]["message_id"]
-    assert "--disable apps" in tmux_log.read_text()
+    assert "--disable apps" not in tmux_log.read_text()
+    assert "--ignore-user-config" not in tmux_log.read_text()
 
 
 def test_an_orchestrator_status_probe_to_an_idle_lane_exits_cleanly(tmp_path: Path) -> None:

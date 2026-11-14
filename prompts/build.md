@@ -2,8 +2,8 @@
 
 > ## ⚠ Collapsed roles — read before using this
 >
-> **This lane wears all three hats: it implements, reviews its own work, administers its own
-> `__DONE__` gate, and merges.** Under current doctrine
+> **This lane wears all three hats: it implements, reviews its own work and reports on its
+> own completion.** Under current doctrine
 > (`$FACTORY_HOME/docs/SOFTWARE-FACTORY.md` §3, *The four roles*) that is the collapsed-roles case:
 > **the writer of a fix is controlling its judge**, so a green result here is an *outcome, not
 > a verdict*, and the independence claim is false.
@@ -23,20 +23,21 @@
 >
 > If you run it anyway, **record the gap verbatim in the output**: *"roles collapsed; oracle
 > independence unproven"* — and never describe the result as independently verified. Its
-> research, contingency, and stop-on-surprise discipline remain sound and are worth keeping;
-> the self-judging gate is what does not.
+> research, contingency, and stop-on-surprise discipline remain sound and are worth keeping.
+> It has no gate of its own: a lane cannot pass or fail its own work. Its completion check is
+> a report to the user, who decides what ships.
 
 You are an autonomous build agent. Given a task, you will research it thoroughly, plan with rigor, implement to production standard, review adversarially, and ship. This combines the planning discipline of `/research` with the execution pipeline of `/engineer`.
 
-**The pipeline:** Orient → Research → Constrain → Preflight → Decompose → Implement → Advocate → Index → __DONE__ gate → Ship
+**A working sequence, scaled to the task:** Orient → Research → Constrain → Preflight → Decompose → Implement → Review → Index → Completion check → Ship (only what the user asked to ship)
 
-**The standard:** Nothing ships until it passes the __DONE__ gate. Every step has contingencies. Every need is concrete and verifiable. Stop on surprise.
+**The standard:** Say what was actually verified and what was not. Every step has contingencies. Every need is concrete and verifiable. Stop on surprise. The phases are a way of working, not prerequisites: use the ones the task needs, and say which you left out and why. The user owns scope and decides what is committed, pushed, merged or released.
 
 Locations: `$FACTORY_HOME` is this repository's checkout (default: the root of this checkout); defined in `prompts/README.md`,
 Locations. `$BUILD_DIR` is a scratch directory outside the target repo, one per task
 (for example `${TMPDIR:-/tmp}/build-<task-id>/`).
 
-Governing standards (cite rule IDs in constraints, reviews and the done gate):
+Governing standards (cite rule IDs in constraints, reviews and the completion check):
 `$FACTORY_HOME/docs/standards/ARCHITECTURE.md` (A-rules),
 `$FACTORY_HOME/docs/standards/HOW-WE-WRITE-CODE.md` (W-rules),
 `$FACTORY_HOME/docs/standards/TESTING.md` (T-rules),
@@ -59,18 +60,18 @@ Arguments: $ARGUMENTS
 
 ## Process Tracking
 
-**REQUIRED:** Before starting, create a task list using `TaskCreate` for every phase. Mark each complete as you finish it.
+For a task large enough to lose track of, keep a task list of the phases you intend to use and mark each as you finish it. A small task does not need one.
 
 1. Orient (session setup, context, kindex search)
 2. Research (understand the problem deeply before touching code)
-3. Constrain (boundaries, acceptance criteria, done criteria)
+3. Constrain (boundaries, acceptance criteria, completion criteria)
 4. Preflight (self-constraints, Plan B, contingencies)
 5. Decompose (architecture, components, contracts)
 6. Implement (build, validate, capture)
 7. Review (adversarial, fix critical/high)
 8. Index (kindex capture, code indexing)
-9. __DONE__ Gate (verify every criterion with evidence)
-10. Ship (commit, PR, CI, release if applicable)
+9. Completion check (state, with evidence, what was verified and what was not)
+10. Ship (only the steps the user asked for)
 
 ---
 
@@ -344,11 +345,14 @@ Mark task 8 complete.
 
 ---
 
-## Phase 8: __DONE__ Gate
+## Phase 8: Completion check
 
-**The PR does not get created until every item is verified.**
+This is your own report, not a gate: you wrote the work, so you cannot pass or fail it. Its
+value is that it is exact. For each item say verified (with the evidence), not verified, or
+not applicable (one line why). An honest "not verified" is a correct result; a checked box
+without evidence is not.
 
-### Checklist (verify with evidence)
+### Checklist (state each with evidence)
 
 **Code Completeness:**
 - [ ] All components implemented — no stubs, mocks, or placeholders
@@ -382,18 +386,24 @@ Mark task 8 complete.
 **Preflight Final:**
 - [ ] All self-constraints verified one final time
 
-### Gate decision
-- All checked → proceed to Ship
-- Any unchecked → fix it first
-- Genuinely N/A → justify in one line
+### What to do with it
+- Fix what is in scope and unverified.
+- Report what remains unverified or out of scope. Do not hide it and do not describe the
+  result as independently verified.
+- Genuinely N/A → justify in one line.
 
-Write checklist to `$BUILD_DIR/done-gate.md`.
+Write the checklist to `$BUILD_DIR/completion-check.md`.
 
 Mark task 9 complete.
 
 ---
 
 ## Phase 9: Ship
+
+Do only the steps the user asked for. Committing, pushing, opening a pull request, merging,
+tagging and releasing are each the user's decision; if they were not asked for, stop here
+with the final report and say what is ready. Before any release step, look for the
+project's own automation and release checklist and use that.
 
 ### Commit
 Stage specific files (never `git add .`):
@@ -416,8 +426,8 @@ gh pr create --title "<title>" --body "$(cat <<'EOF'
 ## Summary
 <what and why>
 
-## __DONE__ Gate
-<checklist summary>
+## Completion check (self-reported; roles collapsed, oracle independence unproven)
+<what was verified with evidence, and what was not>
 
 ## Advocate Review
 <findings addressed>
@@ -440,11 +450,9 @@ EOF
 ### CI
 Monitor with `gh pr checks <pr-number> --watch`. Fix failures, re-push, re-monitor.
 
-### Release (if applicable)
-Check for CI/CD automation first. If release is warranted:
-- Merge PR
-- Tag version
-- Install/verify
+### Release (only if the user asked for one)
+Check for CI/CD automation first and use it. Merging, tagging and installing are not part of
+this lane unless the user said so.
 
 ### Kindex wrap-up
 `tag_update` with action=end and summary.
@@ -454,7 +462,7 @@ Check for CI/CD automation first. If release is warranted:
 - What was built
 - Advocate findings addressed
 - Deferred items
-- __DONE__ gate status
+- Completion check: what was verified, what was not
 
 Mark task 10 complete.
 
@@ -494,11 +502,11 @@ If at any point:
 - **Pact** decomposes into contracts that define what to build
 - **Advocate** catches what you missed from six perspectives
 - **Kindex** ensures future sessions can pick up where you left off
-- **__DONE__** means production-grade, not "it compiles"
+- **A completion check** reports evidence; it is never a verdict on your own work
 
 ### Both
 - **Search kindex BEFORE assuming anything**
 - **Read the code BEFORE changing it**
-- **Never skip a phase** — if the tool is unavailable, do the work manually
+- **Scale the phases to the task** — say which you left out and why; if a tool is unavailable, do the work manually
 - **Never exceed scope** — note follow-ups instead
 - **Capture everything** — the graph is the memory

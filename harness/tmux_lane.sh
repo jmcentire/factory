@@ -10,7 +10,8 @@ USAGE='usage: tmux_lane.sh <run> <coder|tester> <launch|qualify|freeze|retire-pr
   launch|qualify  --repo <the lane'"'"'s own clone> --prompt <brief file>
                   [--agent codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent] [--model <model>]
                   [--effort <low|medium|high|xhigh|max>]
-                  [--persistent (Claude or Antigravity native stream input)]
+                  [--persistent (resident native session; always on for Claude, which runs
+                   as an interactive Claude Code session and never in print mode)]
                   [--metered] [--spend-cap-usd <usd> --usd-per-hour <usd>]
                   [--wall-cap-minutes <min, metered lanes and qualify only>]
                   [--round <tag> --replace-session <why the session cannot resume>]
@@ -124,13 +125,18 @@ exec 4< <("$FACTORY_PYTHON" "$(dirname "${BASH_SOURCE[0]}")/model_settings.py" "
 { IFS= read -r -d '' AGENT <&4 && IFS= read -r -d '' MODEL_ARG <&4 &&
   IFS= read -r -d '' EFFORT <&4; } || exit 64
 exec 4<&-
-case "$ACTION:$AGENT" in launch:claude|launch:agy) PERSISTENT=1; PERSISTENT_ARGS=(--persistent) ;; esac
+# Claude Code is a resident native terminal session for every action: it has no print mode here.
+case "$ACTION:$AGENT" in
+  launch:claude|qualify:claude|launch:claude-ollama|qualify:claude-ollama|launch:agy)
+    PERSISTENT=1; PERSISTENT_ARGS=(--persistent) ;;
+esac
 case "$AGENT" in codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent) ;;
   *) echo "tmux-lane: agent must be codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent" >&2; exit 64 ;;
 esac
 if [ "$PERSISTENT" = 1 ]; then
-  case "$ACTION:$AGENT" in launch:claude|launch:agy) ;;
-    *) echo "tmux-lane: --persistent requires launch with --agent claude or agy" >&2; exit 64 ;;
+  case "$ACTION:$AGENT" in
+    launch:claude|qualify:claude|launch:claude-ollama|qualify:claude-ollama|launch:agy) ;;
+    *) echo "tmux-lane: --persistent requires --agent claude, claude-ollama or (launch only) agy" >&2; exit 64 ;;
   esac
 fi
 case "$EFFORT" in ""|minimal|low|medium|high|xhigh|max) ;;
@@ -207,7 +213,8 @@ if [ "$ACTION" != "freeze" ]; then
   { IFS= read -r -d '' AGENT_EXECUTABLE <&4 && IFS= read -r -d '' PROMPT_VIA <&4 &&
     IFS= read -r -d '' AGENT_TTY <&4 && IFS= read -r -d '' AGENT_METERED <&4; } || exit 70
   exec 4<&-
-  [ "$PERSISTENT" != 1 ] || PROMPT_VIA=stdin
+  # Agy's resident input is a stream on stdin; Claude Code's is typed into its own terminal.
+  [ "$PERSISTENT" != 1 ] || [ "$PROMPT_VIA" = terminal ] || PROMPT_VIA=stdin
   METERED=false
   if [ "$AGENT_METERED" = metered ] || [ "$METERED_ARG" = 1 ]; then
     METERED=true
@@ -219,8 +226,23 @@ if [ "$ACTION" != "freeze" ]; then
     codex-interactive) AGENT_RESUMABLE=0 ;;
     *) DESCRIBED=$("$FACTORY_PYTHON" "$D/agents.py" describe --agent "$AGENT" | tr '\0' ' ')
        case "$DESCRIBED" in resumable*) AGENT_RESUMABLE=1 ;; *) AGENT_RESUMABLE=0 ;; esac
-       case "$DESCRIBED" in *metered-only*) METERED=true ;; esac ;;
+       case "$DESCRIBED" in *metered-only*) METERED=true ;; esac
+       if [ "$METERED" = true ]; then
+         # A harness with no metered launch says so here, before anything is prepared for it.
+         UNMETERED=$("$FACTORY_PYTHON" "$D/agents.py" credential-env --agent "$AGENT" --billing metered 2>&1 >/dev/null) || \
+           refuse 64 "${UNMETERED#agents: }" "launch the lane without --metered"
+       fi ;;
   esac
+  # Whether this lane's memory is its own, and what (if anything) keeps this provider from
+  # running as its own interactive program with the operator's configuration: both come from
+  # the registry, are recorded in the launch and are said aloud when the lane starts.
+  # Asked by the lane agent's own name: `codex` (exec) and `codex-interactive` share a
+  # registry entry but not a blocker.
+  exec 4< <("$FACTORY_PYTHON" "$D/agents.py" describe --agent "$AGENT")
+  { IFS= read -r -d '' _ <&4 && IFS= read -r -d '' _ <&4 &&
+    IFS= read -r -d '' MEMORY_ISOLATION <&4 && IFS= read -r -d '' NATIVE_BLOCKER <&4; } || exit 70
+  exec 4<&-
+  MEMORY_ISOLATION=${MEMORY_ISOLATION#memory:}
   if [ "$AGENT" = claude-ollama ] && [ -z "$MODEL" ]; then
     echo "tmux-lane: claude-ollama needs --model (an Ollama model, e.g. glm-5.3:cloud)" >&2; exit 64
   fi
@@ -520,10 +542,10 @@ PY
     TERM="$SAFE_TERM" SHELL="$SAFE_SHELL" LANG="$SAFE_LANG" CODEX_HOME="$SAFE_CODEX_HOME"
     ${CLAUDE_CONFIG_DIR:+CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR"})
 
-  # A codex lane runs with --ignore-user-config, which keeps the operator's MCP servers, sandbox
-  # and approval settings out of it, and would also drop their model for Codex's built-in one.
-  # So with no --model, the model keys of the operator's Codex config are carried over: the lane
-  # runs what their own `codex` would. A config that names no model leaves Codex's own default.
+  # A codex lane runs with the operator's own Codex configuration: nothing of it is ignored
+  # or disabled. With no --model, the model keys of that config are read here only so the
+  # launch record names what the lane ran and a resume runs the same; the lane runs what the
+  # operator's own `codex` would. A config that names no model leaves Codex's own default.
   if [ "$AGENT" = codex ] && [ -z "$MODEL" ]; then
     exec 4< <("$FACTORY_PYTHON" "$D/lane_agent.py" codex-model --codex-home "$SAFE_CODEX_HOME")
     IFS= read -r -d '' MODEL <&4 || refuse 70 "the model in $SAFE_CODEX_HOME/config.toml could not be read" \
@@ -847,7 +869,7 @@ PY
   fi
   DIALOGUE_BASELINE=$("$FACTORY_PYTHON" "$D/lane_admission.py" --root "$ROOT" --run "$RUN" \
     --role "$ROLE" --action baseline) || refuse 70 "cannot retain dialogue baseline"
-  PLANNED=$(LANE_DIALOGUE_BASELINE="$DIALOGUE_BASELINE" LANE_PERSISTENT="$PERSISTENT" LANE_AUTHOR_CUSTODY="$AUTHOR_CUSTODY" LANE_KERNEL_BOUNDARY="$BOUNDARY_RECORD" LANE_INDEPENDENCE="$INDEPENDENCE" "$FACTORY_PYTHON" - "$RUN" "$ROLE" "$AGENT" "$REPOSITORY" \
+  PLANNED=$(LANE_MEMORY_ISOLATION="$MEMORY_ISOLATION" LANE_NATIVE_BLOCKER="$NATIVE_BLOCKER" LANE_DIALOGUE_BASELINE="$DIALOGUE_BASELINE" LANE_PERSISTENT="$PERSISTENT" LANE_AUTHOR_CUSTODY="$AUTHOR_CUSTODY" LANE_KERNEL_BOUNDARY="$BOUNDARY_RECORD" LANE_INDEPENDENCE="$INDEPENDENCE" "$FACTORY_PYTHON" - "$RUN" "$ROLE" "$AGENT" "$REPOSITORY" \
     "$PROMPT" "$PROMPT_DIGEST" "$TASK_DIGEST" "$PROFILE_DIGEST" \
     "$REPOSITORY_RECEIPT" "$AGENT_VERSION" "$MODEL" "$KINDEX" \
     "$LANE" "$SLOT" "$INSTANCE" "$ROUND" "$ACTION" "$METERED" "$PROMPT_VIA" "$AGENT_TTY" \
@@ -869,7 +891,8 @@ import datetime, json, os, pathlib, sys
 ) = sys.argv[1:43]
 model_config = sys.argv[43:]
 # One argv element holds at most 131071 bytes (MAX_ARG_STRLEN - 1); stdin has no such ceiling.
-prompt_limit = 131071 if prompt_via == "argv" else None
+# A native terminal session is typed at most 16384 bytes (native_session.TYPED_LIMIT).
+prompt_limit = {"argv": 131071, "terminal": 16384}.get(prompt_via)
 over_limit = prompt_limit is not None and int(prompt_bytes) > prompt_limit
 print(json.dumps({
     "schema_version": "factory-tmux-lane-launch/1",
@@ -932,6 +955,12 @@ print(json.dumps({
     "tmux_target": f"{run}:{lane}",
     "watch_target": f"{run}:watch-{lane}",
     "kindex": json.loads(kindex),
+    # "lane-only": the lane sees its scoped Kindex and none of the operator's MCP servers.
+    # "beside-operator": the operator's settings and servers are intact and the lane's Kindex
+    # is added beside them, so memory is not a boundary between the lanes.
+    "memory_isolation": os.environ["LANE_MEMORY_ISOLATION"],
+    # Why this provider still runs in print mode with a private configuration, or null.
+    "native_blocker": os.environ["LANE_NATIVE_BLOCKER"] or None,
     "lane_env": json.loads(lane_env),
     "repository": repository,
     "prompt_path": prompt,
@@ -951,7 +980,7 @@ PY
   append_event "$PLANNED"
 
   LOCAL_ARGS=""
-  # Carry only the approved evaluator hook, never the operator's full hook/MCP configuration.
+  # Add the approved evaluator hook beside the operator's own hook and MCP configuration.
   # This settings selection does not waive Codex's hook trust review or attest runtime loading.
   if [ "${FACTORY_REQUIRE_SIGNET:-0}" = 1 ] || [ -n "${FACTORY_SIGNET_CONTRACT:-}" ] || \
       [ -n "${FACTORY_SIGNET_DIGEST:-}" ]; then
@@ -1006,6 +1035,11 @@ PY
   ENV_PREFIX+="${LANE_ENV_ASSIGN:+ $LANE_ENV_ASSIGN}"
   printf -v SOCKET_ENV " FACTORY_TMUX_SOCKET=%q" "$FACTORY_TMUX_SOCKET"
   ENV_PREFIX+="$SOCKET_ENV"
+  # The command the operator starts Claude Code with (harness/native_session.py).
+  if [ -n "${FACTORY_CLAUDE_LAUNCHER:-}" ]; then
+    printf -v LAUNCHER_ENV " FACTORY_CLAUDE_LAUNCHER=%q" "$FACTORY_CLAUDE_LAUNCHER"
+    ENV_PREFIX+="$LAUNCHER_ENV"
+  fi
   # Every lane process runs under lane_agent.py run: it tees output to the lane log and records
   # the process's end in the exits journal the watcher reads.
   printf -v WRAP '%q %q run --slot %q --log %q --exits %q' \
@@ -1013,6 +1047,12 @@ PY
   if [ "$PERSISTENT" = 1 ]; then
     printf -v PERSISTENT_WRAP ' --persistent --run-root %q' "$ROOT"
     WRAP+="$PERSISTENT_WRAP"
+    case "$AGENT" in claude|claude-ollama)
+      # The session's own hook commands write its lifecycle journal here, so it is the lane's
+      # private runtime, which a kernel boundary leaves writable, not the host control tree.
+      printf -v NATIVE_WRAP ' --native-dir %q' "$AGENT_HOME"
+      WRAP+="$NATIVE_WRAP" ;;
+    esac
   fi
   # Codex's trusted event/session driver stays outside the model boundary. Other clients
   # are direct children of lane_agent, which retains their process/exit evidence on the host.
@@ -1023,24 +1063,24 @@ PY
   [ "${FACTORY_LANE_SANDBOX:-on}" != off ] || CODEX_SANDBOX_ARG="--dangerously-bypass-approvals-and-sandbox"
   # Codex refuses --ask-for-approval together with the bypass flag (rc=2), so the TUI takes one or the other.
   CODEX_POLICY_ARG="${CODEX_SANDBOX_ARG:---ask-for-approval never}"
-  # Ignore-user-config does not disable Codex's built-in app connector surface. Authors must
-  # use their explicitly scoped local Kindex server, not a same-named operator connector.
+  # The operator's Codex configuration, rules, apps and MCP servers stay as they are. The lane
+  # adds its permission profile, shell policy and scoped Kindex as -c overrides beside them.
   case "$AGENT" in
     codex|codex-ollama)
-      printf -v LANE_CMD '%s %s -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q%s -- codex %s exec %s --ignore-user-config --ignore-rules --strict-config --disable apps --json -C %q -c %q -c %q -c %q -c %q -' \
+      printf -v LANE_CMD '%s %s -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q%s -- codex %s exec %s --json -C %q -c %q -c %q -c %q -c %q -' \
         "$ENV_PREFIX" "$WRAP" "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
         "$PROMPT" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$LANE" "$BOUNDARY_CODEX_ARGS" "$CODEX_POLICY_ARG" "$LOCAL_ARGS" "$REPOSITORY" \
         'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_OVERRIDE" ;;
     codex-interactive)
-      printf -v LANE_CMD '%s %s --terminal --prompt-arg %q -- codex --no-daemon --no-alt-screen --strict-config %s %s --disable apps -C %q -c %q -c %q -c %q -c %q' \
+      printf -v LANE_CMD '%s %s --terminal --prompt-arg %q -- codex --no-daemon --no-alt-screen %s %s -C %q -c %q -c %q -c %q -c %q' \
         "$ENV_PREFIX" "$WRAP" "$PROMPT" "$CODEX_POLICY_ARG" "$LOCAL_ARGS" "$REPOSITORY" \
         'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_OVERRIDE" ;;
     cursor-agent|claude|claude-ollama|agy|muse|prime-agent)
-      # A registry harness (harness/agents.py). Its private configuration (the lane's scoped
-      # Kindex and none of the operator's MCP servers, rules or hooks) and its variables are
-      # built under the slot's agent home; the variables reach the lane through an owner-only
-      # file the wrapper loads, never through this launch string. A plan lane admits no API key,
-      # and the wrapper stops it if the harness reports per-use billing anyway.
+      # A registry harness (harness/agents.py). Its lane configuration (the lane's scoped
+      # Kindex) and its variables are built under the slot's agent home; the variables reach the
+      # lane through an owner-only file the wrapper loads, never through this launch string. A
+      # plan lane admits no API key, and the wrapper stops it if the harness reports per-use
+      # billing anyway. Claude Code keeps every operator setting, hook, plugin and MCP server.
       BILLING=plan
       [ "$METERED" != true ] || BILLING=metered
       CREDENTIALS="$TMUX_ROOT/$SLOT-credentials.env"
@@ -1049,6 +1089,15 @@ PY
         --home "$AGENT_HOME" --model "$MODEL" --kindex-record "$KINDEX" \
         --env-file "$CREDENTIALS" > "$SETUP_OUT" || \
         refuse 70 "the agent registry could not prepare $AGENT's lane home"
+      case "$AGENT" in claude|claude-ollama)
+        # No permission mode is imposed on Claude Code. FACTORY_LANE_SANDBOX=off is the
+        # configuration that adds its native permissive flag, retained with the turn. A
+        # launcher that is a shell function carries its own flags, and the wrapper passes
+        # no permission argument over it.
+        if [ "${FACTORY_LANE_SANDBOX:-on}" = off ]; then
+          printf '%s\0' '--dangerously-skip-permissions' >> "$SETUP_OUT"
+        fi ;;
+      esac
       if [ "$AGENT" = cursor-agent ] && [ "${FACTORY_LANE_SANDBOX:-on}" = off ]; then
         # Retain the explicit choice with the turn, so later resumes do not fall back to
         # the user's unrelated Cursor configuration.
@@ -1159,6 +1208,17 @@ PY
   fi
   append_event "$(mark active)"
   echo "tmux-lane: launched $AGENT${MODEL:+ ($MODEL)} in $RUN:$LANE as $SLOT"
+  if [ "$MEMORY_ISOLATION" = beside-operator ]; then
+    echo "tmux-lane: memory: the operator's own settings and MCP servers are intact and the lane's Kindex is added beside them. Any memory server the operator configured is visible to this lane, so Coder/Tester independence rests on their separate inputs and clones, not on memory."
+  fi
+  [ -z "$NATIVE_BLOCKER" ] || echo "tmux-lane: not yet native: $NATIVE_BLOCKER"
+  case "$AGENT" in claude|claude-ollama)
+    if [ "${FACTORY_LANE_SANDBOX:-on}" = off ]; then
+      echo "tmux-lane: permissions: you selected FACTORY_LANE_SANDBOX=off, so Claude Code is given --dangerously-skip-permissions (not when your launcher is your own shell function, which decides for itself)."
+    else
+      echo "tmux-lane: permissions: yours. The Factory passes Claude Code no permission mode; your launcher and your Claude Code settings decide what this lane may do without asking. If they ask, the question waits in the lane's window."
+    fi ;;
+  esac
   [ -z "$WALL_CAP_S" ] || echo "tmux-lane: capped at $((WALL_CAP_S / 60)) min wall clock${SPEND_CAP:+ (\$$SPEND_CAP at \$$RATE/h)}"
   echo "tmux-lane: wakes land in $TMUX_ROOT/wake.jsonl and $ROOT/events.jsonl"
   echo "tmux-lane: the entire repository is now agent-owned; do not run host Git there"
@@ -1190,7 +1250,8 @@ PY
 ) || exit $?
 LAUNCH_MODE=${FREEZE_LAUNCH%%$'\n'*}
 REPOSITORY=${FREEZE_LAUNCH#*$'\n'}
-if [[ "$LAUNCH_MODE" = *:persistent ]]; then
+# A qualification probe is frozen once its process has ended (checked below), resident or not.
+if [ "$LAUNCH_MODE" = launch:persistent ]; then
   echo "tmux-lane: validate a resident author's committed SHA with endgame.sh; do not freeze its live working tree" >&2
   exit 64
 fi

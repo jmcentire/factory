@@ -15,11 +15,10 @@ that finished sat idle because nothing recorded that they had ended
              the exact scrubbed environment the lane gets. Exit 0 when signed in; exit 77 with
              the exact remediation command when it is not, or when the check itself waits for
              input (that is the login screen the lane would have sat on).
-  codex-model  the model selection a ``codex exec`` lane carries over from the operator's own
-             ``$CODEX_HOME/config.toml`` when no model was named: the model, then one
-             ``key=value`` override per field. Lanes run with ``--ignore-user-config`` so the
-             operator's MCP servers, sandbox and approval settings stay out of them, and without
-             this a lane would run Codex's built-in default instead of the operator's model.
+  codex-model  the model selection of the operator's own ``$CODEX_HOME/config.toml`` when no
+             model was named: the model, then one ``key=value`` override per field. A lane
+             loads that whole configuration itself; this is read so the launch record names
+             the model the lane ran and a resume runs the same.
   environment  the lane's dependency-cache variables and runtime directories, validated, as
              NUL-terminated fields for tmux_lane.sh and tmux_lane_message.sh: the Codex shell
              policy that sets them, the lane PATH, the launch record, the prompt notice and
@@ -43,6 +42,7 @@ import os
 import pathlib
 import re
 import shlex
+import shutil
 import signal
 import stat
 import subprocess
@@ -52,6 +52,7 @@ import tomllib
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 _HARNESS_ROOT = str(pathlib.Path(__file__).resolve().parent)
 if _HARNESS_ROOT not in sys.path:
@@ -64,6 +65,8 @@ EXIT_SCHEMA = "factory-lane-exit/1"
 REFUSED = 77
 # A plan lane whose harness announced API billing is stopped at once with this code.
 BILLING_REFUSED = 78
+#: How much of a native program's output before its session starts is kept in the lane log.
+STARTUP_LOG_LIMIT = 256 * 1024
 # A prompt passed as one argv element must fit the smallest per-argument limit we run on
 # (Linux MAX_ARG_STRLEN is 128 KiB); a larger prompt is refused, never truncated.
 MAX_ARGV_PROMPT = 128 * 1024 - 1
@@ -85,7 +88,9 @@ class PreflightRefused(RuntimeError):
 class Agent:
     name: str
     executable: str
-    prompt_via: str  # "stdin" (the Codex session wrapper feeds it) or "argv" (last argument)
+    # "stdin" (the Codex session wrapper feeds it), "argv" (last argument) or "terminal" (typed
+    # into the native session once the program reports it started).
+    prompt_via: str
     terminal: bool  # a TUI that needs the pane's terminal; its output is not teed
     auth: str  # which sign-in check applies
     # Bills per use whatever the operator says: a lane on it refuses to launch without a
@@ -102,17 +107,26 @@ AGENTS: Mapping[str, Agent] = {
     "codex-ollama": Agent("codex-ollama", "codex", "stdin", False, "ollama-model", metered=True),
     # Cursor's agent CLI in print mode: `agent -p [--model <m>] --force --trust --workspace <lane>`.
     "cursor-agent": Agent("cursor-agent", "agent", "argv", False, "cursor-status"),
+    # Claude Code: the operator's own interactive session on a terminal the lane wrapper owns
+    # (harness/native_session.py), signed in to their subscription. Never print mode, never an
+    # API key. ``terminal`` stays False: the wrapper, not the pane, holds the program's terminal.
+    "claude": Agent("claude", "claude", "terminal", False, "claude-plan"),
+    # Claude Code on a model the local Ollama server serves (GLM): the Ollama plan.
+    "claude-ollama": Agent("claude-ollama", "claude", "terminal", False, "ollama-server"),
     # Harnesses whose headless turn comes from the registry (harness/agents.py): any of them may
     # hold any seat. Each runs on the operator's signed-in plan unless launched --metered, and its
     # check proves that sign-in the way the harness itself reports it, never a credential value.
-    "claude": Agent("claude", "claude", "argv", False, "claude-plan"),
-    # Claude Code on a model the local Ollama server serves (GLM): the Ollama plan.
-    "claude-ollama": Agent("claude-ollama", "claude", "argv", False, "ollama-server"),
     "agy": Agent("agy", "agy", "argv", False, "agy-plan"),
     "muse": Agent("muse", "muse", "argv", False, "muse-plan"),
     # prime-agent bills OpenRouter per use by construction; it has no plan to sign in to.
     "prime-agent": Agent("prime-agent", "prime-agent", "argv", False, "registry", metered=True),
 }
+
+
+#: Lanes that stay resident and take later messages into the same native process.
+PERSISTENT_AGENTS = frozenset({"claude", "claude-ollama", "agy"})
+#: Of those, the ones hosted as a native terminal session rather than a stream.
+NATIVE_TERMINAL_AGENTS = frozenset({"claude", "claude-ollama"})
 
 
 def agent(name: str) -> Agent:
@@ -383,7 +397,11 @@ Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 
 def _status(argv: Sequence[str], *, timeout: float, runner: Runner, remediation: str,
-            label: str) -> subprocess.CompletedProcess[str]:
+            label: str, env: Mapping[str, str] | None = None,
+            ) -> subprocess.CompletedProcess[str]:
+    # ``env``: the environment the check is about. Without it the runner uses this process's
+    # own, which is the lane's when a launcher runs this under the lane's environment.
+    extra: dict[str, Any] = {} if env is None else {"env": dict(env)}
     try:
         return runner(
             list(argv),
@@ -392,6 +410,7 @@ def _status(argv: Sequence[str], *, timeout: float, runner: Runner, remediation:
             text=True,
             timeout=timeout,
             check=False,
+            **extra,
         )
     except subprocess.TimeoutExpired:
         raise PreflightRefused(
@@ -472,9 +491,39 @@ def preflight(
             )
         return "cursor-agent-status"
     if chosen.auth == "claude-plan":
+        import native_session
+
+        if billing == "metered":
+            raise PreflightRefused(
+                "Claude Code runs only on the operator's signed-in subscription; it has no "
+                "metered launch", "launch the lane without --metered")
+
+        launcher: native_session.Launcher | None
+        try:
+            launcher = native_session.resolve_launcher(environ, executable=chosen.executable)
+        except ValueError as error:
+            if environ.get(native_session.LAUNCHER_ENV, "").strip():
+                # A launcher the operator named and that cannot be run is theirs to fix.
+                raise PreflightRefused(
+                    str(error), f"set {native_session.LAUNCHER_ENV} to the command you start "
+                    "Claude Code with, or put claude on PATH") from None
+            # No launcher and no `claude` found in this environment. The check below still
+            # asks by name, in this same environment, so a program that really is missing
+            # is refused there with its fix, and never answered for from another PATH.
+            launcher = None
+        program = launcher.path if launcher is not None else chosen.executable
+        if launcher is not None and launcher.via == "login-shell":
+            # The operator's own function decides the account and configuration the session
+            # runs with. Asking a bare `claude` about its sign-in would answer for a different
+            # start than the one about to happen, and could refuse a launcher that works. The
+            # session shows its own sign-in state; until it reports started it is "starting".
+            return f"claude-launcher:{launcher.name}:sign-in-not-checked"
         remediation = "claude auth login   (once, as this user, with the Claude subscription)"
-        result = _status([chosen.executable, "auth", "status", "--json"], timeout=timeout,
-                         runner=runner, remediation=remediation, label="Claude Code")
+        # In the environment the lane will run in, not whatever this process inherited:
+        # another PATH or profile could answer for a different program or account.
+        result = _status([program, "auth", "status", "--json"], timeout=timeout,
+                         runner=runner, remediation=remediation, label="Claude Code",
+                         env=environ)
         try:
             document = json.loads(result.stdout)
         except json.JSONDecodeError:
@@ -542,8 +591,9 @@ def preflight(
 
 # -- codex model ---------------------------------------------------------------------------------
 
-# The keys of a Codex config.toml that choose the model, and nothing else. The rest of the
-# operator's config (MCP servers, sandbox, approvals, hooks) stays out of a lane.
+# The keys of a Codex config.toml that choose the model. They are read so a launch record names
+# the model a lane ran and a resume runs the same; the lane itself loads the operator's whole
+# configuration, with nothing ignored.
 CODEX_MODEL_KEYS = (
     "model",
     "model_provider",
@@ -754,8 +804,14 @@ def run_lane(
     persistent: bool = False,
     run_root: pathlib.Path | None = None,
     ready: Callable[[], None] | None = None,
+    native_dir: pathlib.Path | None = None,
 ) -> int:
     """Run one lane process to its end and record that end.
+
+    A persistent Claude lane is a native terminal session (``native_session.py``): the
+    operator's own interactive Claude Code on a terminal this wrapper owns, never print mode.
+    ``native_dir`` holds its additive hook settings and lifecycle journal; it must be writable
+    by the session's own hook commands (default: beside the log).
 
     ``env_file`` (owner-only ``NAME=value`` lines) adds a harness's named credentials to the
     child's environment, so they never appear on a command line or in the tmux launch string.
@@ -783,25 +839,87 @@ def run_lane(
         if chosen is None:
             raise ValueError("plan-only lane requires a registered session agent")
         chosen.admitted_env("plan")  # Reject harnesses without a subscription route.
-    if persistent and (session_agent not in {"claude", "agy"} or terminal
+    if persistent and (session_agent not in PERSISTENT_AGENTS or terminal
                        or run_root is None or session_file is None or prompt is None):
         raise ValueError("persistent mode requires Claude/Agy, run root, session file and prompt")
+    native = persistent and session_agent in NATIVE_TERMINAL_AGENTS
     if prompt is not None and not persistent:
         argv.append(argv_prompt(prompt, pathlib.Path.cwd()))
     child_env = dict(os.environ)
+    if session_agent == "claude":
+        # The operator's launcher on their subscription ("unset ANTHROPIC_API_KEY && cl"): no
+        # API-billing variable the launching shell happened to export reaches Claude Code,
+        # and the lane runs rather than refusing over a variable it can simply not pass on.
+        # Only the ambient environment is cleared here, before the lane's own file is read.
+        import native_session
+
+        child_env = native_session.child_environment(child_env)
     if env_file is not None:
         if env_file.stat().st_mode & 0o077:
             raise ValueError(f"credential file {env_file} is readable by others")
+        named = []
         for line in env_file.read_text(encoding="utf-8").splitlines():
             name, sep, value = line.partition("=")
             if sep and name.isidentifier():
                 child_env[name] = value
+                named.append(name)
+        if session_agent == "claude":
+            # A variable in the lane's own file was put there on purpose. One that would
+            # bill Claude Code to an API key or point it at another endpoint is not dropped
+            # quietly, which would hide the mistake and run a different lane than the one
+            # asked for: it stops the lane. Names only; a value is never logged.
+            explicit = sorted(name for name in native_session.CLAUDE_API_ENV
+                              if name in named and child_env.get(name))
+            if explicit:
+                raise ValueError(
+                    f"credential file {env_file.name} sets API-routing variables for Claude "
+                    "Code: " + ", ".join(explicit) + ". Claude Code runs only on the "
+                    "operator's subscription and is never given an API key or another "
+                    "endpoint")
     if plan_only and chosen is not None:
         forbidden = sorted(name for name in chosen.api_env if child_env.get(name))
         if forbidden:
             # Inspect the final environment, including env_file overrides. Never log values.
             raise ValueError("plan-only lane contains API-routing variables: "
                              + ", ".join(forbidden))
+    # Credentials are judged first, so a contaminated file is named for what it is whatever
+    # else is wrong with the request. Then: a Claude lane is a resident native session or
+    # nothing.
+    if session_agent in NATIVE_TERMINAL_AGENTS and not native:
+        raise ValueError(f"{session_agent} runs only as a resident native terminal session; "
+                         "print mode is never used")
+    native_plan = None
+    if native:
+        import native_session
+
+        assert run_root is not None
+        try:
+            if session_agent == "claude":
+                launcher = native_session.resolve_launcher(child_env, executable=argv[0])
+            else:
+                # claude-ollama talks only to the loopback server its own variables name.
+                found = shutil.which(argv[0], path=child_env.get("PATH"))
+                if not found:
+                    raise ValueError(f"{argv[0]} is not on PATH")
+                launcher = native_session.Launcher(argv[0], "executable", path=found)
+            native_plan = native_session.plan(
+                argv[1:], launcher=launcher, directory=native_dir or log.parent, slot=slot,
+                name=f"{run_root.name}-{slot}", python=sys.executable)
+            # Before the program exists: a retained delivery record that cannot be trusted
+            # stops the start, so nothing typed once can be typed again.
+            import persistent_lane
+
+            persistent_lane.retained(run_root, slot, native_plan.session_id)
+        except (OSError, ValueError) as error:
+            _append(log, f"lane-agent: could not start {argv[0]}: {error}\n".encode())
+            marker = f"__LANE_EXIT__ {slot} rc=127\n"
+            _append(log, marker.encode())
+            record_exit(exits, slot=slot, rc=127, stopped=False)
+            if ready is not None:
+                ready()
+            native_session.write_bounded(1, marker.encode())
+            return 127
+        argv = list(native_plan.argv)
     argv = validator_boundary.model_command(
         argv, boundary_record, boundary_role, pathlib.Path.cwd())
     stopped = False
@@ -902,17 +1020,70 @@ def run_lane(
         finally:
             os.set_blocking(descriptor, True)
 
+    startup_logged = 0
+
+    def startup_output(raw: bytes) -> None:
+        # What a native terminal program said first, when it ended without starting a
+        # session, into the lane's owner-only log, bounded. Raw program output: it is not
+        # assumed free of anything the program chose to show.
+        nonlocal startup_logged
+        room = STARTUP_LOG_LIMIT - startup_logged
+        if room > 0:
+            _append(log, raw[:room])
+            startup_logged += len(raw)
+
+    def native_rejection() -> None:
+        # The program ended before a session existed: keep what it said (the terminal relays
+        # it to this wrapper's output as well) and its own exit code.
+        assert hosted is not None
+        hosted.drain(startup_output)
+
     def _stop(signum: int, _frame: object) -> None:
         nonlocal stopped
         stopped = True
         if process is not None and process.poll() is None:
-            process.send_signal(signum)
+            if native_plan is not None:
+                # The session leads its own terminal session: reach the launcher's shell and
+                # the program it started alike.
+                try:
+                    os.killpg(process.pid, signum)
+                except ProcessLookupError:
+                    pass
+            else:
+                process.send_signal(signum)
 
     previous = {
         signum: signal.signal(signum, _stop) for signum in (signal.SIGTERM, signal.SIGHUP)
     }
+    hosted = None
     try:
-        if terminal:
+        if native_plan is not None:
+            import native_session
+            import persistent_lane
+
+            assert run_root is not None and session_file is not None and prompt is not None
+
+            def note(raw: bytes) -> None:
+                _append(log, raw)  # never the pane: that terminal is the program's
+                _watch(raw)
+
+            hosted = native_session.Terminal(argv, env=child_env)
+            process = hosted.process
+            register()
+            if process.poll() not in {None, 0}:
+                # The program rejected its start before a process receipt existed. Keep
+                # what it said and its own exit code; there is no session to drive.
+                native_rejection()
+                rc = process.wait()
+            else:
+                rc = persistent_lane.run_terminal(
+                    hosted, root=run_root, slot=slot, agent=session_agent,
+                    prompt=argv_prompt(prompt, pathlib.Path.cwd()), session_file=session_file,
+                    session_id=native_plan.session_id, journal=native_plan.journal,
+                    journal_offset=native_plan.journal_offset,
+                    launcher=native_plan.launcher.record(), note=note,
+                    diagnostic=startup_output)
+        elif terminal:
             process = subprocess.Popen(argv, env=child_env)
             register()
             rc = process.wait()
@@ -952,14 +1123,24 @@ def run_lane(
         if early_rejection:
             # Also covers exit between the poll above and initial stdin/identity checks.
             # Once a native session exists, binding/protocol failures remain lane failures.
-            assert process is not None and process.stdout is not None
-            rejection_output()
+            assert process is not None
+            if hosted is not None:
+                native_rejection()
+            else:
+                assert process.stdout is not None
+                rejection_output()
             assert native_exit is not None
             rc = native_exit
         elif process is not None and process.poll() is None:
             # Receipt failure must not leave an untracked model running. This is terminal
             # cleanup of our own Popen child, not the supervisor's resumable pause operation.
-            process.terminate()
+            if native_plan is not None:
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            else:
+                process.terminate()
             try:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
@@ -973,6 +1154,8 @@ def run_lane(
                           f"failed: {error}\n").encode())
             rc = 127
     finally:
+        if hosted is not None:
+            hosted.close()  # hand the pane's terminal back before anything is printed to it
         for signum, handler in previous.items():
             signal.signal(signum, handler)
     if refused_billing:
@@ -983,8 +1166,17 @@ def run_lane(
     _append(log, marker.encode())
     record_exit(exits, slot=slot, rc=rc, stopped=stopped)
     announce()
-    sys.stdout.write(marker)
-    sys.stdout.flush()
+    if native_plan is not None:
+        # The exit is already durable: in the lane log and in the exits journal, above. The
+        # copy on this wrapper's own output is for whoever is watching, and that output may
+        # be a pipe nobody reads, full of the program's relayed screen. A plain write there
+        # would wait for ever on a process that has nothing left to do, so it is bounded.
+        import native_session
+
+        native_session.write_bounded(1, marker.encode())
+    else:
+        sys.stdout.write(marker)
+        sys.stdout.flush()
     return rc
 
 
@@ -1123,6 +1315,9 @@ def main(argv: list[str] | None = None) -> int:
     runner.add_argument("--plan-only", action="store_true")
     runner.add_argument("--persistent", action="store_true")
     runner.add_argument("--run-root", type=pathlib.Path)
+    runner.add_argument("--native-dir", type=pathlib.Path,
+                        help="where a native terminal session's hook settings and lifecycle "
+                             "journal live (default: beside --log)")
     runner.add_argument("--boundary-record", type=json.loads, default=None)
     runner.add_argument("--boundary-role", choices=("coder", "tester"), default="")
     runner.add_argument("--ready-channel", default="",
@@ -1196,6 +1391,7 @@ def main(argv: list[str] | None = None) -> int:
                 persistent=arguments.persistent,
                 run_root=arguments.run_root,
                 ready=wake,
+                native_dir=arguments.native_dir,
             )
         except (OSError, ValueError, UnicodeDecodeError, KeyError, TypeError) as error:
             if wake is not None and not wake.sent:

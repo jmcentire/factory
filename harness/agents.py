@@ -2,13 +2,19 @@
 """agents — one registry of the agent harnesses a Factory seat can run, so any harness can hold
 any seat.
 
-The factory names no model and no vendor. What it needs from a harness is a shape: how to start a
-headless turn in a working directory with a named model and reasoning effort, how to hand it the
-prompt, how to resume the same session for the next turn, which variables it reads, how to give a
-lane its own scoped Kindex and nothing of the operator's, and how to read the final message,
-session id and cost back out of its output. Each harness is data here; launchers
-(``tmux_lane.sh``, ``factory.sh``, ``tmux_lane_message.sh``) ask the registry instead of carrying
-per-vendor branches, and a new harness is one entry.
+The factory names no model and no vendor. What it needs from a harness is a shape: how to start
+it in a working directory with a named model and reasoning effort, how to hand it the prompt, how
+to resume the same session, which variables it reads, how to give a lane its own scoped Kindex,
+and how to read the final message, session id and cost back out of its output.
+
+Claude Code is never a headless turn (founder, 2026-11-13). Its entry builds the arguments of
+the operator's own interactive session, which ``native_session.py`` hosts on a terminal: no
+print mode, no API key, and nothing that replaces or discards the operator's settings, hooks,
+plugins or MCP servers. The lane's scoped Kindex is added beside them.
+
+Each harness is data here; launchers (``tmux_lane.sh``, ``factory.sh``,
+``tmux_lane_message.sh``) ask the registry instead of carrying per-vendor branches, and a new
+harness is one entry.
 
 Each model runs in its own vendor's harness where one exists (it was trained there): Claude in
 Claude Code, GPT in Codex, Gemini in Antigravity, Muse in Muse Code, Grok in Cursor's agent CLI,
@@ -19,6 +25,13 @@ per-use API key, unless the operator launches it metered. ``api_env`` names the 
 would switch a harness to per-use billing; a ``plan`` lane's environment never admits them, its
 preflight proves a plan sign-in (``lane_agent.py``), and a harness that announces its billing
 source in its first streamed event is stopped by the lane wrapper if that source is an API key.
+
+Claude Code is subscription-only (founder, 2026-11-13): it has no metered launch at all
+(``Harness.metered`` is False). Asking for one is refused where the request is made, in
+``admitted_env``, so no lane home, seat file, credential list or turn record is ever prepared
+for it and none of its API variables is ever copied anywhere. Its ``api_env`` remains the list
+of names the wrapper unsets and refuses. ``claude-ollama`` is a different entry: it names its
+loopback server on purpose and is unaffected.
 
 Invariant: an entry builds argv only — no shell, no string interpolation — and never puts a
 credential value on a command line; credentials pass by variable *name* so a launcher that clears
@@ -56,7 +69,9 @@ class Turn:
     """
 
     argv: tuple[str, ...]
-    prompt_via: str  # "stdin" | "argv" (appended as the last argument)
+    # "stdin" | "argv" (appended as the last argument) | "terminal" (typed into the native
+    # interactive session by the wrapper that owns its terminal; never an argument)
+    prompt_via: str
     last_message_file: str = ""
 
 
@@ -85,6 +100,18 @@ class Harness:
     resumable: bool
     api_env: tuple[str, ...] = ()  # variables that switch the harness to per-use API billing
     plan: bool = True  # the harness has a signed-in plan path
+    metered: bool = True  # the Factory may launch it on per-use billing; False: plan only
+    # Whether a lane's memory is its own. "lane-only": the lane sees its scoped Kindex and no
+    # MCP server of the operator's (a private configuration; the operator's settings are not
+    # loaded). "beside-operator": the operator's settings and MCP servers are intact and the
+    # lane's Kindex is added beside them, so any memory server the operator configured is
+    # visible to the lane too. Independence of Coder and Tester then rests on their separate
+    # inputs and clones, not on memory, and a launch says so.
+    memory: str = "lane-only"
+    # Why this provider's lanes are not yet its own interactive program with the operator's
+    # configuration intact; "" when they are. Stated where the registry is read, so the
+    # limit is a recorded blocker and never a silent difference.
+    native_blocker: str = ""
 
     def turn(self, *, model: str, effort: str, cwd: Path, resume: str = "",
              last_message_file: str = "", max_turns: int = 400,
@@ -93,21 +120,20 @@ class Harness:
 
     def persistent_turn(self, *, model: str, effort: str, cwd: Path, resume: str = "",
                         extra: Sequence[str] = ()) -> Turn:
-        """Keep one native process alive for successive structured stdin messages.
+        """Keep one native process alive for successive messages.
 
-        Reuse the ordinary invocation so model defaults, resume, permissions and private
-        lane configuration remain identical. Other harnesses need their own qualified
-        stream-input protocol before they can opt into this transport.
+        Claude Code's is its interactive session, unchanged (``prompt_via`` is ``terminal``).
+        Agy's is structured stdin. Other harnesses need their own qualified transport before
+        they can opt in.
         """
 
-        if self.name not in ("claude", "agy"):
-            raise ValueError(f"{self.name} does not support persistent stream input")
+        if self.name not in ("claude", "claude-ollama", "agy"):
+            raise ValueError(f"{self.name} does not support persistent native input")
         built = self.turn(model=model, effort=effort, cwd=cwd, resume=resume, extra=extra)
-        if self.name == "claude":
-            argv = (*built.argv, "--input-format", "stream-json", "--replay-user-messages")
-        else:
-            # agy's --print requires a value even when input arrives through the stream.
-            argv = (*built.argv[:-1], "--input-format", "stream-json", "--print", "")
+        if built.prompt_via == "terminal":
+            return built
+        # agy's --print requires a value even when input arrives through the stream.
+        argv = (*built.argv[:-1], "--input-format", "stream-json", "--print", "")
         return Turn(argv, "stdin")
 
     def outcome(self, stdout: str, last_message: str = "") -> Outcome:
@@ -134,6 +160,10 @@ class Harness:
             raise ValueError(f"billing must be one of {BILLINGS}, not {billing!r}")
         if billing == "plan" and not self.plan:
             raise ValueError(f"{self.name} has no signed-in plan path; launch it metered")
+        if billing == "metered" and not self.metered:
+            raise ValueError(
+                f"{self.name} runs only on the operator's signed-in subscription: it has no "
+                "metered launch and is never given an API key")
         return self.credential_env + (self.api_env if billing == "metered" else ())
 
     def lane_setup(self, home: Path, *, model: str, server: Mapping[str, object] | None,
@@ -153,13 +183,10 @@ class Harness:
 def persistent_input(agent_name: str, text: str, message_id: str) -> dict[str, object]:
     """Encode literal user text; callers serialize each frame as one JSON line.
 
-    Claude replays the supplied UUID as its acknowledgement. Agy does not acknowledge
-    an input ID, so its caller must allow only one in-flight message at a time.
+    Agy does not acknowledge an input ID, so its caller must allow only one in-flight
+    message at a time. Claude Code has no stream frame: its input is typed into its terminal.
     """
 
-    if agent_name == "claude":
-        return {"type": "user", "message": {"role": "user", "content": text},
-                "uuid": message_id}
     if agent_name == "agy":
         return {"event": "user", "message": {"content": text}}
     raise ValueError(f"{agent_name} does not support persistent stream input")
@@ -242,13 +269,21 @@ class ClaudeCode(Harness):
     def turn(self, *, model: str, effort: str, cwd: Path, resume: str = "",
              last_message_file: str = "", max_turns: int = 400,
              extra: Sequence[str] = ()) -> Turn:
-        argv = ["claude", "-p", "--output-format", "stream-json", "--verbose",
-                "--permission-mode", "bypassPermissions", "--max-turns", str(max_turns)]
+        # The interactive program and nothing that changes what it is: the operator's
+        # assigned model and effort when they named one, and the conversation to continue.
+        # No permission argument. What a session may do without asking is the operator's
+        # choice, made where they make it natively: their launcher (``cl`` passes its own
+        # permissive flags) and their Claude Code settings. The registry imposes neither
+        # ``bypassPermissions`` nor any other mode on top of that. An operator who selects
+        # the permissive mode explicitly (FACTORY_LANE_SANDBOX=off) gets Claude Code's own
+        # flag for it from the launcher of the lane or seat, not from here. ``max_turns``
+        # bounds print mode only and has no meaning here.
+        argv = ["claude"]
         argv += ["--model", model] if model else []
         argv += ["--effort", effort] if effort else []
         argv += ["--resume", resume] if resume else []
         argv += list(extra)
-        return Turn(tuple(argv), "argv")
+        return Turn(tuple(argv), "terminal")
 
     def outcome(self, stdout: str, last_message: str = "") -> Outcome:
         doc = _last_json(stdout)
@@ -278,27 +313,17 @@ class ClaudeCode(Harness):
 
     def lane_setup(self, home: Path, *, model: str, server: Mapping[str, object] | None,
                    operator_home: Path, environ: Mapping[str, str]) -> LaneSetup:
-        # Claude Code keeps its plan sign-in in the keychain under a name derived from its config
-        # directory, so the directory stays the operator's. User settings, hooks, plugins and the
-        # operator's CLAUDE.md stay out (--setting-sources), and so does every MCP server but the
-        # lane's (--strict-mcp-config).
+        # The operator's configuration directory, settings, hooks, plugins, CLAUDE.md and MCP
+        # servers all stay exactly as they are. The lane's scoped Kindex is added beside them.
         config = _write(home / "mcp.json", json.dumps({"mcpServers": _mcp_servers(server)}))
-        return LaneSetup(argv=("--mcp-config", str(config), "--strict-mcp-config",
-                               "--setting-sources", "project,local"))
+        return LaneSetup(argv=("--mcp-config", str(config)))
 
 
 class ClaudeOllama(ClaudeCode):
     """Claude Code on a model the local Ollama server serves (GLM and other open models), the way
-    ``ollama launch claude`` runs it. ``--bare`` keeps the operator's keychain, hooks, plugins and
-    CLAUDE.md out, and makes the harness take its key from the environment, which here is a fixed
-    placeholder valid only against the loopback Ollama server. Billing is the Ollama plan."""
-
-    def turn(self, *, model: str, effort: str, cwd: Path, resume: str = "",
-             last_message_file: str = "", max_turns: int = 400,
-             extra: Sequence[str] = ()) -> Turn:
-        built = super().turn(model=model, effort=effort, cwd=cwd, resume=resume,
-                             max_turns=max_turns, extra=extra)
-        return Turn(built.argv[:2] + ("--bare",) + built.argv[2:], built.prompt_via)
+    ``ollama launch claude`` runs it: the same interactive program, pointed at the loopback
+    server by ``ANTHROPIC_BASE_URL`` with Ollama's fixed bearer word. No Anthropic API key is
+    set or read, and nothing can leave the machine through it. Billing is the Ollama plan."""
 
     def billing_in(self, line: str) -> str:
         return ""  # always the loopback Ollama server: lane_setup fixes the base URL
@@ -306,15 +331,16 @@ class ClaudeOllama(ClaudeCode):
     def lane_setup(self, home: Path, *, model: str, server: Mapping[str, object] | None,
                    operator_home: Path, environ: Mapping[str, str]) -> LaneSetup:
         config = _write(home / "mcp.json", json.dumps({"mcpServers": _mcp_servers(server)}))
-        return LaneSetup(env=self.seat_env(model),
-                         argv=("--mcp-config", str(config), "--strict-mcp-config"))
+        return LaneSetup(env=self.seat_env(model), argv=("--mcp-config", str(config)))
 
     def seat_env(self, model: str) -> Mapping[str, str]:
         if not model:
             raise ValueError("claude-ollama needs a model (an Ollama model, e.g. glm-5.3:cloud)")
         return {
                 "ANTHROPIC_BASE_URL": OLLAMA_BASE_URL,
-                "ANTHROPIC_API_KEY": "ollama",
+                # Ollama's bearer word for its loopback server. Never the API key variable:
+                # that one is not set for Claude Code under any launch.
+                "ANTHROPIC_AUTH_TOKEN": "ollama",
                 # Claude Code's own background calls name a Claude tier; route each to the model.
                 "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
                 "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
@@ -585,19 +611,97 @@ class CursorAgent(Harness):
         return LaneSetup(env={"HOME": str(private), "CURSOR_CONFIG_DIR": str(config)})
 
 
+# What stands between each remaining provider and the Claude arrangement (its own
+# interactive program, the operator's configuration intact, the lane Kindex added beside it,
+# and receipt reported by the program itself). "Established" below means read from the named
+# source on 2026-11-13; none of it has been run in a lane. Until a blocker is cleared, that
+# provider's lanes keep the print-mode start and private configuration below: converting
+# without these would cost the lane its Kindex and any way to send it a message, which is
+# worse than the defect.
+_TO_SHOW = (
+    " To clear: one live interactive session showing a start report, a report carrying a "
+    "typed prompt, a stop report, and the lane Kindex loading from the mechanism named.")
+_BLOCKERS = {
+    "agy": "Antigravity. Established (its own `agy changelog`): hooks.json events "
+           "SessionStart, PreInvocation (input carries lastUserInput), Stop (input carries "
+           "continuation_active); hook input carries hookEventName and cwd; follow-up "
+           "messages are queued until the turn ends by default; plugins may bundle MCP "
+           "servers and a workspace may list plugins in .agents/plugins.json. Not "
+           "established: that a project .agents/hooks.json and a workspace plugin load "
+           "without an edit to the operator's configuration or a trust prompt." + _TO_SHOW,
+    "cursor-agent": "Cursor. Established (cursor.com/docs/agent/hooks, cursor.com/docs/cli/"
+                    "mcp): project <root>/.cursor/hooks.json runs beside user hooks; events "
+                    "sessionStart (session_id), beforeSubmitPrompt, stop (status, "
+                    "loop_count), sessionEnd; the CLI uses the editor's project MCP "
+                    "configuration. Not established: that beforeSubmitPrompt carries the "
+                    "prompt text, and that these hooks fire in the interactive CLI. A target "
+                    "that already has .cursor/ files is unhandled." + _TO_SHOW,
+    "muse": "Muse. Established (probed live on muse 1.4.6, 2026-10-12, and its own help): "
+            "events sessionStart, userPromptSubmit, stop, notification, sessionEnd; hooks by "
+            "per-run `-c hooks=<json>` or project .muse/hooks.json (off until the workspace "
+            "is trusted); project MCP file <repository>/.mcp.json. Not established: whether "
+            "`-c hooks=` adds to or replaces the operator's hooks (clashing keys refuse the "
+            "run), and the userPromptSubmit payload. Its sign-in has no status command, so "
+            "the preflight still reads whether a sign-in is stored." + _TO_SHOW,
+    "prime-agent": "Prime: not installed on the machine this was assessed on; its interactive "
+                   "program and any report or MCP interface are unassessed.",
+    # Lane agents `codex` and `codex-ollama`. Their configuration defect is fixed (nothing of
+    # the operator's Codex configuration is ignored); their mode is not.
+    "codex": "Codex: this lane runs `codex exec`, the non-interactive mode, not the "
+             "interactive program. Established (`codex --help` here, and this harness's own "
+             "use): the interactive program is `codex [PROMPT]` (lane agent "
+             "codex-interactive), `codex resume [SESSION_ID]` continues a session, `codex "
+             "queue` queues a message for an existing session, and hooks given by `-c` are "
+             "skipped until the operator trusts them. Not established: any report from the "
+             "interactive program that it started, received a prompt or stopped, and that "
+             "`codex queue` reaches a live interactive session, so a codex-interactive lane "
+             "can be neither messaged nor resumed by the Factory and cannot replace exec "
+             "for unattended work." + _TO_SHOW,
+}
+#: Lane agents that share a registry entry, and the blocker each really has. A lane agent's
+#: truth is its own: `codex-interactive` is already the interactive program with the
+#: operator's configuration (no blocker in this sense, though the Factory cannot message or
+#: resume it), while `codex` and `codex-ollama` still run `codex exec`.
+#: Each maps to (registry entry, blocker or None for the entry's own, resumable by the Factory).
+LANE_VARIANTS: Mapping[str, tuple[str, str | None, bool]] = {
+    "codex-interactive": ("codex", "", False),
+    "codex-ollama": ("codex", None, True),
+}
+
+
+def describe_lane(name: str) -> tuple[Harness, str, bool]:
+    """The registry entry a lane agent runs on, that lane agent's own native blocker, and
+    whether the Factory can continue its session."""
+
+    if name not in LANE_VARIANTS:
+        chosen = harness(name)
+        return chosen, chosen.native_blocker, chosen.resumable
+    base, blocker, resumable = LANE_VARIANTS[name]
+    chosen = harness(base)
+    return chosen, chosen.native_blocker if blocker is None else blocker, resumable
+
 HARNESSES: Mapping[str, Harness] = {
     "claude": ClaudeCode("claude", "claude", ("CLAUDE_CONFIG_DIR", "IS_SANDBOX"), True,
                          api_env=("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
                                   "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
-                                  "CLAUDE_CODE_USE_VERTEX")),
-    "claude-ollama": ClaudeOllama("claude-ollama", "claude", ("IS_SANDBOX",), True),
-    "codex": Codex("codex", "codex", ("CODEX_HOME",), True, api_env=("OPENAI_API_KEY",)),
+                                  "CLAUDE_CODE_USE_VERTEX"), memory="beside-operator",
+                         metered=False),
+    "claude-ollama": ClaudeOllama("claude-ollama", "claude", ("IS_SANDBOX",), True,
+                                  memory="beside-operator"),
+    # Codex lanes are launched by tmux_lane.sh, with the operator's whole configuration, and
+    # still by `codex exec` (see LANE_VARIANTS for the interactive lane agent).
+    "codex": Codex("codex", "codex", ("CODEX_HOME",), True, api_env=("OPENAI_API_KEY",),
+                   memory="beside-operator", native_blocker=_BLOCKERS["codex"]),
     "agy": Antigravity("agy", "agy", (), True,
-                       api_env=("GEMINI_API_KEY", "GOOGLE_API_KEY", "AGY_LLM_GATEWAY_API_KEY")),
-    "muse": Muse("muse", "muse", (), True, api_env=("META_API_KEY",)),
+                       api_env=("GEMINI_API_KEY", "GOOGLE_API_KEY", "AGY_LLM_GATEWAY_API_KEY"),
+                       native_blocker=_BLOCKERS["agy"]),
+    "muse": Muse("muse", "muse", (), True, api_env=("META_API_KEY",),
+                 native_blocker=_BLOCKERS["muse"]),
     "prime-agent": PrimeAgent("prime-agent", "prime-agent", (), True,
-                              api_env=("OPENROUTER_API_KEY",), plan=False),
-    "cursor-agent": CursorAgent("cursor-agent", "agent", (), True, api_env=("CURSOR_API_KEY",)),
+                              api_env=("OPENROUTER_API_KEY",), plan=False,
+                              native_blocker=_BLOCKERS["prime-agent"]),
+    "cursor-agent": CursorAgent("cursor-agent", "agent", (), True, api_env=("CURSOR_API_KEY",),
+                                native_blocker=_BLOCKERS["cursor-agent"]),
 }
 
 
@@ -689,7 +793,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list", help="the registered harnesses")
-    describe = sub.add_parser("describe", help="resumable and plan, NUL-separated")
+    describe = sub.add_parser("describe", help="resumable, plan, memory isolation and the "
+                              "native blocker (or empty), NUL-separated")
     describe.add_argument("--agent", required=True)
     turn = sub.add_parser("turn", help="print one headless turn's argv, NUL-separated")
     turn.add_argument("--agent", required=True)
@@ -734,6 +839,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "turn-record":
             chosen = harness(args.agent)
+            chosen.admitted_env(args.billing)  # a billing this harness has no launch for
             if args.persistent:
                 chosen.persistent_turn(model=args.model, effort=args.effort, cwd=Path.cwd())
             extra = [part for part in args.setup.read_text(encoding="utf-8").split("\0") if part]
@@ -758,9 +864,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "list":
             print("\n".join(HARNESSES))
         elif args.command == "describe":
-            chosen = harness(args.agent)
-            sys.stdout.write(f"{'resumable' if chosen.resumable else 'single'}\0"
-                             f"{'plan' if chosen.plan else 'metered-only'}\0")
+            # A lane agent name (codex-interactive, codex-ollama) answers for itself.
+            chosen, blocker, resumable = describe_lane(args.agent)
+            sys.stdout.write(f"{'resumable' if resumable else 'single'}\0"
+                             f"{'plan' if chosen.plan else 'metered-only'}\0"
+                             f"memory:{chosen.memory}\0{blocker}\0")
         elif args.command == "credential-env":
             print("\n".join(harness(args.agent).admitted_env(args.billing)))
         elif args.command == "lane-setup":

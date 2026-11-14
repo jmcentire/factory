@@ -173,6 +173,10 @@ def _response_text(value: object) -> str | None:
         return None
     if value.get("type") == "result":
         text = value.get("result") if not value.get("is_error") else ""
+    elif value.get("type") == "native-stop-report":
+        # What a native terminal session said last when it reported a stop
+        # (persistent_lane.run_terminal). A source for a claim, like every branch here.
+        text = value.get("last_assistant_message")
     elif value.get("type") == "item.completed":
         item = value.get("item")
         if not isinstance(item, dict) or item.get("type") != "agent_message":
@@ -931,7 +935,8 @@ class LaneWatch:
 
         # A persistent lane that reported done and is idle at its input boundary is waiting for
         # the Validator, not stalled. Once a new turn starts (phase working) it is watched again.
-        waiting = bool(state.get("completion_claim")) and native.get("phase") == "idle"
+        waiting = bool(state.get("completion_claim")) and native.get("phase") in (
+            "idle", "stop-reported", "waiting-for-input")
         if not pending and not waiting and idle > window:
             return self._request_end(
                 launch, state, "stalled", "refusal-lane-stall",

@@ -225,7 +225,9 @@ def cycle(root: Path, transport) -> dict:
         result = transport(root, recipient, seat["pending"])
         seat["delivery"] = result.get("state", "blocked")
         seat["detail"] = result.get("detail", "")
-        if seat["delivery"] == "acknowledged":
+        # The native client reported receiving the batch: a stream acknowledgement, or a
+        # terminal session's own prompt report ("observed"). Receipt, never acceptance.
+        if seat["delivery"] in ("acknowledged", "observed"):
             batch = planned(root, recipient, seat["pending"])
             seat["consumed"] += batch["event_ids"]
             seat["pending"] = None

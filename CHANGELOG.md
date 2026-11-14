@@ -3,6 +3,75 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.30] - 2026-11-13
+
+### Changed
+
+- Claude Code seats and lanes are the operator's own interactive session, hosted on a terminal
+  the lane wrapper owns and started through the operator's launcher (`FACTORY_CLAUDE_LAUNCHER`;
+  default `cl` when the login shell defines it, otherwise `claude`). Print mode (`-p`),
+  `--output-format`, `--input-format`, `--max-turns`, `--setting-sources`,
+  `--strict-mcp-config` and `--bare` are no longer used and are refused if supplied.
+- No permission mode is imposed on Claude Code through any launcher. Author lanes no longer
+  get `--permission-mode bypassPermissions` and coordinators no longer get
+  `--permission-mode default`; the operator's launcher and Claude Code settings decide. `cl`
+  stays as permissive as it is. `FACTORY_LANE_SANDBOX=off` is the explicit selection of the
+  permissive mode and passes `--dangerously-skip-permissions` (lanes as well as
+  coordinators), except over a launcher that is the operator's own shell function. An
+  operator who starts lanes with the bare `claude` executable and has not selected or
+  configured a permissive mode will see Claude Code ask in the lane's window.
+- An API-billing variable that is only in the launching shell's environment is unset for
+  Claude Code, and the lane runs. A Claude lane whose credential file contains such a
+  variable is refused: it stops, naming the variable and never its value, before Claude Code
+  starts.
+- Claude Code has no metered launch anywhere. The registry refuses `metered` billing for it
+  where the request is made, so lane setup, seat setup, the credential list and the turn
+  record no longer prepare one or copy any of its API variables; `tmux_lane.sh --metered`
+  and the metered sign-in preflight refuse it with that reason. `claude-ollama` and every
+  other provider are unchanged.
+- API-billing variables are unset for Claude Code and none is set. `claude-ollama` reaches the
+  loopback Ollama server with `ANTHROPIC_AUTH_TOKEN`, not `ANTHROPIC_API_KEY`.
+- Messages to a Claude session are typed into its terminal, each with a typed mark. States
+  say only what was observed: `queued`, `submitted`, `observed` (the session's prompt hook
+  reported it) or `unknown`. `observed` is receipt, recorded in the dialogue journal as
+  transport `terminal-observed`; nothing is called acceptance or completion, because the
+  operator's hooks may reject a prompt or continue past a stop and a stop report cannot be
+  tied to a message. A message is typed when the session has started, none of the wrapper's
+  earlier messages is unaccounted for and the session is not asking the operator a question;
+  Claude Code queues input it receives while working. Delivery records survive a wrapper
+  restart; an unreadable or foreign record stops the start; nothing typed once is typed
+  again. `run_record.py status` lists coordinator seats.
+- `/build` describes a working sequence scaled to the task and a completion check that is a
+  report, not a gate; committing, pushing, merging and releasing are done only when asked.
+- Codex lanes load the operator's whole Codex configuration: `--ignore-user-config`,
+  `--ignore-rules`, `--strict-config` and `--disable apps` are gone from launch and resume,
+  and the code that disabled every MCP server but the lane's Kindex is deleted.
+- A Claude sign-in is not prejudged with a bare `claude auth status` when the launcher is the
+  operator's shell function; the session shows its own sign-in state.
+- Qualification probes with Claude are resident sessions too and are frozen after they end.
+
+### Removed
+
+- `run_record.trust_claude_folders`, which rewrote Claude Code's `.claude.json`. A folder
+  Claude Code has not seen asks its own question in the seat's window.
+- Claude's stream-json input and interrupt frames. Interrupting a Claude turn is refused
+  rather than reported without a native receipt.
+
+### Rollout
+
+- Lanes launched in print mode by an earlier version are not resumed in print mode; start a
+  native session with `--replace-session`. The operator's MCP servers are now visible to
+  Claude author lanes beside the lane's own Kindex; input separation rests on the role
+  projections, separate clones and the lane protocol.
+- A lane launch records and prints `memory_isolation`. For Claude and Codex lanes it is
+  `beside-operator`: the operator's MCP servers are visible beside the lane's Kindex, so
+  independence rests on the separate inputs and clones, not on memory.
+- Not converted, each with its `native_blocker` recorded at launch (`docs/HARNESS.md`,
+  "Providers not yet native"): Antigravity, Cursor, Muse and Prime still start in print mode
+  with a private configuration, because no qualified interface lets their interactive
+  programs report readiness or receipt, and converting now would cost the lane its Kindex
+  and any way to message it. Codex still runs `codex exec`.
+
 ## [0.8.29] - 2026-11-09
 
 ### Changed

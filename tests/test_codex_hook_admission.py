@@ -9,7 +9,6 @@ import pytest
 from harness.codex_hook_admission import (
     HookAdmissionError,
     check_command,
-    preserve_trust_with_scoped_mcp,
     required_override,
     validate_listing,
 )
@@ -78,56 +77,12 @@ def test_disabled_and_ambiguous_overrides_cannot_evade_admission():
     assert required_override(["codex", "exec", "--config=" + OVERRIDE]) == OVERRIDE
 
 
-@pytest.mark.parametrize("resume", [False, True])
-def test_normal_hook_trust_does_not_restore_ambient_mcp(tmp_path, monkeypatch, resume):
-    import subprocess
-
-    servers = [{"name": name, "enabled": True,
-                "transport": {"type": kind, "env": {"PRIVATE": "hidden"}}}
-               for name, kind in (("kindex", "stdio"), ("computer-use", "stdio"),
-                                  ("kindex-2", "streamable_http"))]
-    observed = []
-
-    def metadata(command, **kwargs):
-        observed.append(command)
-        return subprocess.CompletedProcess(command, 0, json.dumps(servers), "")
-
-    monkeypatch.setattr(subprocess, "run", metadata)
-    scoped = 'mcp_servers.kindex={command="/approved/local-kindex"}'
-    command = ["codex", "exec", *(["resume"] if resume else []), "--ignore-user-config",
-               "--ignore-rules", "--strict-config", "--disable", "apps",
-               "-c", OVERRIDE, "-c", scoped, *(["existing-session"] if resume else []), "-"]
-    fixed = preserve_trust_with_scoped_mcp(command, tmp_path)
-    assert observed == [["codex", "mcp", "list", "--json"]]
-    assert fixed == [
-        "codex", "-c", 'mcp_servers.computer-use={enabled=false,command="/usr/bin/false"}',
-        "-c", 'mcp_servers.kindex-2={enabled=false,url="http://127.0.0.1:1"}',
-        *(arg for arg in command[1:] if arg != "--ignore-user-config")]
-    assert "hidden" not in str(fixed)
-
-
-@pytest.mark.parametrize("servers", [{}, [{"name": "bad.name"}], [{"name": "x"}, {"name": "x"}],
-                                      [{"enabled": True}]])
-def test_ambiguous_ambient_mcp_prevents_config_correction(tmp_path, monkeypatch, servers):
-    import subprocess
-
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k:
-                        subprocess.CompletedProcess(a[0], 0, json.dumps(servers), ""))
-    with pytest.raises(HookAdmissionError, match="cannot verify scoped MCP"):
-        preserve_trust_with_scoped_mcp(["codex", "exec", "--ignore-user-config", "-c", OVERRIDE,
-                                      "-c", 'mcp_servers={kindex={command="local"}}', "-"],
-                                     tmp_path)
-
-
-def test_no_required_hook_keeps_existing_command(tmp_path):
-    command = ["codex", "exec", "--ignore-user-config", "-"]
-    assert preserve_trust_with_scoped_mcp(command, tmp_path) == command
-
-
 def fake_codex(tmp_path, monkeypatch, *, trust="untrusted", behavior="normal"):
     executable = tmp_path / "codex"
     executable.write_text(f"#!{sys.executable}\n" + '''
 import json, os, pathlib, sys, time
+with open(os.environ["INVOCATIONS"], "a") as log:
+    log.write(json.dumps(sys.argv[1:])+"\\n")
 if "app-server" not in sys.argv:
     pathlib.Path(os.environ["MODEL_MARKER"]).write_text("model started")
     sys.stdin.read()
@@ -155,6 +110,7 @@ for line in sys.stdin:
     response["result"]["data"][0]["hooks"][0]["trustStatus"] = trust
     for key, value in {"MODEL_MARKER": str(tmp_path / "model-started"),
                        "METHODS": str(tmp_path / "methods"),
+                       "INVOCATIONS": str(tmp_path / "invocations"),
                        "HOOK_BEHAVIOR": behavior, "HOOK_LISTING": json.dumps(response)}.items():
         monkeypatch.setenv(key, value)
     monkeypatch.chdir(tmp_path)
@@ -190,3 +146,38 @@ def test_unavailable_or_incomplete_protocol_is_bounded(tmp_path, monkeypatch, be
     with pytest.raises(HookAdmissionError):
         check_command(command, tmp_path, timeout=.2)
     assert not (tmp_path / "model-started").exists()
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_hook_admission_preserves_operator_configuration(tmp_path, monkeypatch, resume):
+    """Admission may verify its guard, never disable unrelated operator MCPs."""
+    command = fake_codex(tmp_path, monkeypatch, trust="trusted")
+    home = tmp_path / "home"
+    config_dir = home / ".codex"
+    config_dir.mkdir(parents=True)
+    settings = config_dir / "config.toml"
+    original = ('[mcp_servers.operator_tool]\ncommand="operator-command"\n'
+                '[features]\nhooks=true\n')
+    settings.write_text(original)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CODEX_HOME", str(config_dir))
+    overlay = 'mcp_servers.kindex={command="/approved/local-kindex"}'
+    command += ["-c", overlay]
+    if resume:
+        command += ["resume", "previous-thread"]
+    prompt = tmp_path / "prompt"
+    prompt.write_text("synthetic")
+    assert run_turn(prompt, tmp_path / "thread", tmp_path / "events", command) == 0
+    invocations = [json.loads(line) for line in
+                   (tmp_path / "invocations").read_text().splitlines()]
+    model = [argv for argv in invocations if "app-server" not in argv]
+    assert len(model) == 1
+    assert overlay in model[0]
+    assert not any(flag in argv for argv in invocations for flag in
+                   ("--ignore-user-config", "--ignore-rules", "--strict-config"))
+    assert not any("enabled=false" in arg or "/usr/bin/false" in arg
+                   for argv in invocations for arg in argv)
+    assert settings.read_text() == original
+    assert list(config_dir.iterdir()) == [settings]
+    assert (tmp_path / "methods").read_text().splitlines() == [
+        "initialize", "initialized", "hooks/list"]

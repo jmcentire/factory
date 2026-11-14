@@ -22,37 +22,12 @@ agent, folder, thread = sys.argv[1:]
 folder = pathlib.Path(folder)
 def emit(row):
     print(json.dumps(row), flush=True)
-if agent == "agy":
-    emit({"event": "init", "conversation_id": thread})
-else:
-    emit({"type": "system", "subtype": "init", "session_id": thread,
-          "capabilities": ["interrupt_receipt_v1", "interrupt_cancel_queued_v1"]})
+emit({"event": "init", "conversation_id": thread})
 active = None
 step_index = -1
 for line in sys.stdin:
     step_index += 1
     row = json.loads(line)
-    if row.get("type") == "control_request":
-        with (folder / "controls.jsonl").open("a") as stream:
-            stream.write(json.dumps(row) + "\n")
-        if active["message"]["content"] == "ACTIVE_COMPLETED_FIRST":
-            emit({"type": "result", "session_id": thread, "is_error": False,
-                  "user_message_uuid": active["uuid"]})
-            while not (folder / "allow-control-ack").exists():
-                time.sleep(.01)
-        emit({"type": "control_response", "response": {"subtype": "success",
-              "request_id": row["request_id"], "response": {"still_queued": [], "cancelled": []}}})
-        if active["message"]["content"] == "ACTIVE_COMPLETED_FIRST":
-            continue
-        if active["message"]["content"] == "ACTIVE_ACK_ONLY":
-            while not (folder / "allow-result").exists():
-                time.sleep(.01)
-        emit({"type": "result", "session_id": thread, "is_error": True,
-              "terminal_reason": "quota" if active["message"]["content"] == "ACTIVE_ERROR"
-                                 else "aborted_tools",
-              "user_message_uuid": "stale" if active["message"]["content"] == "ACTIVE_STALE"
-                                   else active["uuid"]})
-        continue
     text = row["message"]["content"]
     with (folder / "received.jsonl").open("a") as stream:
         stream.write(json.dumps({"text": text, "pid": __import__("os").getpid()}) + "\n")
@@ -73,24 +48,12 @@ for line in sys.stdin:
             time.sleep(.01)
     session = "99999999-9999-4999-8999-999999999999" if text == "BAD_SESSION" else thread
     if text != "NO_ACK":
-        if agent == "claude":
-            emit({"type": "user", "uuid": row["uuid"], "session_id": session,
-                  "message": {"role": "user", "content": text}, "parent_tool_use_id": None})
-        else:
-            emit({"event": "step_update", "step_update": {"conversation_id": session,
-                  "step_type": "user_input", "state": "DONE", "step_index": step_index}})
+        emit({"event": "step_update", "step_update": {"conversation_id": session,
+              "step_type": "user_input", "state": "DONE", "step_index": step_index}})
     if text.startswith("ACTIVE"):
         active = row
         continue
-    if agent == "claude":
-        emit({"type": "result", "session_id": session, "result": "received literally"})
-    else:
-        emit({"event": "result", "result": {"conversation_id": session, "status": "SUCCESS"}})
-    if text == "BACKGROUND_WAKE":
-        with (folder / "release-background").open() as release:
-            release.read()
-        emit({"type": "result", "session_id": session, "result": "background task finished"})
-        emit({"type": "background-boundary"})
+    emit({"event": "result", "result": {"conversation_id": session, "status": "SUCCESS"}})
 """
 
 
@@ -218,7 +181,7 @@ def native_lane(tmp_path, monkeypatch):
         lane.child.stderr.close()
 
 
-@pytest.mark.parametrize("agent", ["claude", "agy"])
+@pytest.mark.parametrize("agent", ["agy"])
 def test_same_native_process_and_context_accept_literal_multiple_turns(
     native_lane,
     agent,
@@ -243,7 +206,7 @@ def test_same_native_process_and_context_accept_literal_multiple_turns(
     assert lane.child.poll() is None
 
 
-@pytest.mark.parametrize("agent", ["claude", "agy"])
+@pytest.mark.parametrize("agent", ["agy"])
 def test_enqueue_and_success_result_never_fabricate_native_ack(native_lane, agent):
     lane = native_lane(agent)
     identifier = lane.plan("WAIT_ACK")
@@ -262,28 +225,8 @@ def test_enqueue_and_success_result_never_fabricate_native_ack(native_lane, agen
     assert [r["text"] for r in lane.received()].count("NO_ACK") == 1
 
 
-def test_self_started_turn_while_idle_keeps_lane_usable(native_lane):
-    # Claude Code starts its own turn when a background task finishes; no message was delivered.
-    lane = native_lane("claude")
-    os.mkfifo(lane.folder / "release-background")
-    wake = lane.plan("BACKGROUND_WAKE")
-    lane.send(wake)
-    eventually(lambda: lane.raw()["turns"] == 2)
-    with (lane.folder / "release-background").open("w") as release:
-        release.write("finish")
-    # The later stream frame proves the driver finished processing the result, including
-    # its state update. A delay or a producer-side signal cannot establish that boundary.
-    eventually(lambda: any(json.loads(raw).get("type") == "background-boundary"
-                           for raw in lane.output))
-    assert not lane.errors and lane.raw()["phase"] == "idle" and lane.raw()["turns"] == 2
-    after = lane.plan("after the wake")
-    lane.send(after)
-    eventually(lambda: lane.raw()["turns"] == 3)
-    assert lane.send(after)["state"] == "acknowledged"
-
-
 def test_wrong_session_and_stale_receipt_refuse_native_input(native_lane):
-    lane = native_lane("claude")
+    lane = native_lane("agy")
     identifier = lane.plan("must remain undelivered")
     with pytest.raises(ValueError, match="conversation mismatch"):
         lane.send(identifier, "wrong-session")
@@ -312,7 +255,7 @@ def test_stopped_owned_native_child_is_busy_and_never_receives_input(native_lane
 
 
 def test_exited_native_child_cannot_receive_another_message(native_lane):
-    lane = native_lane("claude")
+    lane = native_lane("agy")
     identifier = lane.plan("EXIT")
     assert lane.send(identifier)["state"] == "pending"
     lane.child.wait(timeout=5)
@@ -322,7 +265,7 @@ def test_exited_native_child_cannot_receive_another_message(native_lane):
     assert [row["text"] for row in lane.received()] == ["initial", "EXIT"]
 
 
-@pytest.mark.parametrize("agent", ["claude", "agy"])
+@pytest.mark.parametrize("agent", ["agy"])
 def test_native_session_change_is_failure_without_delivery_ack(native_lane, agent):
     lane = native_lane(agent)
     identifier = lane.plan("BAD_SESSION")
@@ -333,7 +276,7 @@ def test_native_session_change_is_failure_without_delivery_ack(native_lane, agen
     assert lane.raw()["deliveries"][identifier]["state"] == "pending"
 
 
-@pytest.mark.parametrize("agent", ["claude", "agy"])
+@pytest.mark.parametrize("agent", ["agy"])
 def test_deferred_on_track_review_waits_for_boundary_and_reopens_before_input(native_lane, agent):
     lane = native_lane(agent)
     launch = {"status": "active", "run_id": "fixture-run"}
@@ -361,7 +304,7 @@ def test_deferred_on_track_review_waits_for_boundary_and_reopens_before_input(na
 
 @pytest.mark.parametrize("verdict", ["REDIRECT", "REPAIR"])
 def test_working_redirect_or_repair_cannot_be_deferred(native_lane, verdict):
-    lane = native_lane("claude")
+    lane = native_lane("agy")
     assert lane.send(lane.plan("WAIT_ACK"))["state"] == "pending"
     text = f"FACTORY_REVIEW verdict={verdict}\nChange course."
     review = lane.plan(text, "progress-review")
@@ -399,61 +342,9 @@ def test_replayed_agy_user_input_step_cannot_acknowledge_later_message(native_la
     assert len(lane.delivered(identifier)) == 1
 
 
-def test_wrapper_domain_error_cleans_owned_child_and_records_real_exit(
-    native_lane,
-    tmp_path,
-):
-    # A native protocol error must terminate only the owned child and retain its exit.
-    root = tmp_path / "wrapper-error"
-    folder = root / "tmux-lanes"
-    folder.mkdir(parents=True)
-    prompt = root / "prompt"
-    prompt.write_text("BAD_SESSION")
-    harness = Path(__file__).resolve().parents[1] / "harness"
-    wrapper = """
-import pathlib, sys
-sys.path.insert(0, sys.argv[1])
-import lane_agent
-root = pathlib.Path(sys.argv[2])
-folder = root / "tmux-lanes"
-raise SystemExit(lane_agent.run_lane(
-    [sys.executable, "-u", "-c", sys.argv[3], "claude", str(folder), sys.argv[4]],
-    slot="coder", log=folder / "coder-log", exits=folder / "coder-exits.jsonl",
-    prompt=root / "prompt", session_agent="claude", session_file=folder / "coder-thread-id",
-    persistent=True, run_root=root))
-"""
-    watchdog = importlib.import_module("lane_watchdog")
-    try:
-        result = subprocess.run(
-            [sys.executable, "-c", wrapper, str(harness), str(root), FAKE_NATIVE, THREAD],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        assert result.returncode == 127, result.stdout + result.stderr
-        [exit_row] = [
-            json.loads(line) for line in (folder / "coder-exits.jsonl").read_text().splitlines()
-        ]
-        assert exit_row["rc"] == 127 and exit_row["slot"] == "coder"
-        receipt = json.loads((folder / "coder-process.json").read_text())
-        actual = (watchdog.process_snapshot() or {}).get(receipt["worker"]["pid"], {})
-        assert actual.get("started") != receipt["worker"]["started"]
-        assert "__LANE_EXIT__ coder rc=127" in result.stdout
-    finally:
-        # If the regression fails, only clean up this exact disposable child's recorded identity.
-        receipt_path = folder / "coder-process.json"
-        if receipt_path.exists():
-            worker = json.loads(receipt_path.read_text())["worker"]
-            actual = (watchdog.process_snapshot() or {}).get(worker["pid"], {})
-            if actual.get("started") == worker["started"]:
-                os.kill(worker["pid"], signal.SIGTERM)
-
-
 def test_foreign_live_worker_receipt_cannot_bind_a_different_native_child(native_lane):
-    first = native_lane("claude")
-    second = native_lane(
-        "claude", name="other-run", receipt_changes=first.receipt, expect_error=True
-    )
+    first = native_lane("agy")
+    second = native_lane("agy", name="other-run", receipt_changes=first.receipt, expect_error=True)
     assert second.errors and not second.output
     assert first.child.poll() is None and first.raw()["phase"] == "idle"
     assert first.received() == [{"text": "initial", "pid": first.child.pid}]
@@ -473,7 +364,7 @@ def test_driver_refuses_mismatched_process_receipt_before_initial_input(native_l
     assert not (lane.folder / "received.jsonl").exists()
 
 
-@pytest.mark.parametrize("agent", ["claude", "agy"])
+@pytest.mark.parametrize("agent", ["agy"])
 def test_client_disconnect_before_request_keeps_native_session_usable(native_lane, agent):
     lane = native_lane(agent)
     before = lane.driver.inspect(lane.root, "coder")
@@ -491,7 +382,7 @@ def test_client_disconnect_before_request_keeps_native_session_usable(native_lan
     assert len(lane.delivered(identifier)) == 1
 
 
-@pytest.mark.parametrize("agent", ["claude", "agy"])
+@pytest.mark.parametrize("agent", ["agy"])
 def test_disconnect_after_request_preserves_pending_input_without_replay(native_lane, agent):
     lane = native_lane(agent)
     before = lane.driver.inspect(lane.root, "coder")
@@ -525,40 +416,6 @@ def test_disconnect_after_request_preserves_pending_input_without_replay(native_
     assert lane.child.poll() is None and lane.thread.is_alive() and not lane.errors
 
 
-def test_interrupt_needs_native_terminal_result_not_review_paperwork(native_lane):
-    lane = native_lane("claude")
-    identifier = lane.plan("ACTIVE_ACK_ONLY")
-    lane.send(identifier)
-    eventually(lambda: lane.raw()["deliveries"][identifier]["state"] == "acknowledged")
-    before = lane.raw()
-    receipt = lane.driver.interrupt(lane.root, "coder")
-    assert receipt["state"] == "requested"
-    eventually(lambda: lane.raw()["interruption"]["state"] == "acknowledged")
-    next_input = lane.plan("Continue with retained context")
-    assert lane.send(next_input)["state"] == "busy"
-    assert lane.driver.interrupt(lane.root, "coder")["request_id"] == receipt["request_id"]
-    assert len((lane.folder / "controls.jsonl").read_text().splitlines()) == 1
-    (lane.folder / "allow-result").touch()
-    eventually(lambda: lane.raw()["phase"] == "idle")
-    assert lane.raw()["last_turn_outcome"] == "interrupted"
-    assert lane.raw()["worker"] == before["worker"] and lane.raw()["session_id"] == THREAD
-    assert lane.send(next_input)["state"] == "pending"
-    eventually(lambda: lane.raw()["turns"] == 3)
-    assert lane.child.poll() is None and not lane.errors
-
-
-def test_acknowledged_interrupt_does_not_launder_native_error(native_lane):
-    lane = native_lane("claude")
-    identifier = lane.plan("ACTIVE_ERROR")
-    lane.send(identifier)
-    eventually(lambda: lane.raw()["deliveries"][identifier]["state"] == "acknowledged")
-    lane.driver.interrupt(lane.root, "coder")
-    eventually(lambda: lane.raw()["phase"] == "failed")
-    assert lane.raw()["last_turn_outcome"] == "failed"
-    assert lane.raw()["interruption"]["state"] == "failed"
-    assert lane.child.poll() is None and not lane.errors
-
-
 def test_unsupported_and_stale_interrupt_never_reaches_native_stdin(native_lane):
     lane = native_lane("agy")
     identifier = lane.plan("ACTIVE")
@@ -572,85 +429,10 @@ def test_unsupported_and_stale_interrupt_never_reaches_native_stdin(native_lane)
     assert lane.raw()["phase"] == "working" and not lane.errors
 
 
-def test_natural_completion_race_waits_for_interrupt_receipt(native_lane):
-    lane = native_lane("claude")
-    message = lane.plan("ACTIVE_COMPLETED_FIRST")
-    lane.send(message)
-    eventually(lambda: lane.raw()["deliveries"][message]["state"] == "acknowledged")
-    lane.driver.interrupt(lane.root, "coder")
-    eventually(lambda: lane.raw()["phase"] == "idle")
-    assert lane.raw()["last_turn_outcome"] == "completed"
-    assert lane.raw()["interruption"]["state"] == "requested"
-    (lane.folder / "allow-control-ack").touch()
-    eventually(lambda: lane.raw()["interruption"]["state"] == "completed")
-    assert lane.child.poll() is None and not lane.errors
-
-
-def test_stale_terminal_result_does_not_create_review_boundary(native_lane):
-    lane = native_lane("claude")
-    message = lane.plan("ACTIVE_STALE")
-    lane.send(message)
-    eventually(lambda: lane.raw()["deliveries"][message]["state"] == "acknowledged")
-    lane.driver.interrupt(lane.root, "coder")
-    eventually(lambda: lane.errors)
-    assert "does not bind" in str(lane.errors[0])
-    assert lane.raw()["phase"] == "failed"
-    assert lane.raw()["interruption"]["state"] != "interrupted"
-
-
-def test_natural_completion_without_interrupt_ack_cannot_accept_next_input(native_lane):
-    lane = native_lane("claude")
-    message = lane.plan("ACTIVE_COMPLETED_FIRST")
-    lane.send(message)
-    eventually(lambda: lane.raw()["deliveries"][message]["state"] == "acknowledged")
-    receipt = lane.driver.interrupt(lane.root, "coder")
-    eventually(lambda: lane.raw()["phase"] == "idle")
-    assert lane.raw()["interruption"]["state"] == "requested"
-    following = lane.plan("Continue only after acknowledgment")
-    with pytest.raises(ValueError, match="interruption boundary remains unverified"):
-        lane.send(following)
-    (lane.folder / "allow-control-ack").touch()
-    eventually(lambda: lane.raw()["interruption"]["state"] == "completed")
-    assert lane.driver.interrupt(lane.root, "coder")["request_id"] == receipt["request_id"]
-    assert len((lane.folder / "controls.jsonl").read_text().splitlines()) == 1
-    assert lane.send(following)["state"] == "pending"
-    eventually(lambda: lane.raw()["turns"] == 3)
-
-
-def test_lost_interrupt_reply_reconciles_without_replay_or_supervisor(native_lane):
-    lane = native_lane("claude")
-    message = lane.plan("ACTIVE")
-    lane.send(message)
-    eventually(lambda: lane.raw()["deliveries"][message]["state"] == "acknowledged")
-    before = lane.raw()
-    current = lane.driver.inspect(lane.root, "coder")
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-        client.connect(current["socket"])
-        client.sendall(
-            json.dumps(
-                {
-                    "token": current["token"],
-                    "thread": THREAD,
-                    "action": "interrupt",
-                    "input_id": current["current_input_id"],
-                }
-            ).encode()
-            + b"\n"
-        )
-    eventually(lambda: lane.raw()["phase"] == "idle")
-    receipt = lane.driver.interrupt(lane.root, "coder")
-    assert receipt["state"] == "interrupted"
-    assert len((lane.folder / "controls.jsonl").read_text().splitlines()) == 1
-    assert lane.raw()["worker"] == before["worker"] and lane.raw()["session_id"] == THREAD
-    following = lane.plan("Continue in the same conversation")
-    assert lane.send(following)["state"] == "pending"
-    eventually(lambda: lane.raw()["turns"] == 3)
-
-
 @pytest.mark.parametrize("damage", ["partial-runner-evidence", "mismatched-lane"])
 def test_retry_refuses_partial_or_mismatched_binding_without_input(native_lane, damage):
     # Python protocol fixture only: no CLI model, account, or tmux server is used.
-    lane = native_lane("claude")
+    lane = native_lane("agy")
     identifier = lane.plan("retry once with original context")
     before = lane.raw()
     receipt = lane.folder / "coder-process.json"
@@ -672,3 +454,197 @@ def test_retry_refuses_partial_or_mismatched_binding_without_input(native_lane, 
     assert lane.send(identifier)["state"] == "acknowledged"
     assert [row["text"] for row in lane.received()].count("retry once with original context") == 1
     assert lane.raw()["worker"] == before["worker"]
+
+
+# Oracle: docs/HARNESS.md interactive Claude contract. These tests run the real
+# wrapper, terminal, hook commands, receipt store and message transport. The fake
+# executable only supplies native lifecycle reports, not Factory acknowledgments.
+CLAUDE_TERMINAL = r"""
+import json, os, pathlib, subprocess, sys, tty
+args = sys.argv[1:]
+folder = pathlib.Path(__file__).parent
+settings = json.loads(pathlib.Path(args[args.index('--settings') + 1]).read_text())
+flag = '--resume' if '--resume' in args else '--session-id'
+session = args[args.index(flag) + 1]
+assert os.isatty(0) and os.isatty(1)
+assert '-p' not in args and '--print' not in args
+assert '--input-format' not in args and '--output-format' not in args
+(folder / 'argv.json').write_text(json.dumps(args))
+def hook(event, **fields):
+    payload = dict(hook_event_name=event, session_id=session, cwd=os.getcwd(), **fields)
+    for group in settings['hooks'][event]:
+        for entry in group['hooks']:
+            subprocess.run(entry['command'], shell=True, input=json.dumps(payload),
+                           text=True, check=True, timeout=5)
+tty.setraw(0)
+hook('SessionStart')
+buffer = b''
+while True:
+    byte = os.read(0, 1)
+    if not byte: break
+    buffer += byte
+    if not buffer.endswith(b'\r'): continue
+    text = buffer[:-1].decode().replace('\x1b[200~', '').replace('\x1b[201~', '')
+    buffer = b''
+    with (folder / 'received.jsonl').open('a') as out:
+        out.write(json.dumps(dict(text=text, pid=os.getpid())) + '\n')
+    if 'EXIT' in text: break
+    if 'WAIT_REPORT' in text:
+        import time
+        while not (folder / 'allow-report').exists(): time.sleep(.01)
+    hook('UserPromptSubmit', prompt=text)
+    if 'NO_STOP' not in text: hook('Stop', stop_hook_active=False)
+hook('SessionEnd')
+"""
+
+
+@pytest.fixture
+def claude_terminal(tmp_path, monkeypatch, request):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "harness"))
+    driver = importlib.import_module("persistent_lane")
+    dialogue = importlib.import_module("lane_dialogue")
+    slot = getattr(request, "param", "coder")
+    root = tmp_path / "native"
+    folder = root / "tmux-lanes" if slot == "coder" else root
+    folder.mkdir(parents=True)
+    (root / "harness.json").write_text(json.dumps({"run_id": "r", "tmux_socket": "fixture"}))
+    executable = folder / "cl"
+    executable.write_text(f"#!{sys.executable}\n" + CLAUDE_TERMINAL)
+    executable.chmod(0o755)
+    prompt = root / "prompt"
+    prompt.write_text("initial")
+    harness = Path(__file__).resolve().parents[1] / "harness"
+    output = (root / "wrapper-output").open("w")
+    child = subprocess.Popen(
+        [
+            sys.executable,
+            str(harness / "lane_agent.py"),
+            "run",
+            "--slot",
+            slot,
+            "--log",
+            str(folder / f"{slot}-log"),
+            "--exits",
+            str(folder / f"{slot}-exits.jsonl"),
+            "--prompt-arg",
+            str(prompt),
+            "--session-agent",
+            "claude",
+            "--session-file",
+            str(folder / f"{slot}-thread-id"),
+            "--persistent",
+            "--run-root",
+            str(root),
+            "--",
+            str(executable),
+        ],
+        stdout=output,
+        stderr=subprocess.STDOUT,
+    )
+
+    class Terminal:
+        def __init__(self):
+            self.root, self.folder, self.driver, self.child = root, folder, driver, child
+
+        def raw(self):
+            path = folder / f"{slot}-persistent.json"
+            return json.loads(path.read_text()) if path.exists() else {}
+
+        def received(self):
+            path = folder / "received.jsonl"
+            return (
+                [json.loads(row) for row in path.read_text().splitlines()] if path.exists() else []
+            )
+
+        def plan(self, text, kind="status-probe"):
+            return dialogue.plan_message(
+                root,
+                sender="validator",
+                lane="coder",
+                message_kind=kind,
+                text=text,
+                basis="interactive contract regression",
+                authority="task-specification" if kind == "progress-review" else "runtime-protocol",
+            )["message_id"]
+
+        def send(self, message, thread=None, **kwargs):
+            return driver.request(root, slot, message, thread or self.raw()["session_id"], **kwargs)
+
+    lane = Terminal()
+    try:
+        eventually(lambda: lane.raw().get("phase") == "stop-reported")
+        yield lane
+    finally:
+        (folder / "allow-report").touch()
+        if child.poll() is None:
+            # Signal only our owned wrapper, which owns terminal child cleanup.
+            child.terminate()
+        child.wait(timeout=5)
+        output.close()
+
+
+def test_claude_prompt_observation_is_not_completion_and_native_queue_remains_available(
+    claude_terminal,
+):
+    lane = claude_terminal
+    before = lane.raw()
+    first = lane.plan("NO_STOP work remains active")
+    lane.send(first)
+    eventually(lambda: lane.send(first)["state"] == "observed")
+    assert lane.raw()["phase"] == "prompt-observed"
+    second = lane.plan("NO_STOP FACTORY_REVIEW verdict=REDIRECT\nChange course.", "progress-review")
+    lane.send(second)
+    eventually(lambda: lane.send(second)["state"] == "observed")
+    assert lane.raw()["phase"] == "prompt-observed"
+    assert lane.raw()["worker"] == before["worker"]
+    assert lane.raw()["session_id"] == before["session_id"]
+    assert len(lane.received()) == 3
+    with pytest.raises(ValueError):
+        lane.driver.interrupt(lane.root, "coder")
+
+
+def test_claude_retry_never_retypes_unobserved_or_observed_input(claude_terminal):
+    lane = claude_terminal
+    marker = lane.root / "must-not-execute"
+    message = lane.plan(f"WAIT_REPORT literal $(touch {marker})")
+    state = lane.raw()
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.connect(state["socket"])
+        client.shutdown(socket.SHUT_RD)
+        client.sendall(
+            json.dumps(
+                {"token": state["token"], "message_id": message, "thread": state["session_id"]}
+            ).encode()
+            + b"\n"
+        )
+        client.shutdown(socket.SHUT_WR)
+    eventually(lambda: len(lane.received()) == 2)
+    for _ in range(2):
+        assert lane.send(message)["state"] == "submitted"
+    assert lane.send(lane.plan("cannot overtake unresolved custody"))["state"] == "busy"
+    assert len(lane.received()) == 2
+    (lane.folder / "allow-report").touch()
+    eventually(lambda: lane.send(message)["state"] == "observed")
+    assert lane.send(message)["state"] == "observed"
+    assert len(lane.received()) == 2
+    assert not marker.exists()
+
+
+def test_claude_wrong_session_and_stale_worker_refuse_input(claude_terminal):
+    lane = claude_terminal
+    message = lane.plan("not for a foreign session")
+    before = lane.received()
+    with pytest.raises(ValueError):
+        lane.send(message, thread="wrong-conversation")
+    path = lane.folder / "coder-process.json"
+    receipt = json.loads(path.read_text())
+    altered = {**receipt, "worker": {**receipt["worker"], "started": "stale"}}
+    lane.driver.store(path, altered)
+    try:
+        with pytest.raises(ValueError):
+            lane.send(message)
+        assert lane.received() == before
+    finally:
+        lane.driver.store(path, receipt)
+    lane.send(message)
+    eventually(lambda: lane.send(message)["state"] == "observed")

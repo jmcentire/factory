@@ -1,7 +1,16 @@
-"""Host-owned, acknowledged native stream input for resident Claude and Agy lanes.
+"""Host-owned, acknowledged native input for resident Claude and Agy lanes.
 
-No terminal input is used. A request can address only a retained typed dialogue message,
-and a successful receipt requires the native client's user-input acknowledgement.
+A request can address only a retained typed dialogue message, and a successful receipt
+requires the native client's own user-input acknowledgement.
+
+Claude Code is a native terminal session (``run_terminal``, ``native_session.py``): the
+message is typed into the terminal of the exact process this wrapper started. Its states say
+only what was observed (``OUTSTANDING``): ``queued``, ``submitted``, and ``observed`` when the
+session's own prompt hook reports it. That is receipt and the end of what can be known: the
+operator's hooks run beside the observation hooks and may reject a prompt or continue past
+a stop, and a later stop report cannot be tied to a message, so nothing here is called
+acceptance or completion. Nothing is inferred from the screen, from silence or from elapsed
+time. Agy still uses its stream input (``run``).
 """
 
 from __future__ import annotations
@@ -25,8 +34,14 @@ import uuid
 
 import agents
 
-SCHEMA = "factory-persistent-lane/1"
+SCHEMA = "factory-persistent-lane/2"
+#: Records a still-running wrapper of an earlier version wrote remain readable.
+SCHEMAS = (SCHEMA, "factory-persistent-lane/1")
 LIMIT = 4 * 1024 * 1024
+#: The transport of a native terminal session, as status and launch records name it.
+TERMINAL = "native-terminal"
+#: The dialogue journal's transport word for a message such a session reported receiving.
+OBSERVED_TRANSPORT = "terminal-observed"
 
 
 def read(path: pathlib.Path) -> dict:
@@ -72,7 +87,7 @@ def inspect(root: pathlib.Path, slot: str) -> dict:
 
     value = read(state_path(root, slot))
     if (
-        value.get("schema") != SCHEMA
+        value.get("schema") not in SCHEMAS
         or value.get("root") != str(root.resolve())
         or value.get("slot") != slot
     ):
@@ -153,6 +168,13 @@ def verify_interruption(value: dict, watch: dict | None = None) -> None:
 
 def interrupt(root: pathlib.Path, slot: str) -> dict:
     current = inspect(root, slot)
+    if current.get("transport") == TERMINAL:
+        # Escape stops a terminal turn, and the program reports nothing back for it: no
+        # cancellation receipt and no turn boundary. Typing it would leave this lane unable
+        # to tell a stopped turn from a running one, so it is refused, not guessed.
+        raise ValueError(
+            "a native terminal session has no acknowledged interrupt; wait for its turn to "
+            "end, or stop the lane process")
     return request(
         root,
         slot,
@@ -275,6 +297,10 @@ def run(
 
     def send(text):
         write_frame(agents.persistent_input(agent, text, native_id))
+
+    if agent == "claude":
+        raise ValueError(
+            "Claude Code has no stream transport; it runs as a native terminal session")
 
     def write_frame(frame):
         payload = json.dumps(frame).encode() + b"\n"
@@ -614,6 +640,511 @@ def run(
                 save()
 
 
+#: Delivery states of a native terminal session, in order. Each names only what was observed.
+#:   queued     accepted and retained; not one byte typed.
+#:   submitted  typing began (or finished); nothing from the session confirms it. If the
+#:              session is working, it is in the program's own input queue.
+#:   observed   the session's own prompt hook reported a prompt carrying this message's
+#:              mark: the message reached the session. This is the strongest evidence there
+#:              is. It is receipt, not acceptance: hooks run in parallel and another may
+#:              still reject the prompt. And nothing after it is tied to this message: a
+#:              later stop report may belong to an earlier turn the session was continuing
+#:              when it took this prompt from its queue (observed on Claude Code 2.1.323).
+#:   unknown    typing began under an earlier wrapper process and no report was seen; what
+#:              became of it cannot be observed any more. Never typed again.
+#: There is no "acknowledged" or "completed" here, because the session reports neither.
+OUTSTANDING = frozenset({"queued", "submitted"})
+#: What a caller may treat as the message having reached the session.
+RECEIVED = frozenset({"observed", "acknowledged"})  # "acknowledged": Agy's stream transport
+
+
+def retained(root: pathlib.Path, slot: str, session_id: str) -> dict:
+    """The delivery record an earlier wrapper kept for this conversation, or ``{}``.
+
+    A record that exists is evidence of what was typed. It is validated before anything is
+    concluded from it, and it is set aside only on proof that nothing of it can be repeated:
+
+    * unreadable, oversized, symlinked, or not a record of this slot in a known schema with
+      a session id and a well-formed delivery map: refuse;
+    * the same conversation: it must hold the first message's record (every wrapper writes
+      one before it types); it is returned and its receipts stand;
+    * another conversation that never existed (no session id was ever bound) or never
+      started (a terminal record with nothing but untyped ``queued`` entries): nothing was
+      typed, so this start may supersede it;
+    * anything else is a conversation that received input. Starting a different one in its
+      place would repeat its first message, so it is refused: resume it, or remove the
+      record deliberately.
+    """
+    path = state_path(root, slot)
+    refusal = "refusing to start a session whose earlier messages could be typed again"
+    if path.is_symlink():
+        raise ValueError(f"retained delivery record {path.name} is a symlink; {refusal}")
+    if not path.exists():
+        return {}
+    try:
+        prior = read(path)
+    except (OSError, ValueError) as error:
+        raise ValueError(
+            f"retained delivery record {path.name} cannot be read ({error}); {refusal}") from None
+    deliveries = prior.get("deliveries")
+    earlier = prior.get("session_id")
+    if (
+        prior.get("schema") not in SCHEMAS
+        or prior.get("slot") != slot
+        or not isinstance(earlier, str)
+        or prior.get("transport", "stream") not in (TERMINAL, "stream")
+        or not isinstance(deliveries, dict)
+        or not all(isinstance(key, str) and isinstance(record, dict)
+                   and isinstance(record.get("state"), str)
+                   for key, record in deliveries.items())
+    ):
+        raise ValueError(f"retained delivery record {path.name} is malformed; {refusal}")
+    if earlier == session_id:
+        if "initial" not in deliveries:
+            raise ValueError(
+                f"retained delivery record {path.name} for this conversation has no record "
+                f"of its first message; {refusal}")
+        return prior
+    never_bound = earlier == ""
+    never_typed = (
+        prior.get("transport") == TERMINAL
+        and prior.get("session_started") is not True
+        and all(record["state"] == "queued" for record in deliveries.values())
+    )
+    if never_bound or never_typed:
+        return {}
+    raise ValueError(
+        f"retained delivery record {path.name} belongs to conversation {earlier}, which "
+        "received input; starting a different conversation in its place would repeat its "
+        f"first message. Resume {earlier}, or remove the record deliberately")
+
+
+def run_terminal(
+    terminal,
+    *,
+    root: pathlib.Path,
+    slot: str,
+    agent: str,
+    prompt: str,
+    session_file: pathlib.Path,
+    session_id: str,
+    journal: pathlib.Path,
+    journal_offset: int,
+    launcher: dict,
+    note,
+    diagnostic=None,
+) -> int:
+    """Own one native terminal session until its actual exit.
+
+    ``diagnostic`` receives, once, the first of what the program wrote to its terminal
+    (bounded) if it ends without its session ever reporting a start: a program that refuses to start
+    says why there and nowhere else. A session that does start has nothing of its screen
+    kept. The text is the program's raw output and is not assumed free of anything the
+    program chose to show (an account name, a sign-in prompt).
+
+    ``terminal`` is the ``native_session.Terminal`` holding the program. ``note`` receives
+    log lines (never the pane). Typed input waits for the session's own start report; a
+    dialog the program shows before that (folder trust, sign-in) is the operator's to answer
+    and never receives Factory text.
+
+    What the session's hooks can and cannot establish. They are observation hooks added
+    beside the operator's own, which run in parallel with them and may reject a prompt or
+    make the session continue past a stop. So a prompt report means the prompt reached the
+    session, not that it was accepted; a stop report means the session reported ending a
+    response, not that it will not continue. ``phase`` therefore names the last report
+    (``starting``, ``started``, ``prompt-observed``, ``stop-reported``, ``asking-operator``,
+    ``waiting-for-input``, ``exited``), a delivery ends at ``observed``, and no stop report
+    is ever attributed to a message.
+
+    When a message is typed. Never because a phase looks idle: no stop report proves that.
+    A message is typed when the session has reported starting, none of this wrapper's
+    earlier messages is still unaccounted for, and the session's last report is not a
+    question to the operator (keys typed then would answer it). If the session is still
+    working, the message sits in the program's own input queue, as it would for a person
+    typing, and stays ``submitted`` until the session reports it. One unaccounted message at
+    a time is this wrapper's custody rule, so each report is attributable; it says nothing
+    about the session. ``waiting-for-input`` is the session's own ``idle_prompt`` report.
+
+    Delivery records survive this wrapper: a restart that resumes the same conversation
+    keeps them, types nothing that was ever typed, and marks an unfinished one ``unknown``.
+    """
+    import native_session
+
+    child = terminal.process
+    path = state_path(root, slot)
+    receipt = read(path.parent / f"{slot}-process.json")
+    if (
+        receipt.get("schema") != "factory-worker-process/1"
+        or receipt.get("slot") != slot
+        or receipt.get("status") != "running"
+        or not isinstance(receipt.get("worker"), dict)
+        or not isinstance(receipt.get("wrapper"), dict)
+        or receipt.get("worker", {}).get("pid") != child.pid
+        or receipt.get("wrapper", {}).get("pid") != os.getpid()
+    ):
+        raise ValueError("persistent run root does not own this native child and wrapper")
+    if session_file.is_symlink():
+        raise ValueError("symlinked session file")
+    if session_file.exists() and session_file.read_text().strip() != session_id:
+        raise ValueError("retained conversation changed")
+
+    def token_for(identifier):
+        return native_session.message_token(session_id, identifier)
+
+    # What an earlier wrapper of this same conversation recorded is kept, not recreated.
+    deliveries: dict = {}
+    carried = {"stop_reports": 0, "prompt_reports": 0, "reported_active_s": 0.0}
+    prior = retained(root, slot, session_id)
+    if prior:
+        for identifier, record in prior["deliveries"].items():
+            # A receipt stands. Only typing that no report ever followed is unknown;
+            # "pending" is the earlier stream transport's word for that.
+            if record.get("state") in {"submitted", "pending"}:
+                record = dict(
+                    record,
+                    state="unknown",
+                    last_state=record.get("state"),
+                    detail="typed by an earlier wrapper process; what became of it was not "
+                    "observed and it is never typed again",
+                )
+            deliveries[identifier] = record
+        for key in carried:
+            if isinstance(prior.get(key), (int, float)):
+                carried[key] = prior[key]
+    deliveries.setdefault("initial", {"state": "queued", "message_id": "initial"})
+    waiting: dict[str, str] = {}  # accepted, not yet typed: message id -> text
+    for identifier, record in deliveries.items():
+        if record.get("state") != "queued":
+            continue
+        try:
+            waiting[identifier] = (
+                prompt if identifier == "initial" else planned(root, slot, identifier)["text"]
+            )
+        except (OSError, ValueError, KeyError) as error:
+            deliveries[identifier] = dict(
+                record, state="unknown", last_state="queued",
+                detail=f"its retained text is no longer available ({error}); never typed")
+
+    state = {
+        "schema": SCHEMA,
+        "transport": TERMINAL,
+        "root": str(root.resolve()),
+        "slot": slot,
+        "agent": agent,
+        "launcher": launcher,
+        "worker": receipt["worker"],
+        "wrapper": receipt["wrapper"],
+        "session_id": session_id,
+        "session_started": False,
+        "phase": "starting",
+        "last_native_event": None,
+        "stop_reports": carried["stop_reports"],
+        "prompt_reports": carried["prompt_reports"],
+        "reported_active_s": carried["reported_active_s"],
+        "turn_started_at": time.time(),
+        "stop_reported_at": None,
+        "current_message_id": "initial",
+        "current_input_id": native_session.text_digest(prompt),
+        "capabilities": [],
+        "review_boundary_pending": False,
+        "foreign_inputs": 0,
+        "unbound_events": 0,
+        "deliveries": deliveries,
+    }
+    # ``typing`` is the one message between "typing began" and "Enter written":
+    # (message id, bytes still to queue or None, monotonic time the next step is due).
+    typing: list | None = None
+    digests: dict[str, str] = {}  # message id -> digest of exactly what was typed
+    bodies: dict[str, str] = {}  # message id -> digest of the message without its mark
+    ready_at = None
+    events = native_session.Journal(journal, journal_offset)
+
+    def save():
+        store(path, state)
+
+    startup = bytearray()  # the first of the program's output before any start report
+
+    def remember(raw):
+        # The beginning is what explains a refusal; a flood after it is not kept.
+        room = native_session.STARTUP_KEEP - len(startup)
+        if room > 0:
+            startup.extend(raw[:room])
+
+    def outstanding():
+        return [key for key, record in deliveries.items() if record.get("state") in OUTSTANDING]
+
+    def stop_row(row):
+        # A stop report, named as one. It is not a result: it carries no success or error
+        # verdict, and another hook may make the session continue after it. The message is
+        # what the session said last, which a reader may search for a claim, never a proof.
+        text = row.get("last_assistant_message")
+        note((json.dumps({
+            "type": "native-stop-report",
+            "stop_hook_active": row.get("stop_hook_active") is True,
+            "last_assistant_message": text if isinstance(text, str) else "",
+            "session_id": session_id, "source": "native-stop-hook",
+        }) + "\n").encode())
+
+    def observe(row):
+        nonlocal ready_at
+        kind = row.get("event")
+        if row.get("session_id") != session_id:
+            # Another conversation in this terminal (the operator cleared or switched it) is
+            # not this seat's: it neither confirms nor ends anything.
+            state["unbound_events"] += 1
+            if kind == "SessionStart":
+                state["observed_session_id"] = str(row.get("session_id") or "")
+            return
+        state.pop("observed_session_id", None)
+        state["last_native_event"] = {"event": kind, "at": time.time()}
+        if kind != "Notification":
+            state.pop("asking", None)  # any later report means that question is behind it
+        if kind == "SessionStart":
+            if not state["session_started"]:
+                state["session_started"] = True
+                if not session_file.exists():
+                    fd = os.open(session_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                    with os.fdopen(fd, "w") as stream:
+                        stream.write(session_id + "\n")
+                note((json.dumps({"type": "native-session-start", "session_id": session_id,
+                                  "source": "native-session-start-hook"}) + "\n").encode())
+            if state["phase"] == "starting":
+                state["phase"] = "started"
+            ready_at = time.monotonic() + native_session.SETTLE_S
+        elif kind == "UserPromptSubmit":
+            state["prompt_reports"] += 1
+            tokens = row.get("tokens") if isinstance(row.get("tokens"), list) else []
+            reported = row.get("prompt_sha256")
+            submitted = [key for key, record in deliveries.items()
+                         if record.get("state") == "submitted"]
+            # A report binds to the submitted message by its typed mark, or by being
+            # byte-for-byte the message. Anything else is someone else's input.
+            #   exact: the reported prompt is exactly what was typed, mark included.
+            #   token: it carries the mark, but the program reported the body in another
+            #          form (a paste wrapper or placeholder), so only the mark binds.
+            #   body:  it is exactly the message, without the mark.
+            matched = [(key, "exact" if reported == digests.get(key) else "token")
+                       for key in submitted if deliveries[key].get("token") in tokens]
+            if not matched:
+                matched = [(key, "body") for key in submitted
+                           if reported and reported == bodies.get(key)]
+            if len(matched) == 1:
+                identifier, how = matched[0]
+                deliveries[identifier] = dict(
+                    deliveries[identifier],
+                    state="observed",
+                    thread_id=session_id,
+                    observed_at=time.time(),
+                    text_match=how,
+                    evidence="the session's prompt hook reported this message; receipt, "
+                    "not acceptance or completion",
+                )
+                state["current_message_id"] = identifier
+                if identifier != "initial" and slot not in {"validator", "orchestrator"}:
+                    import lane_dialogue
+
+                    # The journal's "delivered" row names its transport, and this one says
+                    # exactly how much was seen.
+                    lane_dialogue.record_delivery(
+                        root, message_id=identifier, thread_id=session_id,
+                        transport=OBSERVED_TRANSPORT)
+            else:
+                state["foreign_inputs"] += 1  # the operator's own input, or an unmarked prompt
+            # ``turn_started_at`` is when this prompt report arrived (the watchdog's clock).
+            state.update(phase="prompt-observed", turn_started_at=time.time(),
+                         stop_reported_at=None)
+        elif kind == "Stop":
+            stop_row(row)
+            # A stop report is the session's, not any message's: with a queued prompt taken
+            # mid-continuation, the next stop can belong to the turn before it.
+            state["stop_reports"] += 1
+            if state["phase"] == "prompt-observed":
+                # Elapsed time between two reports. Not a completed turn's duration: the
+                # session may continue past this stop.
+                state["stop_reported_at"] = time.time()
+                state["reported_active_s"] += max(
+                    0.0, state["stop_reported_at"] - state["turn_started_at"]
+                )
+            if state["session_started"]:
+                state["phase"] = "stop-reported"
+        elif kind == "Notification":
+            if row.get("notification_type") == native_session.WAITING:
+                state["phase"] = "waiting-for-input"
+            elif state["session_started"]:
+                state["phase"] = "asking-operator"
+                state["asking"] = str(row.get("notification_type"))
+        elif kind == "SessionEnd":
+            state["session_ended"] = str(row.get("reason") or "reported")
+
+    def reopen(row):
+        journal_path = path.parent / f"{slot}-launch.jsonl"
+        # Invalidate any frozen export before new input can mutate the author tree.
+        if not journal_path.exists():
+            return
+        from lane_dialogue import _append, _read
+
+        launches = [item for item in _read(journal_path) if item.get("status") == "active"]
+        if len(launches) != 1:
+            raise ValueError("persistent launch is missing or ambiguous")
+        _append(
+            journal_path,
+            {
+                "schema_version": "factory-tmux-lane-reopen/1",
+                "ts": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
+                "run_id": launches[0]["run_id"],
+                "role": slot.split("-")[0].split(".")[0],
+                "slot": slot,
+                "sender": row["sender"],
+                "message_kind": row["message_kind"],
+                "message_id": row["message_id"],
+                "prompt_bytes": len(row["text"].encode()),
+                "prompt_limit": None,
+                "prompt_delivery": TERMINAL,
+            },
+        )
+
+    def accept(row):
+        identifier = row["message_id"]
+        reopen(row)
+        waiting[identifier] = row["text"]
+        result = {"state": "queued", "message_id": identifier}
+        deliveries[identifier] = result
+        save()  # durable before any byte is typed
+        return result
+
+    def may_type():
+        # Not a claim that the session is idle. See "When a message is typed" above.
+        return (
+            state["session_started"]
+            and state["phase"] != "asking-operator"
+            and not state.get("observed_session_id")
+        )
+
+    def advance():
+        """Move the one message being typed a step, or begin the next waiting one."""
+        nonlocal typing
+        current = time.monotonic()
+        if typing is not None:
+            identifier, body, due = typing
+            if body is not None:
+                if current >= due:
+                    terminal.type(body)
+                    typing = [identifier, None, 0.0]
+            elif terminal.typed():
+                if due == 0.0:
+                    typing[2] = current + native_session.SUBMIT_GAP_S
+                elif current >= due:
+                    terminal.type(native_session.SUBMIT)
+                    typing = None
+            return
+        if not waiting or ready_at is None or current < ready_at or not may_type():
+            return
+        identifier = next(iter(waiting))
+        if [key for key in outstanding() if key != identifier]:
+            return  # one outstanding message at a time, so a report can be attributed
+        if inspect(root, slot)["process_state"] != "running":
+            return
+        text = native_session.typed_text(waiting.pop(identifier), journal.parent, slot)
+        marker = token_for(identifier)
+        typed = native_session.marked(text, marker)
+        digests[identifier] = native_session.text_digest(typed)
+        bodies[identifier] = native_session.text_digest(text)
+        state["current_input_id"] = digests[identifier]
+        # From the first byte on, the outcome is uncertain: say so durably before typing it,
+        # so no later process ever types this message again.
+        deliveries[identifier] = {
+            "state": "submitted", "message_id": identifier, "token": marker,
+            "typed_sha256": digests[identifier], "at": time.time()}
+        save()
+        typing = [identifier, native_session.paste(text) + native_session.trailer(marker),
+                  current]
+
+    def handle(command):
+        if not isinstance(command, dict):
+            raise ValueError("persistent request is not an object")
+        if command.get("token") != state["token"] or command.get("thread") != session_id:
+            raise ValueError("persistent request binding mismatch")
+        if command.get("action", "deliver") != "deliver":
+            raise ValueError("a native terminal session accepts deliver requests only")
+        identifier = command.get("message_id")
+        if not isinstance(identifier, str):
+            raise ValueError("persistent message id is not a string")
+        row = planned(root, slot, identifier)
+        result = deliveries.get(identifier)
+        if result is not None:
+            return result  # asked again: report, never type twice
+        if state.get("observed_session_id"):
+            raise ValueError("native conversation changed")
+        current = inspect(root, slot)
+        # ``defer`` needs nothing held back here: a message typed while the session works
+        # waits in the program's own input queue.
+        if current["process_state"] != "running":
+            return {"state": "busy", "message_id": identifier, "reason": "process stopped"}
+        if not state["session_started"]:
+            return {"state": "busy", "message_id": identifier,
+                    "reason": "the session has not reported starting"}
+        if state["phase"] == "asking-operator":
+            return {"state": "busy", "message_id": identifier,
+                    "reason": "the session is asking the operator a question on screen"}
+        if typing is not None or waiting or outstanding():
+            return {"state": "busy", "message_id": identifier,
+                    "reason": "an earlier message is not yet accounted for"}
+        return accept(row)
+
+    with tempfile.TemporaryDirectory(prefix="factory-live-", dir="/tmp") as directory:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+            server.bind(directory + "/lane.sock")
+            server.listen(8)
+            state.update(socket=directory + "/lane.sock", token=secrets.token_hex(32))
+            save()
+            try:
+                while child.poll() is None:
+                    readable, writable, _ = select.select(
+                        [server.fileno(), *terminal.readers()], terminal.writers(), [], 0.2)
+                    terminal.service(
+                        readable, writable, None if state["session_started"] else remember)
+                    before = json.dumps(state, sort_keys=True, default=str)
+                    for row in events.read():
+                        observe(row)
+                    advance()
+                    if json.dumps(state, sort_keys=True, default=str) != before:
+                        save()
+                    if server.fileno() in readable:
+                        with server.accept()[0] as connection:
+                            connection.settimeout(1)
+                            try:
+                                incoming = bytearray()
+                                while not incoming.endswith(b"\n"):
+                                    part = connection.recv(4096)
+                                    if not part or len(incoming) + len(part) > 8192:
+                                        raise ValueError("invalid native input request")
+                                    incoming.extend(part)
+                                answer = handle(json.loads(incoming))
+                                connection.sendall(json.dumps(answer).encode() + b"\n")
+                            except (OSError, ValueError, KeyError, RuntimeError) as error:
+                                # A client that timed out may have closed this connection.
+                                # Keep the resident session; never retry input for it.
+                                try:
+                                    connection.sendall(
+                                        json.dumps({"error": str(error)}).encode() + b"\n"
+                                    )
+                                except OSError:
+                                    pass
+                # What it wrote last, as it ended: its reason, if it never started.
+                terminal.drain(None if state["session_started"] else remember)
+                for row in events.read():
+                    observe(row)
+                return child.wait()
+            finally:
+                if not state["session_started"] and diagnostic is not None and startup:
+                    try:
+                        diagnostic(bytes(startup))
+                    except OSError:
+                        pass
+                state["phase"] = "exited"
+                save()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("status", "deliver", "interrupt"))
@@ -633,7 +1164,8 @@ def main() -> int:
         )
         # Socket authentication remains private; status exposes process evidence only.
         print(json.dumps({k: v for k, v in result.items() if k not in {"token", "socket"}}))
-        return 0 if args.action == "status" or result.get("state") == "acknowledged" else 75
+        # 0 only when the native client itself reported receiving the message.
+        return 0 if args.action == "status" or result.get("state") in RECEIVED else 75
     except (OSError, ValueError, KeyError, RuntimeError) as error:
         print(f"persistent-lane: {error}", file=__import__("sys").stderr)
         return 70

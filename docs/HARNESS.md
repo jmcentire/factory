@@ -62,6 +62,109 @@ Every role retrieves relevant Kindex context when authorized. Author memory rema
 private, with curated common context; a shared live graph must not leak one author's
 work to the other. Retrieval receipts are not an execution prerequisite.
 
+### Claude Code is the operator's own interactive session
+
+Claude Code is never run in print mode (`-p`), never billed to an API key, never has its
+own state files read or rewritten, and never has the operator's settings, hooks, plugins,
+`CLAUDE.md` or MCP servers suppressed. A Claude seat or lane is the interactive program,
+started through the operator's launcher on a terminal the lane wrapper owns
+(`harness/native_session.py`) and shown in its tmux window, where the operator can use it.
+
+- **Launcher.** `FACTORY_CLAUDE_LAUNCHER` names the command. Unset, it is `cl` when the
+  operator's login shell defines it, otherwise the `claude` executable. A shell function is
+  run by the login shell (`$SHELL -l -c`), which sources the operator's profile itself. The
+  API-billing variables are unset immediately before the launcher runs; none is ever set.
+- **What is added.** `--name=<run>-<slot>`, `--session-id <uuid>` (or `--resume <uuid>` to
+  continue), `--settings <file>` carrying four observation hooks beside the operator's own,
+  the assigned `--model`/`--effort` if any, the lane's Kindex by `--mcp-config`, and the
+  run root by `--add-dir` for coordinators.
+- **Permissions are the operator's, through every launcher.** The Factory passes Claude Code
+  no permission mode: not `bypassPermissions` for author lanes and not `default` for
+  coordinators, both of which it used to impose. What a session may do without asking is
+  decided where the operator decides it natively: their launcher (`cl` passes its own
+  permissive flags, and stays permissive) and their Claude Code settings. An operator who
+  wants the permissive mode from the `claude` executable selects it explicitly with
+  `FACTORY_LANE_SANDBOX=off`, and the Factory then passes Claude Code's own
+  `--dangerously-skip-permissions`. Nothing is passed over a launcher that is the
+  operator's own shell function, even then: the function is the more specific choice. A
+  lane launch prints which of these applies. A session whose settings make it ask leaves
+  the question in its window; from the Factory's side it stays `prompt-observed`, or
+  `asking-operator` when Claude Code reports the question.
+- **Messages** are typed into that terminal, to the exact process the wrapper started,
+  each followed by a typed mark `[factory-message:<id>]`. A state names only what was
+  observed: `queued` (accepted, not one byte typed), `submitted` (typing began; if the
+  session is working, the message is in Claude Code's own input queue), `observed` (the
+  session's own prompt hook reported a prompt carrying the mark), `unknown` (typing began
+  under an earlier wrapper process and no report was seen). `busy` means it was not
+  accepted, with the reason. `observed` is receipt and the end of what can be known; there
+  is no "acknowledged" or "completed". Asking again reports the state and never types a
+  message twice, across wrapper restarts too. One message of the wrapper's is unaccounted
+  for at a time; that is its custody rule, not a claim about the session.
+- **What the hooks can establish.** They are observation hooks added beside the operator's
+  own, which run in parallel and may reject a prompt or make the session continue past a
+  stop. A prompt report means the prompt reached the session, not that it was accepted. A
+  stop report means the session reported ending a response, not that the work is complete
+  or successful, and it is never tied to a message: on Claude Code 2.1.323 a prompt typed
+  during a continued stop was taken from the queue while the earlier turn was still
+  finishing. `phase` names the last report: `starting`, `started`, `prompt-observed`,
+  `stop-reported`, `asking-operator` (a permission or input question is on screen; nothing
+  is typed then, because keys would answer it), `waiting-for-input` (Claude Code's own
+  `idle_prompt` notice, about a minute after it stops). A folder-trust or sign-in question
+  keeps the seat at `starting` with its first message `queued`; answer it in the window.
+  Nothing is inferred from the screen, from silence or from elapsed time, and nothing is
+  typed into a session that has not reported starting.
+- **When a message is typed.** Never because a phase looks idle. It is typed when the
+  session has reported starting, no earlier message of the wrapper's is unaccounted for,
+  and the session is not asking the operator a question. Claude Code queues input it
+  receives while working, as it does for a person typing.
+- **Limits.** How Claude Code reports pasted text is its own business, so a report is
+  matched by the typed mark, and `text_match` says whether the reported text was also
+  byte-identical (`exact`), carried only the mark (`token`), or was the message without
+  the mark (`body`). A retained delivery record that cannot be read, or that belongs to
+  another conversation which received input, stops the start: nothing is retyped.
+- **Status.** `python harness/run_record.py --runs R --run ID status` lists each coordinator
+  seat under `seats`. `python harness/persistent_lane.py status --root RUN_ROOT --slot SLOT`
+  prints one live session, and exits 70 with the reason once its process has ended; the
+  retained record then holds `phase: exited`.
+- **Resume.** A session that reported starting keeps its id in `<slot>-session-id`
+  (`-thread-id` for authors). Starting the seat again continues that conversation with
+  `--resume`, interactively.
+- **Interrupt** is refused for these sessions: Claude Code runs no stop hook for an
+  interrupted turn, so the harness could not tell a stopped turn from a running one.
+
+### Memory isolation, said plainly
+
+A launch records `memory_isolation` and prints it. `lane-only` means the lane sees its
+scoped Kindex and none of the operator's MCP servers. `beside-operator` (Claude and Codex
+lanes) means the operator's settings and MCP servers are intact and the lane's Kindex is
+added beside them: any memory server the operator configured is visible to the lane, so
+Coder and Tester independence rests on their separate inputs and clones, not on memory.
+That is the consequence of not suppressing the operator's configuration, and it is the
+operator's to weigh.
+
+### Providers not yet native, and exactly why
+
+Codex lanes (`codex`, `codex-ollama`) load the operator's whole Codex configuration but
+still run `codex exec`. Antigravity, Cursor, Muse and Prime lanes still start in print mode
+with a private configuration. Each launch records and prints `native_blocker`, asked by the
+lane agent's own name: it is empty only for `claude`, `claude-ollama` and
+`codex-interactive`, and `python harness/agents.py describe --agent <lane agent>` prints it. They are not converted
+because doing so today would cost the lane its Kindex and any way to send it a message:
+
+| Provider | Established, and from where | Not established |
+|---|---|---|
+| Antigravity | From its own `agy changelog`: hooks.json events `SessionStart`, `PreInvocation` (input carries `lastUserInput`), `Stop` (input carries `continuation_active`); follow-up messages queue until the turn ends by default; plugins may bundle MCP servers and a workspace may list plugins in `.agents/plugins.json`. | That a project `.agents/hooks.json` and a workspace plugin load without an edit to the operator's configuration or a trust prompt. `agy mcp add` writes the operator's configuration and is not an option. |
+| Cursor | From cursor.com/docs/agent/hooks and /docs/cli/mcp: project `.cursor/hooks.json` runs beside user hooks; events `sessionStart` (`session_id`), `beforeSubmitPrompt`, `stop` (`status`, `loop_count`), `sessionEnd`; the CLI uses the editor's project MCP configuration. | That `beforeSubmitPrompt` carries the prompt text, and that these hooks fire in the interactive CLI. A target that already has `.cursor/` files is unhandled. |
+| Muse | Probed live on muse 1.4.6 (2026-10-12) and from its help: events `sessionStart`, `userPromptSubmit`, `stop`, `notification`, `sessionEnd`; hooks by per-run `-c hooks=<json>` or project `.muse/hooks.json` (off until the workspace is trusted); project MCP file `<repository>/.mcp.json`. | Whether `-c hooks=` adds to or replaces the operator's hooks, and the `userPromptSubmit` payload. No sign-in status command, so the preflight still reads whether a sign-in is stored. |
+| Prime | Nothing: the program is not installed where this was written. | Everything. |
+| Codex (`codex`, `codex-ollama`) | From `codex --help` and this harness's own use: the interactive program is `codex [PROMPT]` (lane agent `codex-interactive`); `codex resume [SESSION_ID]`; `codex queue` queues a message for an existing session; hooks given by `-c` are skipped until the operator trusts them. The operator's configuration is already intact. | Any report from the interactive program that it started, received a prompt or stopped, and that `codex queue` reaches a live interactive session. Until then a `codex-interactive` lane can be neither messaged nor resumed by the Factory, so it cannot replace `codex exec` for unattended work. |
+
+To clear a row, a live session of that program must show: a report when the session is
+ready for input, a report carrying a submitted prompt, a report when it stops, and the
+lane's Kindex loading from the additive mechanism named. Nothing is typed into a program
+that cannot say it is ready, because the keys could answer a sign-in, trust or permission
+question instead.
+
 ## Messages and oversight
 
 `harness/inject.sh` places coordinator messages in durable file inboxes. It cannot send

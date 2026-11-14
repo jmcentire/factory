@@ -29,7 +29,9 @@ case "$AGENT" in
   codex|codex-ollama)
     VERSION=$(codex --version 2>/dev/null) || fail "codex CLI is not runnable ($(at codex))"
     EXEC_HELP=$(codex exec --help 2>/dev/null) || EXEC_HELP=""
-    needs "$EXEC_HELP" codex "$VERSION" --ignore-user-config --ignore-rules --strict-config --json
+    # Only what a lane uses. Nothing that ignores the operator's Codex configuration is
+    # required, because nothing of it is ignored.
+    needs "$EXEC_HELP" codex "$VERSION" --json
     QUEUE_HELP=$(codex queue --help 2>/dev/null) || QUEUE_HELP=""
     printf '%s' "$QUEUE_HELP" | grep -q -- '--thread' || \
       fail "codex CLI contract lacks queue --thread ($VERSION at $(at codex))"
@@ -39,7 +41,7 @@ case "$AGENT" in
     # --no-daemon keeps the TUI off the app-server daemon whose socket failure sent msg-r2's
     # Coder to a login screen.
     HELP=$(codex --help 2>/dev/null) || HELP=""
-    needs "$HELP" codex "$VERSION" --no-daemon --no-alt-screen --strict-config
+    needs "$HELP" codex "$VERSION" --no-daemon --no-alt-screen
     CONTRACT="codex-tui-no-daemon-v1" ;;
   cursor-agent)
     VERSION=$(agent --version 2>/dev/null) || \
@@ -51,7 +53,15 @@ case "$AGENT" in
         fail "cursor-agent CLI contract lacks $REQUIRED ($VERSION at $(at agent))"
     done
     CONTRACT="cursor-agent-stream-resume-v1" ;;
-  claude|claude-ollama|agy|muse|prime-agent)
+  claude|claude-ollama)
+    # The operator's own interactive Claude Code, hosted on a terminal (native_session.py).
+    # Only what an interactive session needs is required; no print-mode flag is.
+    VERSION=$(claude --version 2>/dev/null | head -1) || \
+      fail "claude CLI is not runnable ($(at claude))"
+    HELP=$(claude --help 2>/dev/null) || HELP=""
+    needs "$HELP" claude "$VERSION" --session-id --resume --settings --mcp-config --name
+    CONTRACT="claude-native-terminal-v1" ;;
+  agy|muse|prime-agent)
     # A registry harness (harness/agents.py): the registry builds its headless turn.
     if [ -z "$EXECUTABLE" ]; then
       # The Factory's own interpreter (exits 69 with the fix when there is none), never PATH's.
