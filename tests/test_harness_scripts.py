@@ -1663,10 +1663,10 @@ def factory_ignition_env(tmp_path: Path, root: Path) -> tuple[dict[str, str], Pa
     codex = stub / "codex"
     codex.write_text(
         "#!/usr/bin/env bash\n"
-        'if [ "${1:-}" = "--version" ]; then echo "codex-cli 0.152.1-test"; exit 0; fi\n'
+        'if [ "${1:-}" = "--version" ]; then echo "codex-cli 0.162.0-test"; exit 0; fi\n'
         'if [[ "$*" == *"--help"* ]]; then '
         'echo "--ignore-user-config --ignore-rules --strict-config --json '
-        '--thread --no-alt-screen --add-dir --model"; '
+        '--thread --no-alt-screen --no-daemon --add-dir --model --message"; '
         "exit 0; fi\n"
         "exit 0\n",
         encoding="utf-8",
