@@ -93,11 +93,15 @@ def test_agent_contract_looks_up_a_registry_agent_with_the_factory_python(tmp_pa
     agents = tmp_path / "agents"
     agents.mkdir()
     claude = agents / "claude"
-    claude.write_text("#!/bin/sh\necho '9.9.9 (Claude Code)'\n", encoding="utf-8")
+    claude.write_text("#!/bin/sh\n"
+                      "if [ \"$1\" = --help ]; then echo '--name --effort "
+                      "--session-id --resume --settings "
+                      "--mcp-config --add-dir --model'; else echo '9.9.9 (Claude Code)'; fi\n",
+                      encoding="utf-8")
     claude.chmod(0o755)
     path = f"{_bad_python3(tmp_path)}:{agents}:/usr/bin:/bin"
     env = {"PATH": path, "HOME": str(tmp_path), "PYTHONPATH": str(REPO)}
     done = subprocess.run(["bash", str(root / "harness" / "agent_contract.sh"), "claude"],
                           capture_output=True, text=True, env=env, check=False)
     assert done.returncode == 0, done.stderr
-    assert done.stdout.splitlines() == ["agent-registry-headless-v1", "9.9.9 (Claude Code)"]
+    assert done.stdout.splitlines() == ["claude-native-terminal-v1", "9.9.9 (Claude Code)"]

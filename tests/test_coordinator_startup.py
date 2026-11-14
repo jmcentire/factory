@@ -578,42 +578,33 @@ def _claude_validator(launch, monkeypatch):
     return root, repository, home, capture, execute
 
 
-def test_claude_seat_starts_with_its_folders_already_trusted(launch, monkeypatch):
-    # Claude Code opens an untrusted folder on "trust this folder?" with "No, exit" selected.
-    root, repository, home, capture, execute = _claude_validator(launch, monkeypatch)
+def test_claude_startup_preserves_operator_trust_file(launch, monkeypatch):
+    _, repository, home, capture, execute = _claude_validator(launch, monkeypatch)
     config = home / ".claude.json"
-    prior = {"numStartups": 7, "oauthAccount": {"emailAddress": "user@example.invalid"},
-             "projects": {str(repository): {"allowedTools": ["Bash(ls)"]},
-                          "/elsewhere": {"hasTrustDialogAccepted": False}}}
-    config.write_text(json.dumps(prior))
+    original = json.dumps({"numStartups": 7, "projects": {
+        str(repository): {"allowedTools": ["Bash(ls)"], "hasTrustDialogAccepted": False}}})
+    config.write_text(original)
     config.chmod(0o600)
+    before = config.stat()
     assert "--add-dir" in execute(capture(), "validator")["argv"]
-    doc = json.loads(config.read_text())
-    assert doc["numStartups"] == 7 and doc["oauthAccount"] == prior["oauthAccount"]
-    assert doc["projects"][str(repository)] == {"allowedTools": ["Bash(ls)"],
-                                                "hasTrustDialogAccepted": True}
-    assert doc["projects"][str(root)] == {"hasTrustDialogAccepted": True}
-    assert doc["projects"]["/elsewhere"] == {"hasTrustDialogAccepted": False}
-    assert config.stat().st_mode & 0o777 == 0o600
-    assert json.loads((home / ".claude.json.factory-backup").read_text()) == prior
-    assert not (home / ".claude.json.lock").exists()
-    # A later start finds the trust in place and leaves the file and its backup alone.
-    after = config.stat().st_mtime_ns
-    run_record.trust_claude_folders(home, [repository, root])
-    assert config.stat().st_mtime_ns == after
+    assert config.read_text() == original
+    assert config.stat().st_mtime_ns == before.st_mtime_ns
+    assert config.stat().st_mode == before.st_mode
+    assert set(home.iterdir()) == {config}
 
 
-def test_a_claude_seat_uses_the_operators_claude_profile(launch, monkeypatch, tmp_path):
-    # A profile (CLAUDE_CONFIG_DIR) keeps Claude Code's .claude.json, sign-in and sessions out of
-    # ~/.claude. The seat must keep it, and its folder trust belongs in that profile's file.
-    root, repository, home, capture, execute = _claude_validator(launch, monkeypatch)
+def test_a_claude_seat_preserves_operator_home_and_profile(launch, monkeypatch, tmp_path):
+    _, _, home, capture, execute = _claude_validator(launch, monkeypatch)
     profile = tmp_path / "claude-work"
     profile.mkdir()
+    settings = profile / "settings.json"
+    settings.write_text('{"sentinel":"operator settings"}')
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(profile))
-    calls = capture()
-    assert execute(calls, "validator")["env"]["CLAUDE_CONFIG_DIR"] == str(profile)
-    doc = json.loads((profile / ".claude.json").read_text())
-    assert doc["projects"][str(repository)] == {"hasTrustDialogAccepted": True}
+    env = execute(capture(), "validator")["env"]
+    assert env["CLAUDE_CONFIG_DIR"] == str(profile)
+    assert env["HOME"] == str(home)
+    assert settings.read_text() == '{"sentinel":"operator settings"}'
+    assert set(profile.iterdir()) == {settings}
     assert not (home / ".claude.json").exists()
 
 
@@ -623,64 +614,34 @@ def test_non_claude_seats_do_not_touch_claude_config(launch):
     assert not (Path(os.environ["HOME"]) / ".claude.json").exists()
 
 
-def test_absent_claude_config_is_created_private(launch, monkeypatch):
-    root, repository, home, capture, _ = _claude_validator(launch, monkeypatch)
+def test_absent_claude_config_is_not_created(launch, monkeypatch):
+    _, _, home, capture, _ = _claude_validator(launch, monkeypatch)
     capture()
-    config = home / ".claude.json"
-    assert json.loads(config.read_text())["projects"][str(repository)] == {
-        "hasTrustDialogAccepted": True}
-    assert config.stat().st_mode & 0o777 == 0o600
-    assert not (home / ".claude.json.factory-backup").exists()
+    assert list(home.iterdir()) == []
 
 
-def test_unreadable_claude_config_is_left_alone_and_the_seat_still_starts(
-    launch, monkeypatch, capsys,
-):
+def test_unreadable_claude_config_is_not_a_factory_startup_dependency(launch, monkeypatch):
     _, _, home, capture, _ = _claude_validator(launch, monkeypatch)
     config = home / ".claude.json"
-    config.write_text('{"projects": {"/a": ')
+    original = '{"projects": {"/a": '
+    config.write_text(original)
     calls = capture()
-    assert config.read_text() == '{"projects": {"/a": '
+    assert config.read_text() == original
     assert any(c[c.index("-n") + 1] == "validator" for c in calls if "-n" in c)
-    assert "accept its folder-trust prompt in the validator window" in capsys.readouterr().err
+    assert set(home.iterdir()) == {config}
 
 
-def test_held_claude_lock_is_respected_and_a_stale_one_is_cleared(tmp_path):
-    folder = tmp_path / "repo"
-    folder.mkdir()
-    lock = tmp_path / ".claude.json.lock"
-    lock.mkdir()  # a live Claude Code holds its config lock
-    with pytest.raises(OSError, match="is held"):
-        run_record.trust_claude_folders(tmp_path, [folder], wait=0.2)
-    assert not (tmp_path / ".claude.json").exists() and lock.exists()
-    old = lock.stat().st_mtime - 2 * run_record.CLAUDE_LOCK_STALE_SECONDS
-    os.utime(lock, (old, old))  # its holder died without releasing it
-    run_record.trust_claude_folders(tmp_path, [folder], wait=0.2)
-    assert json.loads((tmp_path / ".claude.json").read_text())["projects"][str(folder)]
-    assert not lock.exists()
-
-
-def test_a_write_that_skips_the_lock_is_kept_not_overwritten(tmp_path, monkeypatch):
-    folder = tmp_path / "repo"
-    folder.mkdir()
-    config = tmp_path / ".claude.json"
-    config.write_text(json.dumps({"projects": {}}))
-    real_dump = json.dump
-    raced = []
-
-    def dump(value, stream, **kwargs):
-        if not raced:  # another writer lands between our read and our replace
-            raced.append(True)
-            config.write_text(json.dumps({"projects": {}, "writtenMeanwhile": True}))
-        real_dump(value, stream, **kwargs)
-
-    monkeypatch.setattr(run_record.json, "dump", dump)
-    run_record.trust_claude_folders(tmp_path, [folder])
-    doc = json.loads(config.read_text())
-    assert doc["writtenMeanwhile"] is True
-    assert doc["projects"][str(folder)] == {"hasTrustDialogAccepted": True}
-    leftovers = [p.name for p in tmp_path.iterdir() if p.name.startswith("..claude.json.factory-")]
-    assert leftovers == []
+@pytest.mark.parametrize("age", [0, 86400])
+def test_native_config_locks_are_never_claimed_or_removed(launch, monkeypatch, age):
+    _, _, home, capture, _ = _claude_validator(launch, monkeypatch)
+    lock = home / ".claude.json.lock"
+    lock.mkdir()
+    modified = lock.stat().st_mtime - age
+    os.utime(lock, (modified, modified))
+    before = lock.stat().st_mtime_ns
+    capture()
+    assert lock.is_dir() and lock.stat().st_mtime_ns == before
+    assert set(home.iterdir()) == {lock}
 
 
 def test_environment_github_auth_reaches_only_the_validator(launch, monkeypatch):

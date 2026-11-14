@@ -1814,7 +1814,8 @@ def test_tmux_codex_lane_owns_local_git_and_drops_legacy_sandbox_flag(
     coder_call = next(line for line in tmux_log.read_text().splitlines() if "-n coder" in line)
     assert "codex --ask-for-approval never exec" in coder_call
     assert "env -i" in coder_call
-    assert "--ignore-user-config" in coder_call and "--ignore-rules" in coder_call
+    assert "--ignore-user-config" not in coder_call and "--ignore-rules" not in coder_call
+    assert "--strict-config" not in coder_call and "--disable apps" not in coder_call
     assert "default_permissions" in coder_call and "factory-lane" in coder_call
     assert ".git" in coder_call and "write" in coder_call
     assert "--sandbox" not in coder_call
@@ -7390,7 +7391,7 @@ def test_a_model_the_operator_names_reaches_its_seat(tmp_path: Path) -> None:
 
     assert launch("coder", "--model", "gpt-coder").returncode == 0
     coder_call = next(line for line in tmux_log.read_text().splitlines() if "-n coder" in line)
-    assert " exec -m gpt-coder --ignore-user-config" in coder_call
+    assert " exec -m gpt-coder " in coder_call
     row = read_chain(root / "tmux-lanes" / "coder-launch.jsonl")[-1]
     assert (row["model"], row["model_source"], row["model_config"]) == ("gpt-coder", "operator", [])
     assert row["sandbox"] == "on"  # the record a resume reuses (FACTORY_LANE_SANDBOX unset)
@@ -7406,16 +7407,16 @@ def test_with_no_model_named_each_agent_runs_its_own_default(tmp_path: Path) -> 
     assert "--model" not in validator
     assert launch("coder").returncode == 0
     coder_call = next(line for line in tmux_log.read_text().splitlines() if "-n coder" in line)
-    assert " -m " not in coder_call and " exec  --ignore-user-config" in coder_call
+    assert " -m " not in coder_call and " exec " in coder_call
+    assert "--ignore-user-config" not in coder_call
     assert "-c model=" not in coder_call
     row = read_chain(root / "tmux-lanes" / "coder-launch.jsonl")[-1]
     assert (row["model"], row["model_source"], row["model_config"]) == ("", "agent", [])
 
 
 def test_a_codex_lane_runs_the_model_the_operators_codex_config_selects(tmp_path: Path) -> None:
-    """A codex lane runs with --ignore-user-config so the operator's MCP servers, sandbox and
-    approvals stay out of it. That must not also drop their model for Codex's built-in one: with
-    no --model, the lane carries over only the model keys of their config, and records them."""
+    """A Codex lane retains operator settings and records its resolved model choice.
+    Explicit model routing remains stable without disabling the user's configuration."""
 
     codex_home = tmp_path / "codex-home"
     codex_home.mkdir()
@@ -7430,7 +7431,7 @@ def test_a_codex_lane_runs_the_model_the_operators_codex_config_selects(tmp_path
     assert launch("coder").returncode == 0
     coder_call = next(line for line in tmux_log.read_text().splitlines() if "-n coder" in line)
     carried_args = '-c model=\\"gpt-mine\\" -c model_reasoning_effort=\\"high\\"'
-    assert f" exec {carried_args} --ignore-user-config" in coder_call
+    assert f" exec {carried_args} " in coder_call
     assert "personal-mcp" not in coder_call and "danger-full-access" not in coder_call
     row = read_chain(root / "tmux-lanes" / "coder-launch.jsonl")[-1]
     assert row["model"] == "gpt-mine" and row["model_source"] == "codex-config"
@@ -7439,7 +7440,7 @@ def test_a_codex_lane_runs_the_model_the_operators_codex_config_selects(tmp_path
     # A named model wins over the config; the config's keys are then not carried over.
     assert launch("tester", "--model", "gpt-named").returncode == 0
     tester_call = next(line for line in tmux_log.read_text().splitlines() if "-n tester" in line)
-    assert " exec -m gpt-named --ignore-user-config" in tester_call
+    assert " exec -m gpt-named " in tester_call
     assert "gpt-mine" not in tester_call
 
 

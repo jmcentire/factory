@@ -57,16 +57,16 @@ def test_registry_lists_every_harness_the_lanes_accept() -> None:
         assert agents.harness(name).resumable
 
 
-def test_turn_cli_prints_nul_separated_argv(tmp_path: Path) -> None:
+def test_turn_cli_describes_native_terminal_without_print_mode(tmp_path: Path) -> None:
     out = subprocess.run(
         [sys.executable, str(REPO / "harness" / "agents.py"), "turn", "--agent", "claude",
          "--model", "claude-haiku-5-5", "--effort", "xhigh", "--cwd", str(tmp_path),
          "--extra-arg=--strict-mcp-config"],
         capture_output=True, check=True,
     ).stdout.decode().split("\0")
-    assert out[0] == "argv" and out[1] == "claude"
+    assert out[0] == "terminal" and out[1] == "claude"
     assert "claude-haiku-5-5" in out and "xhigh" in out and "--strict-mcp-config" in out
-    assert out[out.index("--output-format") + 1] == "stream-json"
+    assert "--output-format" not in out and "--print" not in out and "-p" not in out
 
 
 @pytest.mark.parametrize(("name", "flag"), [
@@ -80,12 +80,13 @@ def test_every_registry_harness_resumes_its_session(name: str, flag: str, tmp_pa
         assert made.argv[-1] == "--print"  # the prompt follows it
 
 
-def test_claude_ollama_is_bare_claude_code_on_the_loopback_server(tmp_path: Path) -> None:
+def test_claude_ollama_is_native_claude_code_on_the_loopback_server(tmp_path: Path) -> None:
     made = agents.harness("claude-ollama").turn(model="glm-5.3:cloud", effort="", cwd=tmp_path)
-    assert made.argv[:3] == ("claude", "-p", "--bare")
+    assert made.argv[0] == "claude"
+    assert "-p" not in made.argv and "--print" not in made.argv
     env = agents.harness("claude-ollama").seat_env("glm-5.3:cloud")
     assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:11434"
-    assert env["ANTHROPIC_API_KEY"] == "ollama"
+    assert "ANTHROPIC_API_KEY" not in env
     assert env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "glm-5.3:cloud"
     with pytest.raises(ValueError):
         agents.harness("claude-ollama").seat_env("")
@@ -115,8 +116,8 @@ def test_lane_setup_writes_only_admitted_variables(tmp_path: Path) -> None:
     config = Path(setup.argv[setup.argv.index("--mcp-config") + 1])
     assert json.loads(config.read_text())["mcpServers"] == {
         "kindex": {"command": SERVER["command"], "args": SERVER["args"], "env": SERVER["env"]}}
-    assert "--strict-mcp-config" in setup.argv
-    assert setup.argv[setup.argv.index("--setting-sources") + 1] == "project,local"
+    assert "--strict-mcp-config" not in setup.argv
+    assert "--setting-sources" not in setup.argv
     metered = agents.prepare_lane("claude", billing="metered", home=tmp_path / "m" / "home",
                                   model="", kindex_record=RECORD,
                                   env_file=tmp_path / "m" / "creds.env", environ=environ)
@@ -254,11 +255,26 @@ def test_plan_wrapper_refuses_api_route_before_child_execution(
         env_file = tmp_path / "creds.env"
         env_file.write_text(f"{variable}={secret}\n", encoding="utf-8")
         env_file.chmod(0o600)
-    with pytest.raises(ValueError, match="API-routing variables") as raised:
+    if agent == "claude" and source == "inherited":
+        setup = agents.prepare_lane("claude", billing="plan", home=tmp_path / "lane",
+                                    model="", kindex_record=RECORD,
+                                    env_file=tmp_path / "clean.env",
+                                    environ={"HOME": str(tmp_path), variable: secret})
+        assert variable not in setup.env
+        assert secret not in (tmp_path / "clean.env").read_text()
+        assert not marker.exists()
+        return
+    native_args = {}
+    if agent == "claude":
+        prompt = tmp_path / "prompt"
+        prompt.write_text("Synthetic native admission test")
+        native_args = {"prompt": prompt, "persistent": True, "run_root": tmp_path,
+                       "session_file": tmp_path / "session"}
+    with pytest.raises(ValueError, match="API-routing variables|credential file") as raised:
         lane_agent.run_lane(
             [sys.executable, "-c", f"from pathlib import Path; Path({str(marker)!r}).touch()"],
             slot="coder", log=tmp_path / "lane.log", exits=tmp_path / "exits.jsonl",
-            session_agent=agent, plan_only=True, env_file=env_file,
+            session_agent=agent, plan_only=True, env_file=env_file, **native_args,
         )
     assert variable in str(raised.value) and secret not in str(raised.value)
     assert not marker.exists()
@@ -288,25 +304,15 @@ def test_wrapper_records_the_session_as_soon_as_it_streams(tmp_path: Path) -> No
     assert session_file.stat().st_mode & 0o077 == 0
 
 
-def test_a_plan_lane_that_starts_on_api_billing_is_stopped(tmp_path: Path) -> None:
-    api_init = '{"type":"system","subtype":"init","apiKeySource":"ANTHROPIC_API_KEY",' \
-               '"session_id":"3ad997b3-721c-44df-9c17-e19d0f2617fc"}'
-    rc = lane_agent.run_lane(
-        _streaming_child([api_init, '{"type":"assistant"}']),
-        slot="coder", log=tmp_path / "lane.log", exits=tmp_path / "exits.jsonl",
-        session_agent="claude", session_file=tmp_path / "t", plan_only=True,
-    )
-    assert rc == lane_agent.BILLING_REFUSED
-    assert "per-use API billing" in (tmp_path / "lane.log").read_text()
-    exits = [json.loads(line) for line in (tmp_path / "exits.jsonl").read_text().splitlines()]
-    assert exits[-1]["rc"] == lane_agent.BILLING_REFUSED
-    # A metered lane is not stopped for the same line.
-    rc = lane_agent.run_lane(
-        [sys.executable, "-c", f"print({api_init!r})"],
-        slot="coder", log=tmp_path / "m.log", exits=tmp_path / "m.jsonl",
-        session_agent="claude", session_file=tmp_path / "m", plan_only=False,
-    )
-    assert rc == 0
+@pytest.mark.parametrize("plan_only", [True, False])
+def test_claude_never_falls_back_to_a_noninteractive_stream(tmp_path, plan_only):
+    with pytest.raises(ValueError, match="native terminal"):
+        lane_agent.run_lane(
+            _streaming_child(['{"type":"system","subtype":"init"}']),
+            slot="coder", log=tmp_path / "lane.log", exits=tmp_path / "exits.jsonl",
+            session_agent="claude", session_file=tmp_path / "t", plan_only=plan_only,
+        )
+    assert not (tmp_path / "exits.jsonl").exists()
 
 
 def _runner(stdout: str, rc: int = 0) -> lane_agent.Runner:
@@ -315,16 +321,20 @@ def _runner(stdout: str, rc: int = 0) -> lane_agent.Runner:
     return runner
 
 
-def test_claude_preflight_proves_a_plan_sign_in() -> None:
+def test_claude_preflight_proves_a_plan_sign_in(tmp_path: Path) -> None:
+    native = tmp_path / "claude"
+    native.write_text("#!/bin/sh\nexit 0\n")
+    native.chmod(0o755)
+    environ = {"HOME": str(tmp_path), "PATH": str(tmp_path)}
     plan = json.dumps({"loggedIn": True, "authMethod": "claude.ai", "apiKeySource": None})
-    assert lane_agent.preflight("claude", environ={}, runner=_runner(plan)) == \
+    assert lane_agent.preflight("claude", environ=environ, runner=_runner(plan)) == \
         "claude-plan:claude.ai"
     api = json.dumps({"loggedIn": True, "authMethod": "api_key",
                       "apiKeySource": "ANTHROPIC_API_KEY"})
     with pytest.raises(lane_agent.PreflightRefused, match="API key"):
-        lane_agent.preflight("claude", environ={}, runner=_runner(api))
+        lane_agent.preflight("claude", environ=environ, runner=_runner(api))
     with pytest.raises(lane_agent.PreflightRefused, match="not signed in"):
-        lane_agent.preflight("claude", environ={}, runner=_runner('{"loggedIn": false}'))
+        lane_agent.preflight("claude", environ=environ, runner=_runner('{"loggedIn": false}'))
 
 
 def test_muse_preflight_refuses_an_api_key_and_a_missing_sign_in(tmp_path: Path) -> None:

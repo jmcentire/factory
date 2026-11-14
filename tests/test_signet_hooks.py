@@ -182,7 +182,9 @@ def test_private_lane_preserves_only_explicit_guard_and_scoped_kindex(tmp_path, 
             "FACTORY_REQUIRE_SIGNET": "1", "FACTORY_SIGNET_CONTRACT": str(path),
             "FACTORY_SIGNET_DIGEST": expected})
     if name == "claude":
-        assert "--strict-mcp-config" in setup.argv
+        assert "--strict-mcp-config" not in setup.argv
+        assert "--setting-sources" not in setup.argv
+        assert "--mcp-config" in setup.argv
         location = pathlib.Path(setup.argv[setup.argv.index("--settings") + 1])
         setting = json.loads(location.read_text())
         assert setting["hooks"]["PreToolUse"][0]["hooks"][0]["onFailure"] == "block"
