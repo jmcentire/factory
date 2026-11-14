@@ -143,12 +143,14 @@ public API is still pre-1.0.
   lanes take no later message automatically: one is recorded `queued` and `held` and the
   operator is told to enter it in the lane's window. Until now doing so changed nothing:
   the message stayed held and every later message was answered `busy`, for good. Now,
-  when the session's own prompt report is exactly the held message (its text, or its text
-  followed by its mark), it becomes `observed` (`via: operator-entered`), its receipt is
-  recorded, and the next message is accepted. Other text, or other text carrying the
-  mark, settles nothing. Nothing is typed automatically and no claim of unattended
-  delivery is added. The message command now names the file holding the exact text to
-  enter. Run against Muse's echo provider; not against Antigravity.
+  when the session's own prompt report is exactly the held message followed by its own
+  mark, it becomes `observed` (`via: operator-entered`), its receipt is recorded, and the
+  next message is accepted. The lane writes that one entry to a file and the message
+  command names it. The words without the mark settle nothing: messages often share
+  their words, and a report of them cannot be told from an earlier one repeated; no
+  provider counter is taken as proof of a fresh submission. Nothing is typed
+  automatically and no claim of unattended delivery is added. Run against Muse's echo
+  provider; not against Antigravity.
 - An ended `cursor-agent` session is restarted by a lane message, with Cursor's own
   `--resume=<id>` and the message as its launch argument (`agent ... -- <message>`),
   because a resumed Cursor session that is given nothing reports nothing. The hand-over is

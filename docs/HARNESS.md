@@ -343,23 +343,33 @@ author and independently by the tester on 2026-11-13. It is converted, not accep
   answer or a wrap-up notice does not reach a Muse lane unattended. The Factory approves
   nothing and changes no hook or approval setting to get around this.
 - **A held message is delivered by a person, and then it settles.** `tmux_lane_message.sh`
-  answers a held message with exit 75, says it was not typed, and names the file that
-  holds its exact text (`<run>/dialogue/<message id>.txt`). The operator enters that text
-  in the lane's window when they judge the session ready. Nothing is typed for them and no
-  moment is chosen for them. When the session's own prompt report is exactly that message
-  (its text, or its text followed by its mark `[factory-message:<mark>]`), the message
-  becomes `observed` with `via: operator-entered`, its receipt goes into the dialogue
-  journal, `persistent_lane.py status` shows it, and the next message to the lane is
-  accepted (and held in its turn). The message command is not the way to look: once a
-  message is received, sending the same words again plans a new message. Until then a further message is answered `busy` and
-  names the held one. Other text the operator enters is theirs: it is counted as foreign
-  input and settles nothing, and so does other text that merely carries the mark.
+  answers a held message with exit 75, says it was not typed, and names its entry file
+  (`<slot>-held-<message id>.txt` in the lane's own directory, owner-only), which holds the
+  one thing that delivers it: the message followed by its own mark,
+  `[factory-message:<mark>]`. The operator pastes that entry in the lane's window when
+  they judge the session ready. Nothing is typed for them and no moment is chosen for
+  them. When the session's own prompt report is exactly that entry, the message becomes
+  `observed` with `via: operator-entered`, its receipt goes into the dialogue journal,
+  `persistent_lane.py status` shows it, the entry file is removed, and the next message to
+  the lane is accepted (and held in its turn). Until then a further message is answered
+  `busy` and names the held one.
+  **The words without the mark settle nothing.** Messages often have the same words (every
+  status request does), and a report of those words cannot be told from an earlier
+  submission reported again, or from a later model call of a turn already under way. The
+  mark is made from the session and the message's id, so a prompt that carries it was
+  submitted for that message and after it was held. No counter of the provider's is taken
+  as proof of a fresh submission. Also settling nothing: the entry of an earlier message,
+  a mark that is no message's, and the mark around other words. Each is the operator's own
+  input and is counted as foreign. The message command is not the way to look for the
+  receipt: once a message is received, the same words sent again are a new message.
   "Exactly" ignores line endings and whitespace at the two ends, and nothing else.
   Run against Muse Code 1.4.20 with its echo provider (no account, no model), through the
-  lane wrapper, 2026-11-14: other text left the message held; the exact two-line text,
-  pasted, settled it (`body`); the next message was then accepted and settled when
-  entered with its mark (`exact`); other text carrying a mark settled nothing. Before this
-  change the same steps left the first message held for good and every later one `busy`.
+  lane wrapper, 2026-11-14, with two messages of the same two-line words: the words alone
+  left the first held; its entry file, pasted, settled it and the file was removed; the
+  second was then accepted with a different mark; the first message's entry entered again,
+  the words alone, and the words with a mark that was nobody's each left the second held;
+  its own entry settled it. Before this change no entry settled anything: the first
+  message stayed held for good and every later one was `busy`.
   Not run: the message command itself against a Muse lane (the launcher needs Muse's
   account sign-in), or a signed-in model.
 - **Hooks beside the operator's.** The lane's observation hooks are the project file
@@ -447,17 +457,25 @@ and they are not the same thing:
   Muse). A later message is kept `queued` with the reason and left for a person to enter:
   a review, an answer or a wrap-up notice does not reach an Antigravity lane unattended.
 - **A held message is delivered by a person, and then it settles.** `tmux_lane_message.sh`
-  answers a held message with exit 75, says it was not typed, and names the file that
-  holds its exact text (`<run>/dialogue/<message id>.txt`). The operator enters that text
-  in the lane's window when they judge the session ready. Nothing is typed for them and no
-  moment is chosen for them. When the session's own prompt report is exactly that message
-  (its text, or its text followed by its mark `[factory-message:<mark>]`), the message
-  becomes `observed` with `via: operator-entered`, its receipt goes into the dialogue
-  journal, `persistent_lane.py status` shows it, and the next message to the lane is
-  accepted (and held in its turn). The message command is not the way to look: once a
-  message is received, sending the same words again plans a new message. Until then a further message is answered `busy` and
-  names the held one. Other text the operator enters is theirs: it is counted as foreign
-  input and settles nothing, and so does other text that merely carries the mark.
+  answers a held message with exit 75, says it was not typed, and names its entry file
+  (`<slot>-held-<message id>.txt` in the lane's own directory, owner-only), which holds the
+  one thing that delivers it: the message followed by its own mark,
+  `[factory-message:<mark>]`. The operator pastes that entry in the lane's window when
+  they judge the session ready. Nothing is typed for them and no moment is chosen for
+  them. When the session's own prompt report is exactly that entry, the message becomes
+  `observed` with `via: operator-entered`, its receipt goes into the dialogue journal,
+  `persistent_lane.py status` shows it, the entry file is removed, and the next message to
+  the lane is accepted (and held in its turn). Until then a further message is answered
+  `busy` and names the held one.
+  **The words without the mark settle nothing.** Messages often have the same words (every
+  status request does), and a report of those words cannot be told from an earlier
+  submission reported again, or from a later model call of a turn already under way. The
+  mark is made from the session and the message's id, so a prompt that carries it was
+  submitted for that message and after it was held. No counter of the provider's is taken
+  as proof of a fresh submission. Also settling nothing: the entry of an earlier message,
+  a mark that is no message's, and the mark around other words. Each is the operator's own
+  input and is counted as foreign. The message command is not the way to look for the
+  receipt: once a message is received, the same words sent again are a new message.
   "Exactly" ignores line endings and whitespace at the two ends, and nothing else.
   For Antigravity this is the same code as for Muse and was not run against Antigravity:
   only the mapping of its prompt report (`PreInvocation`, `lastUserInput`) to the text

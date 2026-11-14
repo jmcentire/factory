@@ -556,8 +556,18 @@ deliver_hosted() {
   case "$DELIVERY_RC:$DELIVERY_STATE" in
     75:*'"held":'*)
       # Recorded, not typed, and not going to be typed: say exactly that, and keep the
-      # not-delivered exit code so no caller takes it for a delivery.
-      echo "lane-message: $MESSAGE_ID is recorded for $RUN:$SLOT as queued and HELD, not delivered: this lane's program takes no later message automatically, nothing was typed and nothing will be. To deliver it, enter exactly the text of $RETAINED_MESSAGE in the lane's own window, at a moment you judge the session ready. When the session itself reports a prompt that is exactly that text, the message is recorded as received and later messages are accepted. Anything else you enter is yours and settles nothing. To see whether it has been received, read its state: harness/persistent_lane.py status --root $ROOT --slot $SLOT. Do not send it again: once it is received this command would plan a new message, not report this one" >&2
+      # not-delivered exit code so no caller takes it for a delivery. The one thing that
+      # delivers it is the message followed by its own mark, which the lane wrapper wrote to
+      # a file; the words alone would not tell a fresh submission from an old one reported
+      # again, so they settle nothing.
+      ENTER_FILE=$(printf '%s' "$DELIVERY_STATE" | "$FACTORY_PYTHON" -c \
+        'import json, sys; print(json.loads(sys.stdin.read()).get("enter_file") or "")' 2>/dev/null) || ENTER_FILE=""
+      if [ -n "$ENTER_FILE" ]; then
+        HOW="enter exactly the contents of $ENTER_FILE (the message followed by its mark) in the lane's own window"
+      else
+        HOW="enter the text of $RETAINED_MESSAGE followed by a space and its mark, [factory-message:<the token in the line above>], in the lane's own window"
+      fi
+      echo "lane-message: $MESSAGE_ID is recorded for $RUN:$SLOT as queued and HELD, not delivered: this lane's program takes no later message automatically, nothing was typed and nothing will be. To deliver it, $HOW, at a moment you judge the session ready. When the session itself reports exactly that prompt, the message is recorded as received and later messages are accepted. The message without its mark, or anything else you enter, is yours and settles nothing. To see whether it has been received, read its state: harness/persistent_lane.py status --root $ROOT --slot $SLOT. Do not send it again: once it is received this command would plan a new message, not report this one" >&2
       exit 75 ;;
   esac
   case "$DELIVERY_RC:$DELIVERY_STATE" in
