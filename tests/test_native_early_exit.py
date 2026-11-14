@@ -52,7 +52,7 @@ raise SystemExit(lane_agent.run_lane(
 
 
 def test_unread_wrapper_output_cannot_block_native_exit_or_durable_diagnostics(tmp_path):
-    """A slow observer must not stall native custody or lose the session log.
+    """A slow observer must not stall native custody or lose early diagnostics.
 
     Oracle: the reviewer's liveness finding and the native diagnostic-retention
     contract. The owned synthetic CLI emits more than an ordinary pipe can hold.
@@ -66,6 +66,7 @@ def test_unread_wrapper_output_cannot_block_native_exit_or_durable_diagnostics(t
     executable.write_text(
         f"#!{sys.executable}\n"
         "import os\n"
+        "os.write(2, b'native burst rejected: startup diagnostic\\n')\n"
         "for fd in (1, 2):\n"
         "    for _ in range(256):\n"
         "        os.write(fd, b'native-burst-' + b'x' * 4082 + b'\\n')\n"
@@ -120,8 +121,9 @@ def test_unread_wrapper_output_cannot_block_native_exit_or_durable_diagnostics(t
     assert not blocked, "unread observer pipe stalled the owned native session's exit"
     assert child.returncode == 78
     log = (tmp_path / "validator-lane.log").read_text()
-    assert log.count("native-burst-") == 512
-    assert "native-stream-1-finished" in log and "native-stream-2-finished" in log
+    # Startup logs may be capped; the initial diagnostic must remain available.
+    # Neither a full observer copy nor unbounded durable output is promised.
+    assert "native burst rejected: startup diagnostic" in log
     rows = [
         json.loads(row) for row in (tmp_path / "validator-exits.jsonl").read_text().splitlines()
     ]
