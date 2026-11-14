@@ -128,6 +128,13 @@ public API is still pre-1.0.
   Factory; `FACTORY_LANE_SANDBOX=off` is the explicit per-run choice that also passes
   `--dangerously-bypass-hook-trust`. Author lane only, not accepted, not resumable by the
   Factory; `codex` and `codex-ollama` still run `codex exec` (`docs/HARNESS.md`).
+- `tmux_lane_message.sh --native-session-file` is removed and refused by name. It handed an
+  exited interactive Codex session to `codex exec resume`, a non-interactive run, after
+  reading Codex's own session file. A `codex-interactive` lane that an earlier Factory
+  started with nothing hosting it is refused a message; its conversation is continued with
+  Codex's own `codex resume <session id>`, or a hosted session is started with
+  `tmux_lane.sh launch --replace-session`. The Factory does not yet restart an ended
+  interactive Codex session itself.
 - Antigravity coordinator seats no longer run print mode fed over stdin. A seat is still
   allowed: it starts as Antigravity's own interactive session in its window and is driven
   there, with a warning at start that wakes and messages are not delivered into it (a wake

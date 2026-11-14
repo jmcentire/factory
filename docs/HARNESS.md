@@ -437,6 +437,11 @@ through `lane_agent.py`. It is an author-lane adapter and is not accepted.
 - **Not resumable by the Factory.** `agents.py turn --agent codex-interactive --resume <id>`
   builds `codex resume <id>`, but no lane command restarts an ended session, so wrap-up
   and progress-review pauses are not offered.
+- **No `codex exec` behind it.** `tmux_lane_message.sh --native-session-file`, which handed
+  an exited interactive session to `codex exec resume` after reading Codex's own session
+  file, is removed and refused by name. A `codex-interactive` lane that an earlier Factory
+  started with nothing hosting it is refused a message for the same reason. To continue
+  such a conversation the operator uses Codex's own `codex resume <session id>`.
 
 ### Memory isolation, said plainly
 

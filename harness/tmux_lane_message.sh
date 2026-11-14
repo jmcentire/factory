@@ -54,11 +54,14 @@ VERDICT=""
 REVIEW_FILE=""
 MINUTES=""
 WAIT_IDLE=0
-NATIVE_SESSION_FILE=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --runs) RUNS_ARG="$2"; shift 2 ;;
-    --native-session-file) NATIVE_SESSION_FILE="$2"; shift 2 ;;
+    --native-session-file)
+      # Removed, and said so by name. It handed an exited interactive Codex session to
+      # `codex exec resume`, a non-interactive run, after reading Codex's own session file.
+      echo "lane-message: --native-session-file is no longer accepted: an interactive Codex lane is never continued through \`codex exec\`. Codex's own way to continue that conversation is \`codex resume <session id>\` in a window of your own; the Factory does not yet restart an ended interactive Codex session, and starts a hosted one with tmux_lane.sh launch --agent codex-interactive (--replace-session '<why>' for a slot that has one)" >&2
+      exit 64 ;;
     --question-id) QUESTION_ID="$2"; shift 2 ;;
     --answer-file) ANSWER_FILE="$2"; shift 2 ;;
     --basis) BASIS="$2"; shift 2 ;;
@@ -101,6 +104,11 @@ if active[0].get("agent") in {"claude", "claude-ollama", "cursor-agent", "muse",
         "lane-message: this lane was launched in print mode by an earlier Factory, and print "
         "mode is never used; start its native session with tmux_lane.sh launch "
         "--replace-session '<why>'")
+if active[0].get("agent") == "codex-interactive" and not persistent:
+    raise SystemExit(
+        "lane-message: this interactive Codex lane was started by an earlier Factory with "
+        "nothing hosting it, and an interactive lane is never continued through `codex exec`; "
+        "start its hosted session with tmux_lane.sh launch --replace-session '<why>'")
 if persistent:
     if turn.is_symlink() or not turn.is_file():
         raise SystemExit("lane-message: missing persistent turn record")
@@ -196,26 +204,8 @@ if state.get("status") in {"paused", "wrapping"}:
         raise SystemExit("lane-message: pause/wrap exit is unverified; refusing delivery")
 PY
 
-# Explicit native TUI -> exec handoff: only after the old process has exited. Never
-# inject text into the terminal or attach a second controller to a live conversation.
-if [ -n "$NATIVE_SESSION_FILE" ]; then
-  case "$(lane_pane_state)" in
-    1|missing) ;;
-    *) echo "lane-message: native TUI is still live; finish or stop its exact process before resume" >&2; exit 75 ;;
-  esac
-  "$FACTORY_PYTHON" - "$D" "$LAUNCHES" "$NATIVE_SESSION_FILE" "$THREAD_FILE" "$TURN_RECORD" <<'PYBIND' || exit 70
-import pathlib, sys
-sys.path.insert(0, sys.argv[1])
-from codex_lane_session import SessionError, bind_interactive_session
-try:
-    bind_interactive_session(*map(pathlib.Path, sys.argv[2:]))
-except (OSError, ValueError, SessionError) as error:
-    raise SystemExit(f"lane-message: {error}")
-PYBIND
-fi
-
 [ -f "$THREAD_FILE" ] && [ ! -L "$THREAD_FILE" ] || {
-  echo "lane-message: no retained session for $RUN:$SLOT yet (for an exited Codex TUI, pass --native-session-file with its original rollout; never replace the conversation to deliver a correction)" >&2
+  echo "lane-message: no retained session for $RUN:$SLOT yet (never replace the conversation to deliver a correction)" >&2
   exit 70
 }
 THREAD_ID=$(tr -d '\r\n' < "$THREAD_FILE")
@@ -582,11 +572,11 @@ SAFE_CODEX_HOME="${CODEX_HOME:-$SAFE_HOME/.codex}"
 LOCAL_ARGS=""
 if [ "$AGENT" = "codex-ollama" ]; then
   printf -v LOCAL_ARGS -- '--oss --local-provider ollama -m %q' "$MODEL"
-elif case "$AGENT" in codex|codex-interactive) true ;; *) false ;; esac && [ "${#MODEL_CONFIG[@]}" -eq 0 ] && [ -n "$MODEL" ]; then
+elif [ "$AGENT" = codex ] && [ "${#MODEL_CONFIG[@]}" -eq 0 ] && [ -n "$MODEL" ]; then
   printf -v LOCAL_ARGS -- '-m %q' "$MODEL"
 fi
 # A Codex lane launched with --effort recorded it (agents.py turn-record); resume at the same.
-if [ -f "$TURN_RECORD" ] && [ ! -L "$TURN_RECORD" ] && case "$AGENT" in codex|codex-interactive) true ;; *) false ;; esac; then
+if [ -f "$TURN_RECORD" ] && [ ! -L "$TURN_RECORD" ] && [ "$AGENT" = codex ]; then
   TURN_EFFORT=$("$FACTORY_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("effort",""))' "$TURN_RECORD")
   case "$TURN_EFFORT" in ""|minimal|low|medium|high|xhigh|max) ;; *) echo "lane-message: the turn record's effort is malformed" >&2; exit 70 ;; esac
   [ -z "$TURN_EFFORT" ] || LOCAL_ARGS="${LOCAL_ARGS:+$LOCAL_ARGS }-c model_reasoning_effort=$TURN_EFFORT"
@@ -623,7 +613,7 @@ if [ "$PANE_DEAD" = "0" ]; then
     echo "the retry reuses this planned message." >&2
     exit 75
   fi
-  case "$AGENT" in codex|codex-ollama|codex-interactive) ;; *)
+  case "$AGENT" in codex|codex-ollama) ;; *)
     echo "lane-message: $MESSAGE_ID planned but NOT delivered: a live $AGENT turn takes no queued message;" >&2
     echo "retry when '$0 $RUN $SENDER $SLOT idle' reports idle." >&2
     exit 75 ;;
@@ -658,7 +648,7 @@ elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
   # The resumed turn runs under the same lane wrapper as the launch, so it reaches the lane log
   # and records its end, and a fresh watcher is started for it below.
   case "$AGENT" in
-    codex|codex-ollama|codex-interactive)
+    codex|codex-ollama)
   # The resume runs sandboxed exactly as its launch did (the launch record's FACTORY_LANE_SANDBOX).
   RESUME_POLICY="--ask-for-approval never"
   [ "$LANE_SANDBOX" != off ] || RESUME_POLICY="--dangerously-bypass-approvals-and-sandbox"
@@ -732,7 +722,7 @@ import datetime, json, os, sys
 journal, run, role, slot, sender, kind, message_id, message, agent = sys.argv[1:]
 size = os.path.getsize(message)
 # Codex resumes read the turn from stdin; every registry harness takes it as one argv element.
-limit = None if agent in ("codex", "codex-ollama", "codex-interactive") else 131071
+limit = None if agent in ("codex", "codex-ollama") else 131071
 delivery = "stdin" if limit is None else ("file-pointer" if size > limit else "argv")
 row = json.dumps({
     "schema_version": "factory-tmux-lane-reopen/1",
@@ -776,5 +766,5 @@ fi
   --message-id "$MESSAGE_ID" --thread-id "$THREAD_ID" --transport "$TRANSPORT" >/dev/null
 # The activity feed is the Orchestrator's input; its own deliveries are not echoed back to it.
 
-case "$AGENT" in codex|codex-ollama|codex-interactive) VIA=Codex ;; *) VIA="$AGENT" ;; esac
+case "$AGENT" in codex|codex-ollama) VIA=Codex ;; *) VIA="$AGENT" ;; esac
 echo "lane-message: delivered $MESSAGE_ID to $RUN:$SLOT via $VIA $TRANSPORT"

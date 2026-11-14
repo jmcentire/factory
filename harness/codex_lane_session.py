@@ -4,8 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import datetime
-import hashlib
 import json
 import os
 import pathlib
@@ -185,76 +183,6 @@ def _write_thread(path: pathlib.Path, thread_id: str) -> None:
         os.fsync(parent)
     finally:
         os.close(parent)
-
-
-def bind_interactive_session(
-    launch_path: pathlib.Path, rollout: pathlib.Path,
-    thread_path: pathlib.Path, turn_path: pathlib.Path,
-) -> str:
-    """Recover the actual TUI conversation for exec resume, never a guessed session id.
-
-    The caller must first establish that the old pane has exited. Native metadata, the
-    assigned model and the exact slot prompt distinguish this launch from older conversations
-    in the same directory. Read only the bounded beginning needed for that binding.
-    """
-    launches = [json.loads(line) for line in _read_regular(launch_path).splitlines()]
-    active = [row for row in launches if row.get("status") == "active"]
-    if len(active) != 1 or active[0].get("agent") != "codex-interactive":
-        raise SessionError("native session binding requires one interactive Codex launch")
-    launch = active[0]
-    meta: dict = {}
-    context: dict = {}
-    matched_prompt = False
-    descriptor = os.open(rollout, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(descriptor, "rb") as stream:
-        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
-            raise SessionError("native rollout must be a regular file")
-        remaining = _MAX_PROMPT
-        while remaining > 0:
-            raw = stream.readline(remaining + 1)
-            remaining -= len(raw)
-            if not raw or remaining < 0:
-                break
-            row = json.loads(raw)
-            payload = row.get("payload", {})
-            if row.get("type") == "session_meta":
-                meta = payload
-            elif row.get("type") == "turn_context" and not context:
-                context = payload
-            elif row.get("type") == "response_item" and payload.get("role") == "user":
-                text = "\n".join(part.get("text", "") for part in payload.get("content", []))
-                digest = "sha256:" + hashlib.sha256(text.encode()).hexdigest()
-                matched_prompt |= digest == launch.get("prompt_digest")
-            if meta and context and matched_prompt:
-                break
-    session = meta.get("id")
-    if not isinstance(session, str) or not _THREAD.fullmatch(session):
-        raise SessionError("native rollout has no valid session identity")
-    if (meta.get("originator") != "codex-tui"
-            or meta.get("cwd") != launch.get("repository")
-            or context.get("cwd") != launch.get("repository")
-            or context.get("model") != launch.get("model")
-            or not matched_prompt):
-        raise SessionError("native rollout does not match this launch, model and exact prompt")
-    try:
-        started = datetime.datetime.fromisoformat(meta["timestamp"].replace("Z", "+00:00"))
-        launched = datetime.datetime.fromisoformat(launch["ts"].replace("Z", "+00:00"))
-        if started < launched:
-            raise ValueError("older session")
-    except (KeyError, TypeError, ValueError) as exc:
-        raise SessionError("native rollout predates this launch or has no timestamp") from exc
-    effort = context.get("effort", "")
-    if effort not in {"", "minimal", "low", "medium", "high", "xhigh", "max"}:
-        raise SessionError("native rollout effort is invalid")
-    # Launch retains the exec transport settings, including explicit policy hooks. Never
-    # synthesize an empty guard configuration during recovery of an older TUI launch.
-    record = json.loads(_read_regular(turn_path))
-    if (record.get("schema_version") != "factory-lane-turn/1"
-            or record.get("agent") != "codex" or record.get("model") != context["model"]
-            or record.get("effort") != effort):
-        raise SessionError("retained resume settings differ from the native conversation")
-    _write_thread(thread_path, session)
-    return session
 
 
 def run_turn(
