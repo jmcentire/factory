@@ -69,6 +69,8 @@ WAITING = "idle_prompt"
 #: that choice itself (``cl`` passes its own permissive flags).
 PERMISSION_FLAGS = ("--dangerously-skip-permissions", "--allow-dangerously-skip-permissions")
 PASTE_START, PASTE_END = b"\x1b[200~", b"\x1b[201~"
+#: A lane message's id, where one names a file or a launch argument's record.
+MESSAGE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}")
 EVENT_LIMIT = 4 * 1024 * 1024
 MESSAGE_LIMIT = 256 * 1024
 
@@ -268,6 +270,12 @@ class Plan:
     # nothing it reports, however fast, falls before it; rows an earlier process of the same
     # seat wrote fall before it and are never read as this start's.
     journal_offset: int = 0
+    # The record of files this start wrote into the lane's own repository (Cursor's project
+    # configuration), so exactly those are removed when the session ends; None: it wrote none.
+    manifest: pathlib.Path | None = None
+    # The first message, when it was given to the program as its launch argument instead of
+    # being typed later: its mark and the digests of what was given. None: nothing was.
+    launched: Mapping[str, str] | None = None
 
 
 def plan(arguments: Sequence[str], *, launcher: Launcher, directory: pathlib.Path, slot: str,
@@ -346,6 +354,588 @@ def _split_values(arguments: Sequence[str], flags: Sequence[str]) -> list[str]:
     return result
 
 
+# -- files a provider reads only from the project ------------------------------------------------
+
+#: Cursor reads lane-scoped hooks and MCP servers from these two files in its workspace and
+#: from nowhere else a lane may write. They are the lane's for as long as its session runs.
+CURSOR_HOOKS = ".cursor/hooks.json"
+CURSOR_MCP = ".cursor/mcp.json"
+#: Cursor's project permission file: the one place a rule for the lane's own server can go.
+CURSOR_CLI = ".cursor/cli.json"
+#: Banned for Cursor: its print mode.
+BANNED_CURSOR_FLAGS = ("-p", "--print", "--output-format")
+
+
+CURSOR_PROJECT_FILES = (CURSOR_HOOKS, CURSOR_MCP, CURSOR_CLI)
+#: Text only a lane's own generated file carries: the observation hook's command, and the
+#: lane server's name. A target project's own Cursor files hold neither.
+_LANE_MARKS = {CURSOR_HOOKS: (b"native_session.py", b"--dialect"),
+               CURSOR_MCP: (b"lane-kindex",),
+               CURSOR_CLI: (b"Mcp(lane-kindex:",)}
+
+
+#: Muse Code runs a project's hooks from this file, beside the operator's own, once the
+#: workspace is trusted (observed 2026-11-13 on Muse Code 1.4.20 with its echo provider, by
+#: me and independently by the tester). It is the lane's for as long as its session runs.
+MUSE_HOOKS = ".muse/hooks.json"
+MUSE_PROJECT_FILES = (MUSE_HOOKS,)
+_LANE_MARKS[MUSE_HOOKS] = (b"native_session.py", b"--dialect")
+#: Antigravity loads a plugin it finds in a trusted workspace's ``.agents/plugins/<name>/``:
+#: its ``hooks.json`` beside the operator's hooks, and the servers in its ``mcp_config.json``
+#: beside the operator's (observed 2026-11-13 on agy 1.5.8, by me and independently by the
+#: tester, with no ``plugins.json`` and nothing installed). The directory is the lane's for as
+#: long as its session runs.
+AGY_PLUGIN = ".agents/plugins/lane"
+AGY_MANIFEST = f"{AGY_PLUGIN}/plugin.json"
+AGY_HOOKS = f"{AGY_PLUGIN}/hooks.json"
+AGY_MCP = f"{AGY_PLUGIN}/mcp_config.json"
+AGY_PROJECT_FILES = (AGY_MANIFEST, AGY_HOOKS, AGY_MCP)
+_LANE_MARKS[AGY_HOOKS] = (b"native_session.py", b"--dialect")
+#: Codex runs a trusted project's hooks from this file beside the operator's own (observed
+#: 2026-11-13 on codex-cli 0.167.0, interactive, on the operator's ChatGPT sign-in). It is
+#: the lane's for as long as its session runs.
+CODEX_HOOKS = ".codex/hooks.json"
+CODEX_PROJECT_FILES = (CODEX_HOOKS,)
+_LANE_MARKS[CODEX_HOOKS] = (b"native_session.py", b"--dialect")
+#: The project files a lane of each agent writes into its own clone, and what to call them.
+PROJECT_FILES: Mapping[str, tuple[str, ...]] = {"cursor-agent": CURSOR_PROJECT_FILES,
+                                                "muse": MUSE_PROJECT_FILES,
+                                                "agy": AGY_PROJECT_FILES,
+                                                "codex-interactive": CODEX_PROJECT_FILES}
+PROJECT_LABEL = {"cursor-agent": "Cursor", "muse": "Muse", "agy": "Antigravity",
+                 "codex-interactive": "Codex"}
+#: Directories a lane owns outright: anything else in one is the target project's, and the
+#: lane does not add its files beside it.
+PROJECT_OWNED_DIRS: Mapping[str, tuple[str, ...]] = {"agy": (AGY_PLUGIN,)}
+
+
+def _sha(data: bytes) -> str:
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def project_collisions(workspace: pathlib.Path,
+                       relatives: Sequence[str] = CURSOR_PROJECT_FILES,
+                       owned: Sequence[str] = ()) -> list[str]:
+    """What in ``workspace`` already occupies the paths a lane would write, in words.
+
+    For a launcher to ask before it reserves anything: a path that exists here is the target
+    project's own file (a lane's own leftovers are cleared first, by their manifest), and a
+    link on the way is not written through. ``install_project_files`` makes the same
+    refusal for a caller that did not ask.
+    """
+
+    root = workspace.resolve()
+    found: list[str] = []
+    for relative in relatives:
+        target = root / relative
+        parent = target.parent
+        if parent.is_symlink():
+            reason = f"{parent.relative_to(root)} is a link"
+        elif target.is_symlink():
+            reason = f"{relative} is a link"
+        elif target.exists():
+            reason = f"{relative} already exists and is the target project's own file"
+        else:
+            continue
+        if reason not in found:
+            found.append(reason)
+    for directory in owned:
+        held = root / directory
+        if held.is_symlink():
+            found.append(f"{directory} is a link")
+        elif held.is_dir():
+            names = {pathlib.PurePosixPath(relative).name for relative in relatives
+                     if relative.startswith(directory + "/")}
+            other = sorted(entry.name for entry in held.iterdir() if entry.name not in names)
+            if other:
+                found.append(f"{directory} already exists and holds the target project's own "
+                             f"{', '.join(other[:5])}")
+    return found
+
+
+def lane_file_in_candidate(relative: str, data: bytes, manifests: Sequence[pathlib.Path] = (),
+                           *, marks: bool = True) -> str:
+    """Why ``data`` at ``relative`` in a candidate is a lane's own project file, or "".
+
+    By what it contains (the lane's hook command, the lane server's name), or by being
+    byte-for-byte a file some lane's manifest recorded writing. These words can also
+    appear in a project's own configuration, so a caller asks this only about a file that
+    is new or changed since the run began, never about one the target already held, and
+    passes ``marks=False`` for a path the target had before, where only a recorded digest
+    is evidence.
+    """
+
+    wanted = _LANE_MARKS.get(relative) if marks else None
+    if wanted and all(mark in data for mark in wanted):
+        return "it holds a lane's own hook command or lane server"
+    digest = _sha(data)
+    for manifest in manifests:
+        try:
+            if digest in _manifest(manifest).values():
+                return f"it is the file recorded in {manifest.name}"
+        except (OSError, ValueError):
+            continue
+    return ""
+
+
+def _manifest(path: pathlib.Path) -> dict[str, str]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    if not isinstance(value, dict) or not all(
+            isinstance(key, str) and isinstance(item, str) for key, item in value.items()):
+        raise ValueError(f"{path.name} is malformed; refusing to guess which project files "
+                         "this lane wrote")
+    return value
+
+
+def install_project_files(workspace: pathlib.Path, files: Mapping[str, bytes],
+                          manifest: pathlib.Path,
+                          reads: str = "lane hooks and the lane's Kindex") -> None:
+    """Write lane configuration into the lane's own repository without touching the target's.
+
+    A path that already exists is the target project's file unless this lane's manifest
+    recorded writing exactly those bytes; a target's file is never edited, merged into or
+    replaced, so its presence refuses the start. Every file written is recorded with its
+    digest before it is written, listed in ``.git/info/exclude`` so no commit carries it,
+    and removed by ``remove_project_files``. Nothing outside ``workspace`` is written.
+    """
+
+    workspace = workspace.resolve()
+    recorded = _manifest(manifest)
+    planned: dict[str, str] = {}
+    for relative, data in files.items():
+        target = workspace / relative
+        ancestors = [ancestor for ancestor in target.parents if workspace in ancestor.parents]
+        if (any(ancestor.is_symlink() for ancestor in ancestors) or target.is_symlink()
+                or workspace not in target.resolve().parents):
+            raise ValueError(f"{relative} in the lane's repository is a link; refusing to write "
+                             "through it")
+        if target.exists():
+            mine = recorded.get(str(target))
+            if mine is None or _sha(target.read_bytes()) != mine:
+                raise ValueError(
+                    f"the lane's repository already has {relative}, which is the target "
+                    "project's own file and is not edited or replaced. This provider reads "
+                    f"{reads} only from that path, so the lane "
+                    "cannot run as a native session in this repository")
+        planned[str(target)] = _sha(data)
+    _write_private(manifest, json.dumps({**recorded, **planned}, sort_keys=True))
+    exclude = workspace / ".git" / "info" / "exclude"
+    if (workspace / ".git").is_dir() and not (workspace / ".git").is_symlink():
+        exclude.parent.mkdir(exist_ok=True)
+        present = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+        missing = [f"/{relative}" for relative in files
+                   if f"/{relative}" not in present.splitlines()]
+        if missing:
+            with exclude.open("a", encoding="utf-8") as stream:
+                stream.write(("" if present.endswith("\n") or not present else "\n")
+                             + "".join(line + "\n" for line in missing))
+    for relative, data in files.items():
+        target = workspace / relative
+        # Outermost first, so each directory this start creates is recorded as created.
+        for ancestor in reversed([a for a in target.parents if workspace in a.parents]):
+            if not ancestor.exists():
+                ancestor.mkdir()
+                planned[str(ancestor) + "/"] = "directory"
+        temporary = target.with_name(f".{target.name}.factory-{os.getpid()}")
+        temporary.write_bytes(data)
+        os.replace(temporary, target)
+    _write_private(manifest, json.dumps({**recorded, **planned}, sort_keys=True))
+
+
+def remove_project_files(manifest: pathlib.Path) -> list[str]:
+    """Remove exactly the files this lane wrote and still holds unchanged; report the rest.
+
+    A recorded file whose bytes changed is left where it is and named in the result: someone
+    else wrote it since, and it is theirs to keep.
+
+    Nothing is reached through a link. Every recorded path was canonical when it was written
+    (no link anywhere above it), so if the directory it sits in no longer resolves to
+    itself, some directory on the way has since been replaced by a link, and what the path
+    now names is somewhere else: possibly a file outside the lane's repository that happens
+    to hold the same bytes. Such an entry is neither read nor removed. It is kept in the
+    record and named in the result, for a person to look at.
+    """
+
+    recorded = _manifest(manifest)
+    kept: dict[str, str] = {}
+    left: list[str] = []
+
+    def moved(path: pathlib.Path) -> bool:
+        try:
+            return path.parent.resolve(strict=True) != path.parent
+        except OSError:
+            return False  # the directory is gone, and so is anything that was in it
+
+    for name, digest in sorted(recorded.items(), reverse=True):  # files before directories
+        path = pathlib.Path(name)
+        if moved(path):
+            kept[name] = digest
+            left.append(name)
+            continue
+        if digest == "directory":
+            if path.is_symlink():
+                kept[name] = digest  # replaced by a link: not this lane's directory any more
+                left.append(name)
+                continue
+            try:
+                path.rmdir()  # only if this lane's files were all it held
+            except OSError:
+                # Still holding a file this lane wrote and left: remember the directory,
+                # so it goes when that file does. Otherwise it holds the target's files.
+                if any(other.startswith(name) for other in kept):
+                    kept[name] = digest
+            continue
+        if path.is_symlink() or not path.exists():
+            continue
+        if _sha(path.read_bytes()) != digest:
+            kept[name] = digest
+            left.append(name)
+            continue
+        path.unlink()
+    if recorded:
+        _write_private(manifest, json.dumps(kept, sort_keys=True))
+    return left
+
+
+def cursor_plan(arguments: Sequence[str], *, executable: str, directory: pathlib.Path,
+                slot: str, workspace: pathlib.Path, python: str = sys.executable) -> Plan:
+    """A native start of Cursor's interactive agent.
+
+    ``arguments`` exclude the executable. The lane's observation hooks, any required hook
+    file the registry left in ``directory`` (``cursor-hooks.json``) and the lane's Kindex
+    (``cursor-mcp.json``) and its one permission rule (``cursor-cli.json``) go into the
+    project files Cursor reads, beside the operator's own user-level hooks, servers and
+    permissions, which are untouched and still apply. Cursor chooses its
+    own conversation id, so it is known only when the session reports starting, unless
+    ``--resume=<id>`` names one.
+    """
+
+    args = _split_values(list(arguments), ("--resume",))
+    banned = sorted({_flag(part) for part in args if _flag(part) in BANNED_CURSOR_FLAGS})
+    if banned:
+        raise ValueError("native Cursor session refuses " + ", ".join(banned))
+    session = ""
+    resumed = "--resume" in args
+    if resumed:
+        index = args.index("--resume")
+        session = args[index + 1] if index + 1 < len(args) else ""
+        try:
+            uuid.UUID(session)
+        except ValueError:
+            raise ValueError("native conversation id missing or malformed") from None
+        # The one spelling proven against the interactive program.
+        args[index:index + 2] = [f"--resume={session}"]
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    journal = directory / f"{slot}-native-events.jsonl"
+    if journal.is_symlink():
+        raise ValueError("symlinked native event journal")
+    command = shlex.join([python, str(pathlib.Path(__file__).resolve()), "hook",
+                          "--dialect", "cursor", "--journal", str(journal)])
+    hooks: dict[str, list[object]] = {event: [{"command": command}] for event in CURSOR_EVENTS}
+    extra = directory / "cursor-hooks.json"
+    if extra.exists():
+        document = json.loads(extra.read_text(encoding="utf-8"))
+        required = document.get("hooks") if isinstance(document, dict) else None
+        if not isinstance(required, dict):
+            raise ValueError("required Cursor hook file is malformed")
+        for event, entries in required.items():
+            if not isinstance(entries, list):
+                raise ValueError("required Cursor hook file is malformed")
+            hooks[event] = [*entries, *hooks.get(event, [])]
+    files = {CURSOR_HOOKS: json.dumps({"version": 1, "hooks": hooks}, sort_keys=True).encode()}
+    for source, relative in (("cursor-mcp.json", CURSOR_MCP), ("cursor-cli.json", CURSOR_CLI)):
+        if (directory / source).exists():
+            files[relative] = (directory / source).read_bytes()
+    manifest = directory / f"{slot}-project-files.json"
+    install_project_files(workspace, files, manifest)
+    try:
+        offset = journal.stat().st_size
+    except FileNotFoundError:
+        offset = 0
+    name = pathlib.Path(executable).name
+    return Plan((executable, *args), session, resumed, journal,
+                Launcher(name, "executable", path=executable), offset, manifest)
+
+
+#: Muse subcommands a lane's session may begin with. Everything else Muse offers as a
+#: subcommand is another program (its headless `exec`, its servers), never a lane's session.
+_MUSE_SESSION_WORDS = ("resume",)
+
+
+def muse_plan(arguments: Sequence[str], *, executable: str, directory: pathlib.Path,
+              slot: str, workspace: pathlib.Path, prompt: str,
+              python: str = sys.executable) -> Plan:
+    """A native start of Muse Code's interactive session.
+
+    ``arguments`` exclude the executable. What was observed of Muse Code 1.4.20 on its echo
+    provider decides the shape, and nothing here goes beyond it:
+
+    - The lane's observation hooks go into ``.muse/hooks.json`` in the lane's own clone,
+      which Muse runs beside the operator's own hooks. A per-run ``-c hooks=...`` would
+      replace the operator's hooks, so it is refused here in any argument.
+    - Muse reports a session's start only when its first prompt is submitted, so the first
+      message is given as the launch argument (after ``--``, so its text is never read as an
+      option), with its mark. Later messages are typed.
+    - Muse chooses its own session id; its start report names it.
+    - ``resume <id>`` continues that same session. Muse refuses a prompt beside ``resume``
+      and a resumed session reports nothing until one is typed, so a resumed session is
+      given no launch argument and stays ``starting`` until it reports.
+    """
+
+    args = _split_values(list(arguments), ("--config",))
+    if args and not args[0].startswith("-") and args[0] not in _MUSE_SESSION_WORDS:
+        raise ValueError(f"native Muse session refuses the `{args[0]}` subcommand; a lane is "
+                         "Muse's interactive session")
+    for index, part in enumerate(args):
+        value = ""
+        if part in ("-c", "--config") and index + 1 < len(args):
+            value = args[index + 1]
+        elif part.startswith("-c") and not part.startswith("--") and len(part) > 2:
+            value = part[2:]
+        if re.match(r"\s*hooks\b", value):
+            raise ValueError("native Muse session refuses a per-run `hooks` setting: it "
+                             "replaces the operator's own hooks")
+    session = ""
+    resumed = args[:1] == ["resume"]
+    if resumed:
+        session = args[1] if len(args) > 1 else ""
+        try:
+            uuid.UUID(session)
+        except ValueError:
+            raise ValueError("native session id missing or malformed") from None
+    if "\0" in prompt:
+        raise ValueError("the first message holds a NUL byte and cannot be a launch argument")
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    journal = directory / f"{slot}-native-events.jsonl"
+    if journal.is_symlink():
+        raise ValueError("symlinked native event journal")
+    command = shlex.join([python, str(pathlib.Path(__file__).resolve()), "hook",
+                          "--dialect", "muse", "--journal", str(journal)])
+    # The one file shape observed to load: an outer "hooks" object keyed by Claude Code's
+    # event names. The same object without the outer key is silently ignored by Muse.
+    hooks = {event: [{"matcher": "*", "hooks": [{"type": "command", "command": command}]}]
+             for event in HOOK_EVENTS}
+    manifest = directory / f"{slot}-project-files.json"
+    install_project_files(
+        workspace, {MUSE_HOOKS: json.dumps({"hooks": hooks}, sort_keys=True).encode()},
+        manifest, reads="a lane's hooks, beside the operator's,")
+    try:
+        offset = journal.stat().st_size
+    except FileNotFoundError:
+        offset = 0
+    launched = None
+    if not resumed:
+        # A mark of this start's own: the session id it would otherwise derive from is not
+        # known until Muse reports it.
+        mark = message_token(uuid.uuid4().hex, "initial")
+        given = marked(prompt, mark)
+        args += ["--", given]
+        launched = {"token": mark, "typed_sha256": text_digest(given),
+                    "body_sha256": text_digest(prompt)}
+    name = pathlib.Path(executable).name
+    return Plan((executable, *args), session, resumed, journal,
+                Launcher(name, "executable", path=executable), offset, manifest, launched)
+
+
+#: Refused for Antigravity: its print mode, a launch prompt of someone else's (the lane
+#: gives the first message itself), and "the most recent conversation", which names none.
+BANNED_AGY_FLAGS = ("-p", "--print", "--prompt", "--output-format", "--input-format",
+                    "--json-schema", "--print-timeout", "-i", "--prompt-interactive",
+                    "-c", "--continue")
+
+
+def agy_plan(arguments: Sequence[str], *, executable: str, directory: pathlib.Path,
+             slot: str, workspace: pathlib.Path, prompt: str,
+             python: str = sys.executable) -> Plan:
+    """A native start of Antigravity's interactive session.
+
+    ``arguments`` exclude the executable. The shape follows what was observed of agy 1.5.8
+    with a prompt its own hook stopped before any model call, and goes no further:
+
+    - The lane's hooks and its Kindex are a plugin in the lane's own clone,
+      ``.agents/plugins/lane/``, which Antigravity loads beside the operator's hooks and
+      servers once the workspace is trusted. Nothing of the operator's is written; no
+      ``agy mcp add`` and no ``agy plugin install``, which write the operator's files.
+    - Antigravity reports a session's start with its first prompt, so the first message is
+      given at launch (``--prompt-interactive``, the interactive program's own option),
+      with its mark. That option at launch was not among the observations; the typed form
+      was.
+    - Antigravity chooses its own conversation id; its start report names it.
+    - ``--conversation <id>`` continues that conversation and gets no launch message.
+    """
+
+    args = _split_values(list(arguments), ("--conversation",))
+    banned = sorted({_flag(part) for part in args if _flag(part) in BANNED_AGY_FLAGS})
+    if banned:
+        raise ValueError("native Antigravity session refuses " + ", ".join(banned))
+    session = ""
+    resumed = "--conversation" in args
+    if resumed:
+        index = args.index("--conversation")
+        session = args[index + 1] if index + 1 < len(args) else ""
+        try:
+            uuid.UUID(session)
+        except ValueError:
+            raise ValueError("native conversation id missing or malformed") from None
+    if "\0" in prompt:
+        raise ValueError("the first message holds a NUL byte and cannot be a launch argument")
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    journal = directory / f"{slot}-native-events.jsonl"
+    if journal.is_symlink():
+        raise ValueError("symlinked native event journal")
+    manifest = directory / f"{slot}-project-files.json"
+    recorded = set(_manifest(manifest))
+    plugin = workspace.resolve() / AGY_PLUGIN
+    if plugin.is_dir() and not plugin.is_symlink():
+        foreign = sorted(entry.name for entry in plugin.iterdir()
+                         if str(entry) not in recorded)
+        if foreign:
+            raise ValueError(
+                f"the lane's repository already has {AGY_PLUGIN} holding "
+                f"{', '.join(foreign[:5])}, which is the target project's own plugin and is "
+                "not edited or added to, so the lane cannot run as a native session in this "
+                "repository")
+    command = shlex.join([python, str(pathlib.Path(__file__).resolve()), "hook",
+                          "--dialect", "agy", "--journal", str(journal)])
+    # The shape Antigravity's own validator accepts and its loader ran: a named hook set,
+    # then event, then a list of command handlers.
+    hooks = {"lane": {event: [{"type": "command", "command": command}]
+                      for event in AGY_EVENTS}}
+    servers: dict[str, object] = {}
+    source = directory / "agy-mcp.json"
+    if source.exists():
+        document = json.loads(source.read_text(encoding="utf-8"))
+        found = document.get("mcpServers") if isinstance(document, dict) else None
+        if not isinstance(found, dict):
+            raise ValueError("the lane's Antigravity server file is malformed")
+        servers = found
+    files = {
+        AGY_MANIFEST: json.dumps({
+            "name": "lane", "version": "1",
+            "description": "Factory lane: its report hooks and its own Kindex. Written for "
+                           "this session and removed when it ends."}, sort_keys=True).encode(),
+        AGY_HOOKS: json.dumps(hooks, sort_keys=True).encode(),
+        AGY_MCP: json.dumps({"mcpServers": servers}, sort_keys=True).encode(),
+    }
+    install_project_files(workspace, files, manifest,
+                          reads="a lane's plugin (its hooks and its Kindex)")
+    try:
+        offset = journal.stat().st_size
+    except FileNotFoundError:
+        offset = 0
+    launched = None
+    if not resumed:
+        mark = message_token(uuid.uuid4().hex, "initial")
+        given = marked(prompt, mark)
+        args += ["--prompt-interactive", given]
+        launched = {"token": mark, "typed_sha256": text_digest(given),
+                    "body_sha256": text_digest(prompt)}
+    name = pathlib.Path(executable).name
+    return Plan((executable, *args), session, resumed, journal,
+                Launcher(name, "executable", path=executable), offset, manifest, launched)
+
+
+#: Codex subcommands a lane's session may begin with. Its others are different programs
+#: (the non-interactive `exec` and `review`, its servers), never a lane's session.
+_CODEX_SESSION_WORDS = ("resume",)
+
+
+def codex_plan(arguments: Sequence[str], *, executable: str, directory: pathlib.Path,
+               slot: str, workspace: pathlib.Path, prompt: str,
+               python: str = sys.executable, message_id: str = "") -> Plan:
+    """A native start of Codex's interactive session.
+
+    ``arguments`` exclude the executable. The shape follows what was observed of codex-cli
+    0.167.0 on 2026-11-13 and goes no further:
+
+    - The lane's report hooks go into ``.codex/hooks.json`` in the lane's own clone, which
+      Codex runs beside the operator's hooks when the folder is trusted and the hooks are.
+      Neither trust is given here: Codex asks about the folder in the lane's window, and it
+      skips a hook it has not been told to trust unless the caller passed Codex's own
+      per-run option for that.
+    - The first message is the launch argument (after ``--``), with its mark; Codex reported
+      it as the session's first prompt.
+    - Codex chooses its own session id. Its hooks also report sessions of its own that this
+      lane did not start (a memory-writing agent was seen), so the lane's session is the one
+      whose prompt report carries the launch mark, not the first to report a start.
+    - ``resume ... <id>`` continues that session, on the same session id, and its hooks go
+      on reporting it (observed 2026-11-14). A resumed session that is given nothing reports
+      nothing, not even a start, and was seen to stop on Codex's own update question. One
+      given a message, as its launch argument or through ``codex queue``, reported its start
+      and that message at once. So the message that restarts a session is its launch
+      argument: with ``message_id`` the resumed start carries ``prompt`` after the session
+      id, marked for that message, and the plan says so in ``launched``. The session id is
+      the last argument before it, as in Codex's own usage line. Without ``message_id`` a
+      resumed start is given nothing, as before.
+    """
+
+    args = list(arguments)
+    if args and not args[0].startswith("-") and args[0] not in _CODEX_SESSION_WORDS:
+        raise ValueError(f"native Codex session refuses the `{args[0]}` subcommand; a lane is "
+                         "Codex's interactive session")
+    session = ""
+    resumed = args[:1] == ["resume"]
+    if resumed:
+        session = args[-1] if len(args) > 1 else ""
+        try:
+            uuid.UUID(session)
+        except ValueError:
+            raise ValueError("native session id missing or malformed: `resume` takes its "
+                             "options first and the session id last") from None
+    if message_id and (not resumed or not MESSAGE_ID.fullmatch(message_id)):
+        raise ValueError("a launch message id names the message that restarts a resumed "
+                         "session, and nothing else")
+    if "\0" in prompt:
+        raise ValueError("the first message holds a NUL byte and cannot be a launch argument")
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    journal = directory / f"{slot}-native-events.jsonl"
+    if journal.is_symlink():
+        raise ValueError("symlinked native event journal")
+    command = shlex.join([python, str(pathlib.Path(__file__).resolve()), "hook",
+                          "--dialect", "codex", "--journal", str(journal)])
+    hooks = {event: [{"hooks": [{"type": "command", "command": command}]}]
+             for event in CODEX_EVENTS}
+    manifest = directory / f"{slot}-project-files.json"
+    install_project_files(
+        workspace, {CODEX_HOOKS: json.dumps({"hooks": hooks}, sort_keys=True).encode()},
+        manifest, reads="a lane's hooks, beside the operator's,")
+    try:
+        offset = journal.stat().st_size
+    except FileNotFoundError:
+        offset = 0
+    launched = None
+    if not resumed:
+        mark = message_token(uuid.uuid4().hex, "initial")
+        given = marked(prompt, mark)
+        args += ["--", given]
+        launched = {"token": mark, "typed_sha256": text_digest(given),
+                    "body_sha256": text_digest(prompt)}
+    elif message_id:
+        # The mark a typed or queued message of this id would carry in this session.
+        mark = message_token(session, message_id)
+        given = marked(prompt, mark)
+        args += ["--", given]
+        launched = {"token": mark, "typed_sha256": text_digest(given),
+                    "body_sha256": text_digest(prompt), "message_id": message_id}
+    name = pathlib.Path(executable).name
+    return Plan((executable, *args), session, resumed, journal,
+                Launcher(name, "executable", path=executable), offset, manifest, launched)
+
+
+def codex_queue(executable: str, session: str, text: str) -> list[str]:
+    """Codex's own command for giving a message to an existing session: nothing is typed.
+
+    Observed: it answers "Queued message <id> for thread <id>" and the running session then
+    reports the message as a prompt of its own. Sent while the session was between turns;
+    what happens to one queued during a turn was not observed.
+    """
+
+    return [executable, "queue", "--thread", session, "--message", text]
+
+
 def child_environment(environ: Mapping[str, str]) -> dict[str, str]:
     """The program's environment: the wrapper's, without any API-billing variable."""
 
@@ -354,26 +944,84 @@ def child_environment(environ: Mapping[str, str]) -> dict[str, str]:
 
 # -- hook journal --------------------------------------------------------------------------------
 
-def record_hook(journal: pathlib.Path, payload: Mapping[str, object]) -> None:
+#: Cursor's hook events, as its interactive CLI sent them from a project .cursor/hooks.json
+#: (independent proof, 2026-11-13, cursor-agent 2026.11.05 and 2026.11.13), under the names
+#: the journal uses. Its conversation id is its session id and is what ``--resume=`` takes;
+#: ``generation_id`` is one prompt's, and that prompt's stop report carries the same one.
+CURSOR_EVENTS = {"sessionStart": "SessionStart", "beforeSubmitPrompt": "UserPromptSubmit",
+                 "stop": "Stop", "sessionEnd": "SessionEnd"}
+#: Muse Code's hooks use Claude Code's event names and nearly its payload (observed, as
+#: above): ``session_id``, ``prompt``, ``last_assistant_message``, ``stop_hook_active``, and a
+#: ``turn_id`` that a prompt's report and that turn's stop report share.
+DIALECTS = ("claude", "cursor", "muse", "agy", "codex")
+#: Codex's hooks use Claude Code's event names and nearly its payload (observed, as above):
+#: ``session_id``, ``prompt``, ``last_assistant_message``, ``stop_hook_active`` and a
+#: ``turn_id`` a prompt's report and its turn's stop report share.
+CODEX_EVENTS = ("SessionStart", "UserPromptSubmit", "Stop", "SessionEnd")
+#: Antigravity's hook events (observed, as above), under the names the journal uses. Its
+#: payload is camelCase: ``hookEventName``, ``conversationId``, ``lastUserInput``.
+#: ``PreInvocation`` runs before every model call, each time carrying the latest user
+#: message, so it is the prompt report; a turn with several model calls sends several.
+AGY_EVENTS = {"SessionStart": "SessionStart", "PreInvocation": "UserPromptSubmit",
+              "Stop": "Stop"}
+
+
+def record_hook(journal: pathlib.Path, payload: Mapping[str, object],
+                dialect: str = "claude") -> None:
     """Append one native lifecycle fact. Prompt text is kept as a digest, never verbatim."""
 
     event = payload.get("hook_event_name")
+    session = payload.get("session_id")
+    if dialect == "cursor":
+        event = CURSOR_EVENTS.get(str(event))
+        session = payload.get("conversation_id")
+    if dialect == "agy":
+        event = AGY_EVENTS.get(str(payload.get("hookEventName")))
+        session = payload.get("conversationId")
     if event not in HOOK_EVENTS:
         return
     row: dict[str, object] = {
         "ts": datetime.datetime.now(datetime.UTC).isoformat(timespec="milliseconds"),
         "event": event,
-        "session_id": str(payload.get("session_id") or ""),
+        "session_id": str(session or ""),
     }
+    if dialect == "cursor":
+        if isinstance(payload.get("generation_id"), str):
+            row["generation"] = payload["generation_id"]
+        if event == "Stop" and isinstance(payload.get("status"), str):
+            row["status"] = payload["status"]
+    if dialect in ("muse", "codex") and isinstance(payload.get("turn_id"), str):
+        row["generation"] = payload["turn_id"]
+    if dialect == "agy" and event == "UserPromptSubmit":
+        # One user message is reported once per model call. The number is kept so a reader
+        # can tell the calls apart; the driver counts a repeated message once.
+        payload = {**payload, "prompt": payload.get("lastUserInput")}
+        if isinstance(payload.get("invocationNum"), int):
+            row["invocation"] = payload["invocationNum"]
+        else:
+            row["invocation"] = -1
+    if dialect == "agy" and event == "Stop":
+        # Antigravity's own words about this stop, kept as it gave them. None of them is
+        # taken to mean the session is ready for input.
+        for name, key in (("fully_idle", "fullyIdle"),
+                          ("continuation_active", "continuationActive")):
+            if isinstance(payload.get(key), bool):
+                row[name] = payload[key]
+        reason = payload.get("terminationReason")
+        if isinstance(reason, str):
+            row["termination_reason"] = reason[:200]
+        # A real turn's stop report carried no model text under any name (observed), so the
+        # journal has none for Antigravity and a lane's done line is not seen from it.
     if event == "UserPromptSubmit" and isinstance(payload.get("prompt"), str):
         reported = str(payload["prompt"])
         row["prompt_sha256"] = text_digest(reported)
         row["tokens"] = TOKEN.findall(reported)[:16]
     if event == "SessionStart" and isinstance(payload.get("source"), str):
         row["source"] = payload["source"]
-    if event == "Stop":
+    if event == "Stop" and dialect in ("claude", "muse", "codex"):
         # True when this stop ends a continuation another stop hook asked for.
         row["stop_hook_active"] = payload.get("stop_hook_active") is True
+    if event == "Stop":
         if isinstance(payload.get("last_assistant_message"), str):
             row["last_assistant_message"] = str(payload["last_assistant_message"])[:MESSAGE_LIMIT]
     if event == "Notification":
@@ -709,6 +1357,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     hook = sub.add_parser("hook", help="append the lifecycle event on stdin to a journal")
     hook.add_argument("--journal", type=pathlib.Path, required=True)
+    hook.add_argument("--dialect", choices=DIALECTS, default="claude")
+    check = sub.add_parser("check-project", help="say what in a workspace already occupies "
+                           "the project paths a lane of --agent would write; exit 70 if "
+                           "anything")
+    check.add_argument("--workspace", type=pathlib.Path, required=True)
+    check.add_argument("--agent", choices=sorted(PROJECT_FILES), default="cursor-agent")
+    clean = sub.add_parser("clean-project", help="remove the project files a lane wrote, by "
+                           "its manifest; prints any it left because they had changed")
+    clean.add_argument("--manifest", type=pathlib.Path, required=True)
     sub.add_parser("launcher", help="print how Claude Code starts here: name, NUL, via, NUL")
     args = parser.parse_args(argv)
     if args.command == "hook":
@@ -716,9 +1373,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             payload = json.loads(sys.stdin.buffer.read(8 * 1024 * 1024))
             if isinstance(payload, dict):
-                record_hook(args.journal, payload)
+                record_hook(args.journal, payload, args.dialect)
         except (OSError, ValueError):
             pass
+        if args.dialect in ("cursor", "agy"):
+            # Cursor reads a JSON reply; the empty object changes nothing (the form proven).
+            # Antigravity reads one too: the empty object names no decision, no injected
+            # step and no termination. Claude Code adds a prompt hook's output to the
+            # model's context, so it gets none.
+            sys.stdout.write("{}")
+        return 0
+    if args.command == "check-project":
+        try:
+            found = project_collisions(args.workspace, PROJECT_FILES[args.agent],
+                                       PROJECT_OWNED_DIRS.get(args.agent, ()))
+        except OSError as error:
+            print(f"native-session: {error}", file=sys.stderr)
+            return 70
+        if found:
+            print("; ".join(found))
+            return 70
+        return 0
+    if args.command == "clean-project":
+        try:
+            left = remove_project_files(args.manifest)
+        except (OSError, ValueError) as error:
+            print(f"native-session: {error}", file=sys.stderr)
+            return 70
+        for name in left:
+            print(name)
         return 0
     try:
         chosen = resolve_launcher(os.environ)

@@ -66,11 +66,12 @@ def test_policy_redaction_is_preserved_not_dropped():
 def test_cursor_mcp_event_preserves_server_identity_for_kindex(tmp_path):
     _, _, value = fixed(tmp_path)
     payload = {"hook_event_name": "beforeMCPExecution", "tool_name": "search",
-               "mcp_server_name": "kindex", "tool_input": '{"query":"factory controls"}'}
+               "mcp_server_name": "lane-kindex", "tool_input": '{"query":"factory controls"}'}
     normalized = hooks.normalize("cursor-agent", payload, value)
     assert normalized["tool_name"] == "mcp__kindex__search"
     assert normalized["tool_input"] == {"query": "factory controls"}
-    for bad in ({"mcp_server_name": ""}, {"tool_name": "mcp__other__search"}):
+    for bad in ({"mcp_server_name": ""}, {"mcp_server_name": "kindex"},
+                {"tool_name": "mcp__other__search"}):
         with pytest.raises(ValueError):
             hooks.normalize("cursor-agent", {**payload, **bad}, value)
 
@@ -189,7 +190,8 @@ def test_private_lane_preserves_only_explicit_guard_and_scoped_kindex(tmp_path, 
         setting = json.loads(location.read_text())
         assert setting["hooks"]["PreToolUse"][0]["hooks"][0]["onFailure"] == "block"
     else:
-        location = pathlib.Path(setup.env["CURSOR_CONFIG_DIR"]) / "hooks.json"
+        assert "CURSOR_CONFIG_DIR" not in setup.env and "HOME" not in setup.env
+        location = lane / "cursor-hooks.json"
         setting = json.loads(location.read_text())
         assert setting["hooks"]["preToolUse"][0]["failClosed"] is True
         matcher = setting["hooks"]["preToolUse"][0]["matcher"]

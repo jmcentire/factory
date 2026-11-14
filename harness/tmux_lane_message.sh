@@ -54,11 +54,14 @@ VERDICT=""
 REVIEW_FILE=""
 MINUTES=""
 WAIT_IDLE=0
-NATIVE_SESSION_FILE=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --runs) RUNS_ARG="$2"; shift 2 ;;
-    --native-session-file) NATIVE_SESSION_FILE="$2"; shift 2 ;;
+    --native-session-file)
+      # Removed, and said so by name. It handed an exited interactive Codex session to
+      # `codex exec resume`, a non-interactive run, after reading Codex's own session file.
+      echo "lane-message: --native-session-file is no longer accepted: an interactive Codex lane is never continued through \`codex exec\`. A hosted codex-interactive lane whose session has ended is restarted by an ordinary lane message, with Codex's own resume, and needs no option. A Codex TUI that an earlier Factory started with nothing hosting it is not continued by the Factory: continue it yourself with \`codex resume <session id>\` in a window of your own, or start a hosted session with tmux_lane.sh launch --agent codex-interactive --replace-session '<why>'" >&2
+      exit 64 ;;
     --question-id) QUESTION_ID="$2"; shift 2 ;;
     --answer-file) ANSWER_FILE="$2"; shift 2 ;;
     --basis) BASIS="$2"; shift 2 ;;
@@ -96,18 +99,29 @@ active = [row for row in rows if row.get("status") == "active"]
 if len(active) != 1 or type(active[0].get("persistent", False)) is not bool:
     raise SystemExit("lane-message: retained launch transport is missing or malformed")
 persistent = active[0].get("persistent", False)
-if active[0].get("agent") in {"claude", "claude-ollama"} and not persistent:
+if active[0].get("agent") in {"claude", "claude-ollama", "cursor-agent", "muse", "agy"} and not persistent:
     raise SystemExit(
-        "lane-message: this Claude lane was launched in print mode by an earlier Factory, and "
-        "print mode is never used; start its native session with tmux_lane.sh launch "
+        "lane-message: this lane was launched in print mode by an earlier Factory, and print "
+        "mode is never used; start its native session with tmux_lane.sh launch "
         "--replace-session '<why>'")
+if active[0].get("agent") == "codex" and not persistent:
+    raise SystemExit(
+        "lane-message: this Codex lane was started as `codex exec` by an earlier Factory, and "
+        "an author lane on Codex is never continued through `codex exec`; start its hosted "
+        "session with tmux_lane.sh launch --replace-session '<why>'")
+if active[0].get("agent") == "codex-interactive" and not persistent:
+    raise SystemExit(
+        "lane-message: this interactive Codex lane was started by an earlier Factory with "
+        "nothing hosting it, and an interactive lane is never continued through `codex exec`; "
+        "start its hosted session with tmux_lane.sh launch --replace-session '<why>'")
 if persistent:
     if turn.is_symlink() or not turn.is_file():
         raise SystemExit("lane-message: missing persistent turn record")
     record = json.loads(turn.read_text())
     if (record.get("schema_version") != "factory-lane-turn/1"
             or record.get("agent") != active[0].get("agent")
-            or record.get("agent") not in {"claude", "claude-ollama", "agy"}
+            or record.get("agent") not in {"claude", "claude-ollama", "cursor-agent", "muse",
+                                           "agy", "codex-interactive"}
             or record.get("persistent") is not True):
         raise SystemExit("lane-message: launch and turn transports disagree")
 elif turn.is_file() and not turn.is_symlink():
@@ -160,7 +174,7 @@ fi
 
 # A pending stop is durable across deliveries. Refuse before any queue/resume/respawn effect;
 # the watcher starting after a model has resumed is too late to enforce this hold.
-"$FACTORY_PYTHON" - "$TMUX_ROOT/$SLOT-watch.json" "$D" "$ROOT" "$SLOT" "$PERSISTENT" "$KIND" <<'PY' || exit 70
+"$FACTORY_PYTHON" - "$TMUX_ROOT/$SLOT-watch.json" "$D" "$ROOT" "$SLOT" <<'PY' || exit 70
 import json, os, pathlib, stat, sys
 path = pathlib.Path(sys.argv[1])
 try:
@@ -182,12 +196,8 @@ except (OSError, ValueError) as error:
 if state.get("status") == "stopping":
     raise SystemExit("lane-message: requested stop is unverified; refusing delivery")
 if state.get("status") in {"paused", "wrapping"}:
-    if sys.argv[5] == "1":
-        if state.get("status") == "paused" and sys.argv[6] == "review":
-            # No effect here: content guards and persistent_review.prepare below must
-            # validate this exact pause, verdict and stopped tree before any release.
-            raise SystemExit(0)
-        raise SystemExit("lane-message: persistent lane remains held; explicit supervisor release required")
+    # The watcher ended the lane's process to pause it or wrap it up. That is so for a hosted
+    # session as for any other lane, and nothing continues it before the exit is verified.
     sys.path.insert(0, sys.argv[2])
     from lane_watchdog import LaneWatch
     watch = LaneWatch(root=pathlib.Path(sys.argv[3]), slot=sys.argv[4])
@@ -195,26 +205,8 @@ if state.get("status") in {"paused", "wrapping"}:
         raise SystemExit("lane-message: pause/wrap exit is unverified; refusing delivery")
 PY
 
-# Explicit native TUI -> exec handoff: only after the old process has exited. Never
-# inject text into the terminal or attach a second controller to a live conversation.
-if [ -n "$NATIVE_SESSION_FILE" ]; then
-  case "$(lane_pane_state)" in
-    1|missing) ;;
-    *) echo "lane-message: native TUI is still live; finish or stop its exact process before resume" >&2; exit 75 ;;
-  esac
-  "$FACTORY_PYTHON" - "$D" "$LAUNCHES" "$NATIVE_SESSION_FILE" "$THREAD_FILE" "$TURN_RECORD" <<'PYBIND' || exit 70
-import pathlib, sys
-sys.path.insert(0, sys.argv[1])
-from codex_lane_session import SessionError, bind_interactive_session
-try:
-    bind_interactive_session(*map(pathlib.Path, sys.argv[2:]))
-except (OSError, ValueError, SessionError) as error:
-    raise SystemExit(f"lane-message: {error}")
-PYBIND
-fi
-
 [ -f "$THREAD_FILE" ] && [ ! -L "$THREAD_FILE" ] || {
-  echo "lane-message: no retained session for $RUN:$SLOT yet (for an exited Codex TUI, pass --native-session-file with its original rollout; never replace the conversation to deliver a correction)" >&2
+  echo "lane-message: no retained session for $RUN:$SLOT yet (never replace the conversation to deliver a correction)" >&2
   exit 70
 }
 THREAD_ID=$(tr -d '\r\n' < "$THREAD_FILE")
@@ -243,6 +235,15 @@ wall_cap = (active[0].get("caps") or {}).get("wall_cap_s")
 if wall_cap is not None and (type(wall_cap) is not int or wall_cap <= 0):
     raise SystemExit("lane-message: retained wall cap is malformed")
 values += (str(wall_cap) if wall_cap is not None else "",)
+# A hosted session's own directory, the first prompt's file and the operator's launcher, as the
+# launch recorded them (launches before a restart was possible recorded no "native" entry).
+native = active[0].get("native")
+if native is not None and not (
+        isinstance(native, dict) and isinstance(native.get("dir"), str) and native["dir"]
+        and (native.get("claude_launcher") is None or isinstance(native["claude_launcher"], str))):
+    raise SystemExit("lane-message: retained native session fields are malformed")
+values += ((native or {}).get("dir", ""), (native or {}).get("claude_launcher") or "",
+           active[0].get("prompt_path") or "")
 # The Codex config overrides that selected the lane model (launches before 0.8.15 have none).
 config = active[0].get("model_config") or []
 if not isinstance(config, list):
@@ -278,6 +279,15 @@ IFS= read -r -d '' BOUNDARY_RECORD <&3 || {
 IFS= read -r -d '' WALL_CAP_S <&3 || {
   echo "lane-message: retained wall cap is missing or malformed" >&2; exit 70;
 }
+IFS= read -r -d '' NATIVE_DIR <&3 || {
+  echo "lane-message: retained native session directory is missing or malformed" >&2; exit 70;
+}
+IFS= read -r -d '' NATIVE_LAUNCHER <&3 || {
+  echo "lane-message: retained launcher is missing or malformed" >&2; exit 70;
+}
+IFS= read -r -d '' LAUNCH_PROMPT <&3 || {
+  echo "lane-message: retained first prompt path is missing or malformed" >&2; exit 70;
+}
 MODEL_CONFIG=()
 while IFS= read -r -d '' OVERRIDE <&3; do MODEL_CONFIG+=("$OVERRIDE"); done
 exec 3<&-
@@ -306,7 +316,7 @@ if [ "$BOUNDARY_RECORD" != null ]; then
   printf -v BOUNDARY_CODEX_ARGS ' --boundary-record %q' "$BOUNDARY_RECORD"
 fi
 case "$AGENT" in
-  codex|codex-ollama|codex-interactive) ;;
+  codex-ollama|codex-interactive) ;;
   cursor-agent|claude|claude-ollama|agy|muse|prime-agent)
     [ -f "$TURN_RECORD" ] && [ ! -L "$TURN_RECORD" ] || {
       echo "lane-message: the $AGENT lane has no turn record to resume it by; launch a new --round instead" >&2; exit 70;
@@ -517,7 +527,9 @@ else:
         stream.write(raw); stream.flush(); os.fsync(stream.fileno())
 PY
 
-if [ "$PERSISTENT" = 1 ]; then
+# Give one planned message to a hosted session through its own lane server, and say what the
+# session itself reported. Always exits.
+deliver_hosted() {
   # The retained native process owns its input. Never replace its process; the driver verifies
   # process/session identity and returns success only for the native client's own
   # acknowledgement. Asking again reports the same message's state and never sends it twice:
@@ -535,11 +547,27 @@ if [ "$PERSISTENT" = 1 ]; then
     fi
     [ "$DELIVERY_RC" = 75 ] || exit "$DELIVERY_RC"
     case "$DELIVERY_STATE" in *'"state": "busy"'*) [ "$ATTEMPT" -lt 5 ] || break ;; esac
+    # A lane whose program takes no later message automatically answers "queued" with
+    # "held" at once and for good: waiting changes nothing, so do not wait.
+    case "$DELIVERY_STATE" in *'"held":'*) break ;; esac
     [ "$ATTEMPT" = 60 ] || sleep 0.25
   done
   [ -z "$DELIVERY_STATE" ] || printf '%s\n' "$DELIVERY_STATE"
+  case "$DELIVERY_RC:$DELIVERY_STATE" in
+    75:*'"held":'*)
+      # Recorded, not typed, and not going to be typed: say exactly that, and keep the
+      # not-delivered exit code so no caller takes it for a delivery.
+      echo "lane-message: $MESSAGE_ID is recorded for $RUN:$SLOT as queued and HELD, not delivered: this lane's program takes no later message automatically, nothing was typed and nothing will be. Enter the message in the lane's own window to deliver it. Do not resend it; its state: harness/persistent_lane.py status --root $ROOT --slot $SLOT" >&2
+      exit 75 ;;
+  esac
+  case "$DELIVERY_RC:$DELIVERY_STATE" in
+    75:*'"state": "busy"'*)
+      # Not given at all: the session could not take it now, for the reason it printed.
+      echo "lane-message: $RUN:$SLOT is busy (its reason is in the line above) and was NOT given $MESSAGE_ID, which stays planned. Run this command again later: the same id is never given twice" >&2
+      exit 75 ;;
+  esac
   if [ "$DELIVERY_RC" != 0 ]; then
-    echo "lane-message: $RUN:$SLOT has not reported receiving $MESSAGE_ID, so it is not recorded as delivered. Do not resend it: the same id is never sent twice, and a message typed while the session works waits in the program's own input queue until the session reports it. Its state: harness/persistent_lane.py status --root $ROOT --slot $SLOT" >&2
+    echo "lane-message: $RUN:$SLOT has not reported receiving $MESSAGE_ID, so it is not recorded as delivered. Do not resend it: the same id is never given twice, and a message already given to the session waits in the program's own input queue until the session reports it. Its state: harness/persistent_lane.py status --root $ROOT --slot $SLOT" >&2
     exit "$DELIVERY_RC"
   fi
   case "$DELIVERY_STATE" in
@@ -555,6 +583,53 @@ if [ "$PERSISTENT" = 1 ]; then
       echo "lane-message: delivered $MESSAGE_ID to $RUN:$SLOT via $AGENT persistent" ;;
   esac
   exit 0
+}
+
+# A hosted session is the lane's own process in its pane. While it runs, a message goes into it.
+# Once it has ended (it finished, it was closed, or the watcher ended it for a review pause or a
+# wrap-up), the same conversation is restarted in the pane with the program's own resume, if the
+# registry says the Factory can restart that program; otherwise the message is refused and
+# stays planned. A session is never replaced to deliver a message.
+HOSTED_RESUME=0
+# How long a restarted session is given to report starting before this command stops waiting.
+HOSTED_START_WAIT_S=90
+if [ "$PERSISTENT" = 1 ]; then
+  case "$(lane_pane_state)" in
+    0) deliver_hosted ;;
+    1|missing)
+      DESCRIBED=$("$FACTORY_PYTHON" "$D/agents.py" describe --agent "$AGENT" | tr '\0' ' ') || exit 70
+      case "$DESCRIBED" in
+        resumable*) ;;
+        *)
+          echo "lane-message: $RUN:$SLOT's $AGENT session has ended, and the Factory cannot restart a $AGENT session, so $MESSAGE_ID is planned and NOT delivered. Continue the conversation yourself with the program's own resume in a window of your own, or start a new hosted session with tmux_lane.sh launch --replace-session '<why>'" >&2
+          exit 70 ;;
+      esac
+      [ -n "$NATIVE_DIR" ] && [ -n "$LAUNCH_PROMPT" ] || {
+        echo "lane-message: $RUN:$SLOT's $AGENT session has ended, and its launch (by an earlier Factory) did not record what a restart needs, so $MESSAGE_ID is planned and NOT delivered. Start a new hosted session with tmux_lane.sh launch --replace-session '<why>'" >&2
+        exit 70
+      }
+      if [ "$AGENT" = codex-interactive ]; then
+        # Codex takes the message that restarts it as its launch argument. One an earlier
+        # wrapper already gave, whatever became of it, does not restart the session again.
+        GIVEN=$("$FACTORY_PYTHON" - "$TMUX_ROOT/$SLOT-persistent.json" "$MESSAGE_ID" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+try:
+    record = (json.loads(path.read_text()).get("deliveries") or {}).get(sys.argv[2]) \
+        if path.is_file() and not path.is_symlink() else None
+except (OSError, ValueError, AttributeError):
+    raise SystemExit("lane-message: the lane's delivery record cannot be read")
+print(record.get("state", "") if isinstance(record, dict) and record.get("state") != "queued" else "")
+PY
+        ) || exit 70
+        [ -z "$GIVEN" ] || {
+          echo "lane-message: $MESSAGE_ID was already given to $RUN:$SLOT's session by an earlier start (recorded $GIVEN) and is never given twice, so it cannot restart the ended session. A message with other content, or from another sender, can; or start a new session with tmux_lane.sh launch --replace-session '<why>'" >&2
+          exit 75
+        }
+      fi
+      HOSTED_RESUME=1 ;;
+    *) echo "lane-message: cannot determine whether $RUN:$WINDOW is live" >&2; exit 70 ;;
+  esac
 fi
 
 SAFE_HOME="${HOME:?lane-message: HOME is required for Codex authentication}"
@@ -571,11 +646,12 @@ SAFE_CODEX_HOME="${CODEX_HOME:-$SAFE_HOME/.codex}"
 LOCAL_ARGS=""
 if [ "$AGENT" = "codex-ollama" ]; then
   printf -v LOCAL_ARGS -- '--oss --local-provider ollama -m %q' "$MODEL"
-elif case "$AGENT" in codex|codex-interactive) true ;; *) false ;; esac && [ "${#MODEL_CONFIG[@]}" -eq 0 ] && [ -n "$MODEL" ]; then
+elif [ "$AGENT" = codex-interactive ] && [ "${#MODEL_CONFIG[@]}" -eq 0 ] && [ -n "$MODEL" ]; then
   printf -v LOCAL_ARGS -- '-m %q' "$MODEL"
 fi
-# A Codex lane launched with --effort recorded it (agents.py turn-record); resume at the same.
-if [ -f "$TURN_RECORD" ] && [ ! -L "$TURN_RECORD" ] && case "$AGENT" in codex|codex-interactive) true ;; *) false ;; esac; then
+# A Codex lane launched with --effort recorded it (agents.py turn-record); its ended hosted
+# session is restarted at the same, with the launch's own guard configuration.
+if [ -f "$TURN_RECORD" ] && [ ! -L "$TURN_RECORD" ] && [ "$AGENT" = codex-interactive ]; then
   TURN_EFFORT=$("$FACTORY_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("effort",""))' "$TURN_RECORD")
   case "$TURN_EFFORT" in ""|minimal|low|medium|high|xhigh|max) ;; *) echo "lane-message: the turn record's effort is malformed" >&2; exit 70 ;; esac
   [ -z "$TURN_EFFORT" ] || LOCAL_ARGS="${LOCAL_ARGS:+$LOCAL_ARGS }-c model_reasoning_effort=$TURN_EFFORT"
@@ -612,7 +688,7 @@ if [ "$PANE_DEAD" = "0" ]; then
     echo "the retry reuses this planned message." >&2
     exit 75
   fi
-  case "$AGENT" in codex|codex-ollama|codex-interactive) ;; *)
+  case "$AGENT" in codex-ollama) ;; *)
     echo "lane-message: $MESSAGE_ID planned but NOT delivered: a live $AGENT turn takes no queued message;" >&2
     echo "retry when '$0 $RUN $SENDER $SLOT idle' reports idle." >&2
     exit 75 ;;
@@ -644,10 +720,22 @@ elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
     "$SAFE_HOME" "$SAFE_USER" "$LANE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
     "$FACTORY_RUNS_ROOT" "$ROOT"
   ENV_PREFIX+="${LANE_ENV_ASSIGN:+ $LANE_ENV_ASSIGN}"
+  if [ "$HOSTED_RESUME" = 1 ]; then
+    # As at launch: the run's tmux server, and the command the operator starts Claude Code
+    # with, which is the launch's own and never whatever this shell happens to export.
+    printf -v SOCKET_ENV " FACTORY_TMUX_SOCKET=%q" "$FACTORY_TMUX_SOCKET"
+    ENV_PREFIX+="$SOCKET_ENV"
+    if [ -n "$NATIVE_LAUNCHER" ]; then
+      printf -v LAUNCHER_ENV " FACTORY_CLAUDE_LAUNCHER=%q" "$NATIVE_LAUNCHER"
+      ENV_PREFIX+="$LAUNCHER_ENV"
+    fi
+  fi
   # The resumed turn runs under the same lane wrapper as the launch, so it reaches the lane log
   # and records its end, and a fresh watcher is started for it below.
   case "$AGENT" in
-    codex|codex-ollama|codex-interactive)
+    codex-ollama)
+  # The one lane agent still continued through `codex exec` (--oss): Codex on a local Ollama
+  # model has not been run interactively.
   # The resume runs sandboxed exactly as its launch did (the launch record's FACTORY_LANE_SANDBOX).
   RESUME_POLICY="--ask-for-approval never"
   [ "$LANE_SANDBOX" != off ] || RESUME_POLICY="--dangerously-bypass-approvals-and-sandbox"
@@ -656,6 +744,23 @@ elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
     "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
     "$RETAINED_MESSAGE" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$WINDOW" "$BOUNDARY_CODEX_ARGS" "$RESUME_ARGS" "$RESUME_POLICY" "$REPOSITORY" \
     'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_C" "$THREAD_ID" ;;
+    codex-interactive)
+      # Reached only to restart an ended hosted session (an unhosted one was refused above).
+      # Codex's own `resume`, options first and the session id last, with this message as
+      # its launch argument: a resumed Codex session that is given nothing reports nothing
+      # (native_session.codex_plan). The wrapper records the hand-over before the program
+      # exists, under this message's id, so it is never given twice.
+      RESUME_POLICY="--ask-for-approval never"
+      CODEX_HOOK_TRUST_ARG=""
+      if [ "$LANE_SANDBOX" = off ]; then
+        RESUME_POLICY="--dangerously-bypass-approvals-and-sandbox"
+        CODEX_HOOK_TRUST_ARG="--dangerously-bypass-hook-trust"
+      fi
+      printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q --persistent --run-root %q --native-dir %q%s --session-agent codex-interactive --session-file %q --prompt-arg %q --launch-message-id %q -- codex resume --no-daemon --no-alt-screen %s %s %s -C %q -c %q -c %q -c %q %s %q' \
+        "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_agent.py" "$SLOT" "$LANE_LOG" "$LANE_EXITS" \
+        "$ROOT" "$NATIVE_DIR" "$BOUNDARY_MODEL_ARGS" "$THREAD_FILE" "$RETAINED_MESSAGE" "$MESSAGE_ID" \
+        "$RESUME_POLICY" "$CODEX_HOOK_TRUST_ARG" "$RESUME_ARGS" "$REPOSITORY" \
+        'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_C" "$THREAD_ID" ;;
     *)
       # A registry harness resumes its own session with the arguments, env file and billing it
       # launched with (its turn record); the wrapper keeps recording the session and billing.
@@ -678,19 +783,32 @@ PY
       TURN_EXTRA=()
       while IFS= read -r -d '' PART <&5; do TURN_EXTRA+=("--extra-arg=$PART"); done
       exec 5<&-
+      HOSTED_TURN_ARGS=()
+      [ "$HOSTED_RESUME" != 1 ] || HOSTED_TURN_ARGS=(--persistent)
       TURN=()
       while IFS= read -r -d '' PART; do TURN+=("$PART"); done < <(
         "$FACTORY_PYTHON" "$D/agents.py" turn --agent "$AGENT" --model "$TURN_MODEL" \
           --effort "$TURN_EFFORT" --cwd "$REPOSITORY" --resume "$THREAD_ID" \
+          ${HOSTED_TURN_ARGS[@]+"${HOSTED_TURN_ARGS[@]}"} \
           ${TURN_EXTRA[@]+"${TURN_EXTRA[@]}"})
       [ "${#TURN[@]}" -ge 2 ] || { echo "lane-message: the agent registry built no resume turn" >&2; exit 70; }
       QUOTED_TURN=""
       for PART in "${TURN[@]:1}"; do printf -v QUOTED_TURN '%s %q' "$QUOTED_TURN" "$PART"; done
       PLAN_FLAG=""
       [ "$TURN_BILLING" != plan ] || PLAN_FLAG="--plan-only"
+      if [ "$HOSTED_RESUME" = 1 ]; then
+        # The same hosted session, restarted: the wrapper keeps the conversation's delivery
+        # record, so its first prompt (named here as at launch) is never given again, and
+        # this message is given below, once the session reports that it has started.
+        printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q --persistent --run-root %q --native-dir %q%s --env-file %q --session-agent %q --session-file %q %s --prompt-arg %q --%s' \
+          "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_agent.py" "$SLOT" "$LANE_LOG" "$LANE_EXITS" \
+          "$ROOT" "$NATIVE_DIR" \
+          "$BOUNDARY_MODEL_ARGS" "$TURN_ENV_FILE" "$AGENT" "$THREAD_FILE" "$PLAN_FLAG" "$LAUNCH_PROMPT" "$QUOTED_TURN"
+      else
       printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q%s --env-file %q --session-agent %q --session-file %q %s --prompt-arg %q --%s' \
         "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_agent.py" "$SLOT" "$LANE_LOG" "$LANE_EXITS" \
-        "$BOUNDARY_MODEL_ARGS" "$TURN_ENV_FILE" "$AGENT" "$THREAD_FILE" "$PLAN_FLAG" "$RETAINED_MESSAGE" "$QUOTED_TURN" ;;
+        "$BOUNDARY_MODEL_ARGS" "$TURN_ENV_FILE" "$AGENT" "$THREAD_FILE" "$PLAN_FLAG" "$RETAINED_MESSAGE" "$QUOTED_TURN"
+      fi ;;
   esac
   if [ "$AUTHOR_CUSTODY" != null ]; then
     AUTHOR_CONFIG=$(printf '%s' "$AUTHOR_CUSTODY" | "$FACTORY_PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["config"])')
@@ -716,13 +834,18 @@ PY
   # The turn is measured against its delivery limit and recorded; over the limit is never a
   # refusal (lane_agent.py places an oversized argv turn in .git/factory-brief/ by reference).
   "$FACTORY_PYTHON" - "$LAUNCHES" "$RUN" "$LANE" "$SLOT" "$SENDER" "$MESSAGE_KIND" "$MESSAGE_ID" \
-    "$RETAINED_MESSAGE" "$AGENT" <<'PY'
+    "$RETAINED_MESSAGE" "$AGENT" "$HOSTED_RESUME" <<'PY'
 import datetime, json, os, sys
-journal, run, role, slot, sender, kind, message_id, message, agent = sys.argv[1:]
+journal, run, role, slot, sender, kind, message_id, message, agent, hosted = sys.argv[1:]
 size = os.path.getsize(message)
-# Codex resumes read the turn from stdin; every registry harness takes it as one argv element.
-limit = None if agent in ("codex", "codex-ollama", "codex-interactive") else 131071
-delivery = "stdin" if limit is None else ("file-pointer" if size > limit else "argv")
+# A codex-ollama resume reads the turn from stdin. A registry harness takes it as one argv
+# element, and so does a restarted Codex session (its resume's launch argument). Any other
+# restarted hosted session is given it through its lane server, as a typed message is
+# (native_session.TYPED_LIMIT).
+typed = hosted == "1" and agent != "codex-interactive"
+limit = None if agent == "codex-ollama" else 16384 if typed else 131071
+via = "terminal" if typed else "argv"
+delivery = "stdin" if limit is None else ("file-pointer" if size > limit else via)
 row = json.dumps({
     "schema_version": "factory-tmux-lane-reopen/1",
     "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
@@ -746,7 +869,10 @@ PY
   fi
   # Match first launch: only an explicitly capped lane needs the spend/qualification watcher.
   # Ordinary plan-funded work must not gain automatic pauses merely by receiving a message.
-  if [ -n "$WALL_CAP_S" ]; then
+  # A restarted hosted session stays resident, as its first start did, so it is watched as
+  # that start was: a lane with no watcher is not launched. Its pauses are still only the
+  # ones its launch record asks for.
+  if [ -n "$WALL_CAP_S" ] || [ "$HOSTED_RESUME" = 1 ]; then
     WATCH_WID=$(window_id "watch-$WINDOW")
     [ -z "$WATCH_WID" ] || tmux kill-window -t "$WATCH_WID" >/dev/null 2>&1 || true
     tmux new-window -d -t "$RUN" -n "watch-$WINDOW" -c "$ROOT" "$WATCH_CMD" || {
@@ -754,6 +880,26 @@ PY
       echo "lane-message: the watcher for $RUN:$WINDOW could not start; the resumed turn was interrupted" >&2
       exit 70
     }
+  fi
+  if [ "$HOSTED_RESUME" = 1 ]; then
+    # Restarted, not yet delivered. The message is given only to a session that has reported
+    # starting, and is recorded delivered only on that session's own report of it.
+    STARTED=0
+    for ATTEMPT in $(seq 1 "$HOSTED_START_WAIT_S"); do
+      if NATIVE_STATE=$("$FACTORY_PYTHON" "$D/persistent_lane.py" status --root "$ROOT" --slot "$SLOT" 2>/dev/null); then
+        case "$NATIVE_STATE" in *'"session_started": true'*) STARTED=1; break ;; esac
+      fi
+      case "$(lane_pane_state)" in 1|missing)
+        echo "lane-message: the restarted $AGENT session for $RUN:$SLOT ended before it reported starting (see its lane log $LANE_LOG), so $MESSAGE_ID is planned and NOT delivered" >&2
+        exit 70 ;;
+      esac
+      sleep 1
+    done
+    [ "$STARTED" = 1 ] || {
+      echo "lane-message: $RUN:$SLOT's $AGENT session was restarted on its own conversation but has not reported starting after ${HOSTED_START_WAIT_S}s (it may be asking a question in its window), so $MESSAGE_ID is planned and NOT delivered. Run this command again once it has started: the same id is never given twice" >&2
+      exit 75
+    }
+    deliver_hosted
   fi
   TRANSPORT="resume"
 else
@@ -765,5 +911,5 @@ fi
   --message-id "$MESSAGE_ID" --thread-id "$THREAD_ID" --transport "$TRANSPORT" >/dev/null
 # The activity feed is the Orchestrator's input; its own deliveries are not echoed back to it.
 
-case "$AGENT" in codex|codex-ollama|codex-interactive) VIA=Codex ;; *) VIA="$AGENT" ;; esac
+case "$AGENT" in codex-ollama) VIA=Codex ;; *) VIA="$AGENT" ;; esac
 echo "lane-message: delivered $MESSAGE_ID to $RUN:$SLOT via $VIA $TRANSPORT"

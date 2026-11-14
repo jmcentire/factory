@@ -658,6 +658,75 @@ OUTSTANDING = frozenset({"queued", "submitted"})
 RECEIVED = frozenset({"observed", "acknowledged"})  # "acknowledged": Agy's stream transport
 
 
+INTENT_SCHEMA = "factory-launch-intent/1"
+
+
+def intent_path(root: pathlib.Path, slot: str, message_id: str = "") -> pathlib.Path:
+    """The slot's record of a message handed over at launch: the first message's, or, for a
+    restart that hands over a later message, that message's own."""
+
+    if message_id and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", message_id):
+        raise ValueError("launch message id is malformed")
+    name = f"{slot}-launch-intent-{message_id}.json" if message_id else f"{slot}-launch-intent.json"
+    return state_path(root, slot).with_name(name)
+
+
+def record_launch_intent(root: pathlib.Path, slot: str, launched: dict) -> None:
+    """Record, durably and before the program exists, that this start hands it its first
+    message as a launch argument.
+
+    A message given that way reaches the program the instant it is spawned, before any
+    session state can be written. So the fact that it is about to be given is written first,
+    and it is written once: if a record already exists for this slot, an earlier start
+    handed the first message over (or was about to), and what became of it may never have
+    been observed. That is an unknown outcome, and an unknown outcome is not permission to
+    hand the message over again, so this start is refused. Nothing here ever clears the
+    record: a different lane (another slot) is the way to start over, or a person removes
+    the file knowing what the earlier session did.
+
+    A restart that hands a later message to a resumed session (``launched["message_id"]``)
+    is recorded the same way, under that message's own id: a message is handed over at
+    launch once, whichever message it is.
+    """
+
+    handed = str(launched.get("message_id") or "")
+    path = intent_path(root, slot, handed)
+    if path.is_symlink():
+        raise ValueError(f"launch record {path.name} is a symlink; refusing to start")
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        try:
+            when = read(path).get("at")
+        except (OSError, ValueError):
+            when = None
+        stamp = (datetime.datetime.fromtimestamp(when, datetime.UTC).isoformat(timespec="seconds")
+                 if isinstance(when, (int, float)) else "an unreadable time")
+        which = f"message {handed}" if handed else "its first message"
+        raise ValueError(
+            f"an earlier start of this lane handed {which} to the program as its "
+            f"launch argument (recorded {stamp}), and a message is never handed over "
+            f"twice. What that start's session did with it may not have been observed. "
+            f"Continue that session if it reported one, start a replacement lane, or remove "
+            f"{path} deliberately once you know the message was not taken") from None
+    with os.fdopen(descriptor, "w") as stream:
+        json.dump({"schema": INTENT_SCHEMA, "slot": slot, "token": launched["token"],
+                   "typed_sha256": launched["typed_sha256"], "at": time.time(),
+                   "wrapper_pid": os.getpid(),
+                   **({"message_id": handed} if handed else {}),
+                   "meaning": "written before the program was spawned; by itself it does not "
+                              "say the program took the message, only that it may have"},
+                  stream, sort_keys=True)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
 def retained(root: pathlib.Path, slot: str, session_id: str) -> dict:
     """The delivery record an earlier wrapper kept for this conversation, or ``{}``.
 
@@ -667,10 +736,13 @@ def retained(root: pathlib.Path, slot: str, session_id: str) -> dict:
     * unreadable, oversized, symlinked, or not a record of this slot in a known schema with
       a session id and a well-formed delivery map: refuse;
     * the same conversation: it must hold the first message's record (every wrapper writes
-      one before it types); it is returned and its receipts stand;
+      one before it types); it is returned and its receipts stand. An empty ``session_id``
+      means this start's conversation is new and its id not yet known (the provider chooses
+      it and reports it), so it is the same conversation as nothing;
     * another conversation that never existed (no session id was ever bound) or never
       started (a terminal record with nothing but untyped ``queued`` entries): nothing was
-      typed, so this start may supersede it;
+      typed, so this start may supersede it. A record whose first message was handed over
+      as a launch argument is not one of these, bound or not: the program may have taken it;
     * anything else is a conversation that received input. Starting a different one in its
       place would repeat its first message, so it is refused: resume it, or remove the
       record deliberately.
@@ -699,13 +771,15 @@ def retained(root: pathlib.Path, slot: str, session_id: str) -> dict:
                    for key, record in deliveries.items())
     ):
         raise ValueError(f"retained delivery record {path.name} is malformed; {refusal}")
-    if earlier == session_id:
+    if session_id and earlier == session_id:
         if "initial" not in deliveries:
             raise ValueError(
                 f"retained delivery record {path.name} for this conversation has no record "
                 f"of its first message; {refusal}")
         return prior
-    never_bound = earlier == ""
+    handed = any(record.get("via") == "launch-argument" and record["state"] != "queued"
+                 for record in deliveries.values())
+    never_bound = earlier == "" and not handed
     never_typed = (
         prior.get("transport") == TERMINAL
         and prior.get("session_started") is not True
@@ -713,6 +787,12 @@ def retained(root: pathlib.Path, slot: str, session_id: str) -> dict:
     )
     if never_bound or never_typed:
         return {}
+    if earlier == "":
+        raise ValueError(
+            f"retained delivery record {path.name} shows a first message handed to the "
+            "program at launch by a start whose session never reported; starting again "
+            "would hand it over a second time. Remove the record deliberately once you "
+            "know the message was not taken")
     raise ValueError(
         f"retained delivery record {path.name} belongs to conversation {earlier}, which "
         "received input; starting a different conversation in its place would repeat its "
@@ -733,6 +813,11 @@ def run_terminal(
     launcher: dict,
     note,
     diagnostic=None,
+    launched=None,
+    withhold_followups=False,
+    bind_by_mark=False,
+    queue_command=None,
+    queue_env=None,
 ) -> int:
     """Own one native terminal session until its actual exit.
 
@@ -767,6 +852,50 @@ def run_terminal(
 
     Delivery records survive this wrapper: a restart that resumes the same conversation
     keeps them, types nothing that was ever typed, and marks an unfinished one ``unknown``.
+
+    ``withhold_followups`` is set for a program with no observed report of a point at
+    which typed input is safe (Muse Code). Then this wrapper types nothing into the session
+    at all: its first message went in as the launch argument, and a later message is
+    accepted, kept ``queued`` with ``held`` saying why, and never typed. A person can still
+    enter it in the session's own window.
+
+    Why nothing short of that. A start report does not show that what is on screen later is
+    the chat input. A stop report does not either: it is sent before the program decides
+    whether to stop, and the independent tester showed the consequence on Muse Code 1.4.20
+    (2026-11-13, /tmp/factory-muse-ef/RESULT.md): with an operator Stop hook still deciding,
+    a message typed after the lane's own stop report was taken as part of the continued
+    earlier turn, with no prompt report of its own, and stayed ``submitted``. Until the
+    program is shown to report the point after which it will not continue, or to offer a
+    delivery route of its own, automatic follow-up is withheld rather than guessed at.
+
+    ``bind_by_mark`` is set for a program whose hooks also report sessions this lane did
+    not start (Codex reports its own background agents). The lane's conversation is then
+    the one whose prompt report carries the launch message's mark, and a start report alone
+    binds nothing. Once bound, the binding stands for the life of the session: a later
+    start report from another session is counted and otherwise ignored, where for a
+    program that reports only its own session it would mean the operator had switched
+    conversations and would stop deliveries.
+
+    ``queue_command`` is given when the program has a command of its own for handing a
+    message to a running session (Codex: ``codex queue``). A later message is then given by
+    running ``queue_command(session_id, text)`` and nothing is typed. The record is
+    ``submitted`` (``via: provider-queue``) from before the command runs and ``observed``
+    only when the session's own prompt report carries the mark; the command's success is
+    not a receipt. A command that fails leaves the record ``unknown`` with what it said,
+    and it is not run again.
+
+    ``launched`` is given when the first message was handed to the program as its launch
+    argument rather than typed (Muse Code, which reports a session's start only with its
+    first prompt): the message's mark and the digests of what was handed over. That message
+    is then already ``submitted`` when this begins, is never typed, and becomes ``observed``
+    the same way a typed one does, by the session's own prompt report carrying its mark.
+
+    ``session_id`` is empty when the provider chooses its own conversation id (Cursor): the
+    first start report after this program was spawned names it, and it is bound then. Where
+    a report carries a per-prompt ``generation`` (Cursor), the stop report with the same
+    generation is recorded on that message as ``response_stop``: the session's own word
+    that its response to that prompt ended, with its status. That is still not acceptance
+    of the work, and a session without generations (Claude Code) gets no such field.
     """
     import native_session
 
@@ -787,9 +916,10 @@ def run_terminal(
         raise ValueError("symlinked session file")
     if session_file.exists() and session_file.read_text().strip() != session_id:
         raise ValueError("retained conversation changed")
+    chosen_here = bool(session_id)
 
     def token_for(identifier):
-        return native_session.message_token(session_id, identifier)
+        return native_session.message_token(state["session_id"], identifier)
 
     # What an earlier wrapper of this same conversation recorded is kept, not recreated.
     deliveries: dict = {}
@@ -804,17 +934,46 @@ def run_terminal(
                     record,
                     state="unknown",
                     last_state=record.get("state"),
-                    detail="typed by an earlier wrapper process; what became of it was not "
-                    "observed and it is never typed again",
+                    detail=("given" if record.get("via") in ("launch-argument", "provider-queue")
+                            else "typed") + " by an earlier wrapper process; what became of "
+                    "it was not observed and it is never given again",
                 )
             deliveries[identifier] = record
         for key in carried:
             if isinstance(prior.get(key), (int, float)):
                 carried[key] = prior[key]
+    # The message handed to the program as its launch argument: the first one, or, when an
+    # ended session is restarted, the message that restarts it.
+    handed = (launched.get("message_id") or "initial") if launched is not None else None
+    if handed is not None and (handed not in deliveries or (
+            # Accepted by an earlier wrapper and never given: this start gives it, at launch.
+            handed != "initial" and deliveries[handed].get("state") == "queued")):
+        # Handed over at launch: from that moment its outcome is uncertain, exactly as for
+        # a typed message from its first byte, and it is never given again.
+        deliveries[handed] = {
+            "state": "submitted", "message_id": handed, "token": launched["token"],
+            "typed_sha256": launched["typed_sha256"], "at": time.time(),
+            "via": "launch-argument"}
+    if handed not in (None, "initial"):
+        # A restart: ``prompt`` is that later message, not the first one. If this
+        # conversation's first message has no record here, it is not known and is never
+        # given, least of all with another message's text.
+        deliveries.setdefault("initial", {
+            "state": "unknown", "message_id": "initial",
+            "detail": "this wrapper restarted a conversation whose first message's record "
+                      "it was not given; nothing is typed for it"})
     deliveries.setdefault("initial", {"state": "queued", "message_id": "initial"})
     waiting: dict[str, str] = {}  # accepted, not yet typed: message id -> text
     for identifier, record in deliveries.items():
         if record.get("state") != "queued":
+            continue
+        if identifier == "initial" and handed not in (None, "initial"):
+            # ``prompt`` is the message that restarts the session, not the first message,
+            # whose text this wrapper does not have.
+            deliveries[identifier] = dict(
+                record, state="unknown", last_state="queued",
+                detail="never given by the wrapper that accepted it; the wrapper that "
+                       "restarted this conversation does not have its text")
             continue
         try:
             waiting[identifier] = (
@@ -835,6 +994,9 @@ def run_terminal(
         "worker": receipt["worker"],
         "wrapper": receipt["wrapper"],
         "session_id": session_id,
+        # "chosen": this wrapper named the conversation at start, or resumed a known one.
+        # "reported": the provider chose it and its own start report named it.
+        "session_id_source": "chosen" if chosen_here else "reported",
         "session_started": False,
         "phase": "starting",
         "last_native_event": None,
@@ -843,8 +1005,9 @@ def run_terminal(
         "reported_active_s": carried["reported_active_s"],
         "turn_started_at": time.time(),
         "stop_reported_at": None,
-        "current_message_id": "initial",
-        "current_input_id": native_session.text_digest(prompt),
+        "current_message_id": handed or "initial",
+        "current_input_id": (launched["typed_sha256"] if launched is not None
+                             else native_session.text_digest(prompt)),
         "capabilities": [],
         "review_boundary_pending": False,
         "foreign_inputs": 0,
@@ -856,6 +1019,9 @@ def run_terminal(
     typing: list | None = None
     digests: dict[str, str] = {}  # message id -> digest of exactly what was typed
     bodies: dict[str, str] = {}  # message id -> digest of the message without its mark
+    if handed is not None and deliveries[handed].get("via") == "launch-argument":
+        digests[handed] = launched["typed_sha256"]
+        bodies[handed] = launched["body_sha256"]
     ready_at = None
     events = native_session.Journal(journal, journal_offset)
 
@@ -873,6 +1039,15 @@ def run_terminal(
     def outstanding():
         return [key for key, record in deliveries.items() if record.get("state") in OUTSTANDING]
 
+    def bind(reported):
+        # The provider's own name for the conversation this wrapper started.
+        if not re.fullmatch(r"[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", reported):
+            return False
+        if session_file.exists() and session_file.read_text().strip() != reported:
+            raise ValueError("retained conversation changed")
+        state["session_id"] = reported
+        return True
+
     def stop_row(row):
         # A stop report, named as one. It is not a result: it carries no success or error
         # verdict, and another hook may make the session continue after it. The message is
@@ -882,23 +1057,61 @@ def run_terminal(
             "type": "native-stop-report",
             "stop_hook_active": row.get("stop_hook_active") is True,
             "last_assistant_message": text if isinstance(text, str) else "",
-            "session_id": session_id, "source": "native-stop-hook",
+            **({"status": row["status"]} if isinstance(row.get("status"), str) else {}),
+            # A provider's own remarks about the stop, as given. Not readiness.
+            **{name: row[name] for name in ("fully_idle", "continuation_active",
+                                            "termination_reason") if name in row},
+            "session_id": state["session_id"], "source": "native-stop-hook",
         }) + "\n").encode())
 
     def observe(row):
         nonlocal ready_at
         kind = row.get("event")
+        if not state["session_id"] and bind_by_mark:
+            # Not bound yet, and other sessions report through the same hooks: only the
+            # prompt report that carries this start's own mark names the conversation.
+            carried = row.get("tokens") if isinstance(row.get("tokens"), list) else []
+            if (kind != "UserPromptSubmit" or launched is None
+                    or launched["token"] not in carried
+                    or not bind(str(row.get("session_id") or ""))):
+                state["unbound_events"] += 1
+                return
+            note((json.dumps({"type": "native-session-start",
+                              "session_id": state["session_id"],
+                              "source": "native-prompt-hook"}) + "\n").encode())
+        if not state["session_id"]:
+            # Not bound yet: only this program's own start report can name the conversation.
+            if kind != "SessionStart" or not bind(str(row.get("session_id") or "")):
+                state["unbound_events"] += 1
+                return
+        session_id = state["session_id"]
         if row.get("session_id") != session_id:
             # Another conversation in this terminal (the operator cleared or switched it) is
             # not this seat's: it neither confirms nor ends anything.
             state["unbound_events"] += 1
-            if kind == "SessionStart":
+            if kind == "SessionStart" and not bind_by_mark:
+                # In a program that reports only its own session, another start in this
+                # terminal means the operator cleared or switched the conversation.
                 state["observed_session_id"] = str(row.get("session_id") or "")
+            # Where other sessions report through the same hooks (bind_by_mark), a foreign
+            # start is that program's own background work. The lane's binding stands and
+            # nothing is concluded from the report.
             return
         state.pop("observed_session_id", None)
         state["last_native_event"] = {"event": kind, "at": time.time()}
         if kind != "Notification":
             state.pop("asking", None)  # any later report means that question is behind it
+        if kind in ("UserPromptSubmit", "Stop") and not state["session_started"]:
+            # A resumed session may send no start report (Cursor did not). Its first prompt
+            # or stop report is the same evidence that it is running and taking input; until
+            # one arrives the session stays "starting" and nothing is typed to it.
+            state["session_started"] = True
+            state["phase"] = "started"
+            ready_at = time.monotonic() + native_session.SETTLE_S
+            if not session_file.exists():
+                fd = os.open(session_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "w") as stream:
+                    stream.write(session_id + "\n")
         if kind == "SessionStart":
             if not state["session_started"]:
                 state["session_started"] = True
@@ -912,9 +1125,14 @@ def run_terminal(
                 state["phase"] = "started"
             ready_at = time.monotonic() + native_session.SETTLE_S
         elif kind == "UserPromptSubmit":
+            reported = row.get("prompt_sha256")
+            if "invocation" in row and reported and reported == state.get("last_prompt_sha256"):
+                # A provider that reports the user's message before every model call
+                # (Antigravity) repeats it within a turn. The same message is one prompt.
+                return
+            state["last_prompt_sha256"] = reported
             state["prompt_reports"] += 1
             tokens = row.get("tokens") if isinstance(row.get("tokens"), list) else []
-            reported = row.get("prompt_sha256")
             submitted = [key for key, record in deliveries.items()
                          if record.get("state") == "submitted"]
             # A report binds to the submitted message by its typed mark, or by being
@@ -928,6 +1146,17 @@ def run_terminal(
             if not matched:
                 matched = [(key, "body") for key in submitted
                            if reported and reported == bodies.get(key)]
+            if not matched:
+                # A message handed to the program's own queue whose outcome was left
+                # unknown (the command timed out or failed) is settled by the session
+                # itself: a later report carrying that message's mark and exactly what was
+                # given is the receipt. Nothing weaker settles it, and an unknown message
+                # is never given again either way.
+                matched = [(key, "exact") for key, record in deliveries.items()
+                           if record.get("state") == "unknown"
+                           and record.get("via") == "provider-queue"
+                           and record.get("token") in tokens
+                           and reported and reported == record.get("typed_sha256")]
             if len(matched) == 1:
                 identifier, how = matched[0]
                 deliveries[identifier] = dict(
@@ -938,6 +1167,11 @@ def run_terminal(
                     text_match=how,
                     evidence="the session's prompt hook reported this message; receipt, "
                     "not acceptance or completion",
+                    **({"generation": row["generation"]}
+                       if isinstance(row.get("generation"), str) else {}),
+                    # Settled late: its queue command's outcome had been left unknown.
+                    **({"settled_from": "unknown"}
+                       if deliveries[identifier].get("state") == "unknown" else {}),
                 )
                 state["current_message_id"] = identifier
                 if identifier != "initial" and slot not in {"validator", "orchestrator"}:
@@ -956,8 +1190,17 @@ def run_terminal(
         elif kind == "Stop":
             stop_row(row)
             # A stop report is the session's, not any message's: with a queued prompt taken
-            # mid-continuation, the next stop can belong to the turn before it.
+            # mid-continuation, the next stop can belong to the turn before it. Only a
+            # provider's own per-prompt id ties one to a message, and then it is recorded as
+            # that and nothing more.
             state["stop_reports"] += 1
+            generation = row.get("generation")
+            for identifier, record in deliveries.items():
+                if (isinstance(generation, str) and record.get("generation") == generation
+                        and record.get("state") == "observed"):
+                    deliveries[identifier] = dict(record, response_stop={
+                        "at": time.time(), "status": row.get("status"),
+                        "meaning": "the session reported its response to this prompt ended"})
             if state["phase"] == "prompt-observed":
                 # Elapsed time between two reports. Not a completed turn's duration: the
                 # session may continue past this stop.
@@ -1008,6 +1251,11 @@ def run_terminal(
         reopen(row)
         waiting[identifier] = row["text"]
         result = {"state": "queued", "message_id": identifier}
+        if withhold_followups:
+            result["held"] = ("not typed, and it will not be typed automatically: this "
+                              "program reports no point at which typed input is safe (a "
+                              "stop report comes before it decides whether to continue). "
+                              "Enter the message in the session's own window to deliver it")
         deliveries[identifier] = result
         save()  # durable before any byte is typed
         return result
@@ -1018,6 +1266,7 @@ def run_terminal(
             state["session_started"]
             and state["phase"] != "asking-operator"
             and not state.get("observed_session_id")
+            and not withhold_followups
         )
 
     def advance():
@@ -1054,15 +1303,38 @@ def run_terminal(
         # so no later process ever types this message again.
         deliveries[identifier] = {
             "state": "submitted", "message_id": identifier, "token": marker,
-            "typed_sha256": digests[identifier], "at": time.time()}
+            "typed_sha256": digests[identifier], "at": time.time(),
+            **({"via": "provider-queue"} if queue_command is not None else {})}
         save()
+        if queue_command is not None:
+            # The program's own queue takes the message; nothing is typed.
+            try:
+                done = subprocess.run(
+                    queue_command(state["session_id"], typed), stdin=subprocess.DEVNULL,
+                    capture_output=True, text=True, timeout=30, env=queue_env)
+                said = (done.stdout.strip() or done.stderr.strip())[:300]
+                # The command must succeed and must itself name this lane's session as
+                # the one it queued for; anything else is not known to have reached it.
+                failed = done.returncode != 0 or state["session_id"] not in said
+            except (OSError, subprocess.SubprocessError) as error:
+                said, failed = str(error)[:300], True
+            deliveries[identifier] = dict(
+                deliveries[identifier], queue_said=said, queue_target=state["session_id"],
+                **({"state": "unknown", "last_state": "submitted",
+                    "detail": "the program's queue command did not succeed, or did not "
+                              "name this lane's session; whether the message was taken is "
+                              "not known and it is not given again"}
+                   if failed else {}))
+            save()
+            return
         typing = [identifier, native_session.paste(text) + native_session.trailer(marker),
                   current]
 
     def handle(command):
         if not isinstance(command, dict):
             raise ValueError("persistent request is not an object")
-        if command.get("token") != state["token"] or command.get("thread") != session_id:
+        if (command.get("token") != state["token"] or not state["session_id"]
+                or command.get("thread") != state["session_id"]):
             raise ValueError("persistent request binding mismatch")
         if command.get("action", "deliver") != "deliver":
             raise ValueError("a native terminal session accepts deliver requests only")
@@ -1087,8 +1359,12 @@ def run_terminal(
             return {"state": "busy", "message_id": identifier,
                     "reason": "the session is asking the operator a question on screen"}
         if typing is not None or waiting or outstanding():
+            held = withhold_followups and any(
+                record.get("held") for record in deliveries.values())
             return {"state": "busy", "message_id": identifier,
-                    "reason": "an earlier message is not yet accounted for"}
+                    "reason": ("an earlier message is held for a person to enter: this "
+                               "program takes no later message automatically"
+                               if held else "an earlier message is not yet accounted for")}
         return accept(row)
 
     with tempfile.TemporaryDirectory(prefix="factory-live-", dir="/tmp") as directory:

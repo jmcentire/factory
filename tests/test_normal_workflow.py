@@ -314,7 +314,7 @@ def test_partial_start_failure_stops_only_its_session_and_retains_failure(tmp_pa
     run_record.start(runs, "task")
     assert sum("new-session" in call for call in calls) == 1
     assert {call[call.index("-n") + 1] for call in calls if "new-window" in call} == {
-        "orchestrator", "inbox-wake"}
+        "orchestrator"}
     assert not any("kill-session" in call for call in calls)
     assert json.loads((root / "validator/inbox.jsonl").read_text()) == notice
     assert (root / "harness.json").read_bytes() == original

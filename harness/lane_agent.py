@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import functools
 import hashlib
 import json
 import os
@@ -99,14 +100,18 @@ class Agent:
 
 
 AGENTS: Mapping[str, Agent] = {
-    # `codex exec`, non-interactive: the default for author lanes.
+    # `codex exec`, non-interactive. No author lane is launched on this entry any more: the
+    # launcher runs the lane agent `codex` as `codex-interactive` (tmux_lane.sh). It still
+    # answers for the name where an older record or a caller uses it.
     "codex": Agent("codex", "codex", "stdin", False, "codex-login"),
-    # The Codex TUI, for an operator who wants to watch or steer a lane by hand.
-    "codex-interactive": Agent("codex-interactive", "codex", "argv", True, "codex-login"),
+    # Codex's own interactive session, hosted like Claude Code on a terminal the wrapper
+    # owns. Its first message is its launch argument; later ones go through `codex queue`.
+    "codex-interactive": Agent("codex-interactive", "codex", "terminal", False, "codex-login"),
     # `codex exec --oss` on a model the local Ollama server already has.
     "codex-ollama": Agent("codex-ollama", "codex", "stdin", False, "ollama-model", metered=True),
-    # Cursor's agent CLI in print mode: `agent -p [--model <m>] --force --trust --workspace <lane>`.
-    "cursor-agent": Agent("cursor-agent", "agent", "argv", False, "cursor-status"),
+    # Cursor's agent CLI, interactive, hosted like Claude Code on a terminal the wrapper owns:
+    # `agent --workspace <lane> [--model <m>]`, with no approval flag of any kind. Never `-p`.
+    "cursor-agent": Agent("cursor-agent", "agent", "terminal", False, "cursor-status"),
     # Claude Code: the operator's own interactive session on a terminal the lane wrapper owns
     # (harness/native_session.py), signed in to their subscription. Never print mode, never an
     # API key. ``terminal`` stays False: the wrapper, not the pane, holds the program's terminal.
@@ -116,17 +121,23 @@ AGENTS: Mapping[str, Agent] = {
     # Harnesses whose headless turn comes from the registry (harness/agents.py): any of them may
     # hold any seat. Each runs on the operator's signed-in plan unless launched --metered, and its
     # check proves that sign-in the way the harness itself reports it, never a credential value.
-    "agy": Agent("agy", "agy", "argv", False, "agy-plan"),
-    "muse": Agent("muse", "muse", "argv", False, "muse-plan"),
+    # Antigravity, interactive, hosted like Claude Code on a terminal the wrapper owns. Its
+    # first message is given at launch; nothing is typed after. Never `--print`.
+    "agy": Agent("agy", "agy", "terminal", False, "agy-plan"),
+    # Muse Code, interactive, hosted like Claude Code on a terminal the wrapper owns. Its
+    # first message is its launch argument; later ones are typed. Never `muse exec`.
+    "muse": Agent("muse", "muse", "terminal", False, "muse-usage"),
     # prime-agent bills OpenRouter per use by construction; it has no plan to sign in to.
     "prime-agent": Agent("prime-agent", "prime-agent", "argv", False, "registry", metered=True),
 }
 
 
 #: Lanes that stay resident and take later messages into the same native process.
-PERSISTENT_AGENTS = frozenset({"claude", "claude-ollama", "agy"})
-#: Of those, the ones hosted as a native terminal session rather than a stream.
-NATIVE_TERMINAL_AGENTS = frozenset({"claude", "claude-ollama"})
+PERSISTENT_AGENTS = frozenset({"claude", "claude-ollama", "cursor-agent", "muse", "agy",
+                               "codex-interactive"})
+#: Of those, the ones hosted as a native terminal session rather than a stream: each
+#: reports its own lifecycle through hooks the wrapper adds beside the operator's.
+NATIVE_TERMINAL_AGENTS = PERSISTENT_AGENTS
 
 
 def agent(name: str) -> Agent:
@@ -303,7 +314,8 @@ def _seed_from_launches(root: pathlib.Path) -> dict[str, object]:
         families = set()
         for row in rows:
             agent_name, model = str(row.get("agent") or ""), str(row.get("model") or "")
-            # codex-interactive runs the operator's Codex config, which its record does not carry.
+            # A codex-interactive record made before the launcher carried the operator's
+            # configured model into it names no model.
             config = row.get("model_config")
             overrides = [str(o) for o in config] if isinstance(config, list) else []
             custom = (agent_name == "codex-interactive" and not model) or any(
@@ -561,23 +573,18 @@ def preflight(
         if result.returncode != 0 or "sign in" in shown.lower():
             raise PreflightRefused("agy is not signed in", remediation)
         return "agy-models"
-    if chosen.auth == "muse-plan":
+    if chosen.auth == "muse-usage":
+        # Muse's own account command says whether it is signed in ("no model turn", by its
+        # help). Its sign-in file is never opened here.
         remediation = "muse login   (once, as this user; META_API_KEY would bill the API instead)"
         if environ.get("META_API_KEY"):
             raise PreflightRefused("META_API_KEY would override Muse's account sign-in",
                                    "unset it for the lane, or launch it --metered")
-        base = pathlib.Path(environ.get("XDG_CONFIG_HOME")
-                            or pathlib.Path(environ.get("HOME", "~")) / ".config")
-        auth = base / "muse" / "auth.json"
-        try:
-            stored = json.loads(auth.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            stored = None
-        if not isinstance(stored, dict) or not stored.get("providers"):
-            raise PreflightRefused(f"Muse has no stored sign-in at {auth}", remediation)
-        _status([chosen.executable, "--version"], timeout=timeout, runner=runner,
-                remediation="install Muse Code", label="muse")
-        return "muse-auth-stored"
+        result = _status([chosen.executable, "usage"], timeout=timeout, runner=runner,
+                         remediation="install Muse Code", label="muse", env=environ)
+        if result.returncode != 0:
+            raise PreflightRefused("muse usage did not report a signed-in account", remediation)
+        return "muse-usage"
     if chosen.auth == "registry":
         _status([chosen.executable, "--version"], timeout=timeout, runner=runner,
                 remediation=f"install {chosen.executable} and sign it in as this user",
@@ -805,6 +812,7 @@ def run_lane(
     run_root: pathlib.Path | None = None,
     ready: Callable[[], None] | None = None,
     native_dir: pathlib.Path | None = None,
+    launch_message_id: str = "",
 ) -> int:
     """Run one lane process to its end and record that end.
 
@@ -843,6 +851,9 @@ def run_lane(
                        or run_root is None or session_file is None or prompt is None):
         raise ValueError("persistent mode requires Claude/Agy, run root, session file and prompt")
     native = persistent and session_agent in NATIVE_TERMINAL_AGENTS
+    if launch_message_id and not (native and chosen is not None and chosen.dialect == "codex"):
+        # Never dropped quietly: only Codex's resume is known to take a message this way.
+        raise ValueError("--launch-message-id is for a resumed interactive Codex session only")
     if prompt is not None and not persistent:
         argv.append(argv_prompt(prompt, pathlib.Path.cwd()))
     child_env = dict(os.environ)
@@ -894,23 +905,75 @@ def run_lane(
 
         assert run_root is not None
         try:
+            found = shutil.which(argv[0], path=child_env.get("PATH"))
             if session_agent == "claude":
                 launcher = native_session.resolve_launcher(child_env, executable=argv[0])
+            elif not found:
+                raise ValueError(f"{argv[0]} is not on PATH")
             else:
                 # claude-ollama talks only to the loopback server its own variables name.
-                found = shutil.which(argv[0], path=child_env.get("PATH"))
-                if not found:
-                    raise ValueError(f"{argv[0]} is not on PATH")
                 launcher = native_session.Launcher(argv[0], "executable", path=found)
-            native_plan = native_session.plan(
-                argv[1:], launcher=launcher, directory=native_dir or log.parent, slot=slot,
-                name=f"{run_root.name}-{slot}", python=sys.executable)
+            if chosen is not None and chosen.dialect == "muse":
+                # Muse runs lane hooks from its workspace and takes its first message as
+                # its launch argument (it reports no start until a prompt is submitted).
+                assert prompt is not None
+                native_plan = native_session.muse_plan(
+                    argv[1:], executable=launcher.path, directory=native_dir or log.parent,
+                    slot=slot, workspace=pathlib.Path.cwd(),
+                    prompt=argv_prompt(prompt, pathlib.Path.cwd()), python=sys.executable)
+            elif chosen is not None and chosen.dialect == "codex":
+                # Codex runs lane hooks from its workspace, takes its first message as its
+                # launch argument and later ones through its own queue command.
+                assert prompt is not None
+                # A restart of an ended session is `resume ... <id>` and carries the message
+                # that restarts it, under that message's own id (``--launch-message-id``).
+                native_plan = native_session.codex_plan(
+                    argv[1:], executable=launcher.path, directory=native_dir or log.parent,
+                    slot=slot, workspace=pathlib.Path.cwd(),
+                    prompt=argv_prompt(prompt, pathlib.Path.cwd()), python=sys.executable,
+                    message_id=launch_message_id)
+            elif chosen is not None and chosen.dialect == "agy":
+                # Antigravity loads lane hooks and the lane's Kindex from a plugin in its
+                # workspace and takes its first message at launch.
+                assert prompt is not None
+                native_plan = native_session.agy_plan(
+                    argv[1:], executable=launcher.path, directory=native_dir or log.parent,
+                    slot=slot, workspace=pathlib.Path.cwd(),
+                    prompt=argv_prompt(prompt, pathlib.Path.cwd()), python=sys.executable)
+            elif chosen is not None and chosen.dialect == "cursor":
+                # Cursor reads lane hooks and the lane's Kindex only from its workspace.
+                native_plan = native_session.cursor_plan(
+                    argv[1:], executable=launcher.path, directory=native_dir or log.parent,
+                    slot=slot, workspace=pathlib.Path.cwd(), python=sys.executable)
+            else:
+                native_plan = native_session.plan(
+                    argv[1:], launcher=launcher, directory=native_dir or log.parent,
+                    slot=slot, name=f"{run_root.name}-{slot}", python=sys.executable)
             # Before the program exists: a retained delivery record that cannot be trusted
             # stops the start, so nothing typed once can be typed again.
             import persistent_lane
 
-            persistent_lane.retained(run_root, slot, native_plan.session_id)
+            prior = persistent_lane.retained(run_root, slot, native_plan.session_id)
+            restarting = (native_plan.launched or {}).get("message_id")
+            earlier = (prior.get("deliveries") or {}).get(restarting) if restarting else None
+            if earlier is not None and earlier.get("state") != "queued":
+                # Already given to this conversation by an earlier wrapper, whatever became
+                # of it. A message is given once; it does not restart a session a second time.
+                raise ValueError(
+                    f"message {restarting} was already given to this conversation (recorded "
+                    f"{earlier.get('state')}) and is never given twice; restart the session "
+                    "with a new message")
+            if native_plan.launched is not None:
+                # The first message reaches the program the moment it is spawned. That it
+                # is about to be handed over is on disk first, and never twice for a slot.
+                persistent_lane.record_launch_intent(run_root, slot, dict(native_plan.launched))
         except (OSError, ValueError) as error:
+            if native_plan is not None and native_plan.manifest is not None:
+                # A start refused after its project files were written leaves none behind.
+                try:
+                    native_session.remove_project_files(native_plan.manifest)
+                except (OSError, ValueError):
+                    pass
             _append(log, f"lane-agent: could not start {argv[0]}: {error}\n".encode())
             marker = f"__LANE_EXIT__ {slot} rc=127\n"
             _append(log, marker.encode())
@@ -1082,7 +1145,12 @@ def run_lane(
                     session_id=native_plan.session_id, journal=native_plan.journal,
                     journal_offset=native_plan.journal_offset,
                     launcher=native_plan.launcher.record(), note=note,
-                    diagnostic=startup_output)
+                    diagnostic=startup_output, launched=native_plan.launched,
+                    withhold_followups=chosen is not None and chosen.withhold_followups,
+                    **(dict(bind_by_mark=True, queue_env=child_env,
+                            queue_command=functools.partial(
+                                native_session.codex_queue, native_plan.launcher.path))
+                       if chosen is not None and chosen.dialect == "codex" else {}))
         elif terminal:
             process = subprocess.Popen(argv, env=child_env)
             register()
@@ -1156,6 +1224,18 @@ def run_lane(
     finally:
         if hosted is not None:
             hosted.close()  # hand the pane's terminal back before anything is printed to it
+        if native_plan is not None and native_plan.manifest is not None:
+            # The session is over: its project files leave the lane's repository with it,
+            # so no later export, digest or commit of that tree carries them.
+            import native_session
+
+            try:
+                left = native_session.remove_project_files(native_plan.manifest)
+            except (OSError, ValueError) as error:
+                left = [f"(not removed: {error})"]
+            for name in left:
+                _append(log, f"lane-agent: left {name}: it changed after this lane wrote it\n"
+                        .encode())
         for signum, handler in previous.items():
             signal.signal(signum, handler)
     if refused_billing:
@@ -1308,6 +1388,9 @@ def main(argv: list[str] | None = None) -> int:
     runner.add_argument("--log", type=pathlib.Path, required=True)
     runner.add_argument("--exits", type=pathlib.Path, required=True)
     runner.add_argument("--prompt-arg", type=pathlib.Path)
+    runner.add_argument("--launch-message-id", default="",
+                        help="for a resumed native session whose program takes the message "
+                             "that restarts it as its launch argument: that message's id")
     runner.add_argument("--terminal", action="store_true")
     runner.add_argument("--env-file", type=pathlib.Path)
     runner.add_argument("--session-agent", default="")
@@ -1392,6 +1475,7 @@ def main(argv: list[str] | None = None) -> int:
                 run_root=arguments.run_root,
                 ready=wake,
                 native_dir=arguments.native_dir,
+                launch_message_id=arguments.launch_message_id,
             )
         except (OSError, ValueError, UnicodeDecodeError, KeyError, TypeError) as error:
             if wake is not None and not wake.sent:

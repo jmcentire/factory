@@ -97,6 +97,9 @@ class Harness:
     name: str
     executable: str
     credential_env: tuple[str, ...]  # non-billing variables a cleared environment admits
+    # The Factory can continue this lane's session after its turn ended, by a lane message
+    # (which is what a wrap-up or a review pause does). It says what the Factory does, not
+    # whether the program has a resume flag: `turn(resume=...)` builds that flag regardless.
     resumable: bool
     api_env: tuple[str, ...] = ()  # variables that switch the harness to per-use API billing
     plan: bool = True  # the harness has a signed-in plan path
@@ -108,8 +111,22 @@ class Harness:
     # visible to the lane too. Independence of Coder and Tester then rests on their separate
     # inputs and clones, not on memory, and a launch says so.
     memory: str = "lane-only"
+    # How this provider's interactive program reports its lifecycle to the lane wrapper
+    # (native_session.DIALECTS), or "" when it is not hosted as a native session.
+    dialect: str = ""
+    # Nothing is typed into this program's session after its launch: a later message is kept
+    # queued and left for a person to enter. Set where the program has no observed report of
+    # a point at which typed input is safe.
+    withhold_followups: bool = False
+    # What the provider's own program asks the operator when a lane starts, and what the
+    # Factory does and does not approve for them. Printed and recorded at launch, so a
+    # question waiting in a lane's window is expected rather than discovered.
+    start_requires: str = ""
+    # A line this provider's lanes need in their protocol prompt, or "".
+    protocol_note: str = ""
     # Why this provider's lanes are not yet its own interactive program with the operator's
-    # configuration intact; "" when they are. Stated where the registry is read, so the
+    # configuration intact, or are but have not been accepted for unattended work; "" only
+    # when neither is open. Stated where the registry is read, so the
     # limit is a recorded blocker and never a silent difference.
     native_blocker: str = ""
 
@@ -122,19 +139,19 @@ class Harness:
                         extra: Sequence[str] = ()) -> Turn:
         """Keep one native process alive for successive messages.
 
-        Claude Code's is its interactive session, unchanged (``prompt_via`` is ``terminal``).
-        Agy's is structured stdin. Other harnesses need their own qualified transport before
-        they can opt in.
+        For Claude Code, Cursor, Muse, Antigravity and interactive Codex it is the
+        interactive session itself,
+        unchanged (``prompt_via`` is ``terminal``). Any other harness needs its own
+        qualified transport before it can opt in; none has a stream transport any more.
         """
 
-        if self.name not in ("claude", "claude-ollama", "agy"):
+        if self.name not in ("claude", "claude-ollama", "cursor-agent", "muse", "agy",
+                             "codex-interactive"):
             raise ValueError(f"{self.name} does not support persistent native input")
         built = self.turn(model=model, effort=effort, cwd=cwd, resume=resume, extra=extra)
-        if built.prompt_via == "terminal":
-            return built
-        # agy's --print requires a value even when input arrives through the stream.
-        argv = (*built.argv[:-1], "--input-format", "stream-json", "--print", "")
-        return Turn(argv, "stdin")
+        if built.prompt_via != "terminal":
+            raise ValueError(f"{self.name} has no native terminal turn")
+        return built
 
     def outcome(self, stdout: str, last_message: str = "") -> Outcome:
         raise NotImplementedError
@@ -183,12 +200,11 @@ class Harness:
 def persistent_input(agent_name: str, text: str, message_id: str) -> dict[str, object]:
     """Encode literal user text; callers serialize each frame as one JSON line.
 
-    Agy does not acknowledge an input ID, so its caller must allow only one in-flight
-    message at a time. Claude Code has no stream frame: its input is typed into its terminal.
+    No harness has a stream transport any more: Antigravity's was its print mode fed over
+    stdin, which is never used. Every resident session is the program's own interactive one,
+    and what reaches it is typed or given at launch.
     """
 
-    if agent_name == "agy":
-        return {"event": "user", "message": {"content": text}}
     raise ValueError(f"{agent_name} does not support persistent stream input")
 
 
@@ -232,30 +248,6 @@ def _write(path: Path, text: str) -> Path:
     path.write_text(text, encoding="utf-8")
     path.chmod(0o600)
     return path
-
-
-def _link(link: Path, target: Path) -> None:
-    """A lane-home link to one piece of the operator's sign-in. Replaced on relaunch."""
-
-    link.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if link.is_symlink():
-        link.unlink()
-    elif link.exists():
-        raise ValueError(f"{link} exists and is not a link; refusing to replace it")
-    link.symlink_to(target)
-
-
-def _keychain_home(home: Path, operator_home: Path) -> Path:
-    """A private HOME whose ``Library`` is the operator's, so a harness that keeps its sign-in
-    in the login keychain (cursor-agent, agy) still finds it while every dot-file it reads for
-    configuration is the lane's own."""
-
-    private = home / "home"
-    private.mkdir(parents=True, exist_ok=True, mode=0o700)
-    library = operator_home / "Library"
-    if library.is_dir():
-        _link(private / "Library", library)
-    return private
 
 
 def _mcp_servers(server: Mapping[str, object] | None) -> dict[str, object]:
@@ -387,128 +379,122 @@ class Codex(Harness):
         return ""
 
 
-class Antigravity(Harness):
+class CodexInteractive(Harness):
+    """Codex's own interactive session, hosted on a terminal the lane wrapper owns: the
+    operator's sign-in, configuration, hooks and MCP servers, all untouched and all still
+    loaded. Never ``codex exec``. This entry is the lane agents ``codex`` (the default author
+    lane) and ``codex-interactive``; only ``codex-ollama`` still runs ``codex exec``.
+
+    What decides the shape was observed on codex-cli 0.167.0 on the operator's ChatGPT
+    sign-in, 2026-11-13: the first message given at launch is reported by Codex's own
+    prompt hook; a message given with ``codex queue`` to the running session is reported
+    the same way, with nothing typed; project hooks in ``.codex/hooks.json`` run when the
+    folder and the hooks are trusted. ``--no-daemon`` keeps the session off the operator's
+    shared background server."""
+
     def turn(self, *, model: str, effort: str, cwd: Path, resume: str = "",
              last_message_file: str = "", max_turns: int = 400,
              extra: Sequence[str] = ()) -> Turn:
-        argv = ["agy", "--output-format", "stream-json", "--dangerously-skip-permissions",
-                "--add-dir", str(cwd)]
+        argv = ["codex", *(["resume"] if resume else []),
+                "--no-daemon", "--no-alt-screen", "-C", str(cwd)]
+        argv += ["-m", model] if model else []
+        argv += ["-c", f"model_reasoning_effort={json.dumps(effort)}"] if effort else []
+        argv += list(extra)
+        # `codex resume [OPTIONS] [SESSION_ID] [PROMPT]`: the id after the options, which is
+        # the form that was run (2026-11-14) and the one `native_session.codex_plan` reads.
+        argv += [resume] if resume else []
+        return Turn(tuple(argv), "terminal")
+
+
+class Antigravity(Harness):
+    """Google's Antigravity CLI, interactive: the operator's own sign-in, settings, hooks,
+    plugins and MCP servers, all untouched and all still loaded. Never ``--print``.
+
+    The shape follows what was observed of agy 1.5.8 in a trusted throwaway workspace, with
+    prompts its own hook stopped before any model call (2026-11-13, by this adapter's author
+    and independently by the tester):
+
+    - The lane's hooks and its Kindex are a plugin in the lane's own clone,
+      ``.agents/plugins/lane/``, written and removed by ``native_session.agy_plan``.
+      Antigravity found it there by itself and ran its hooks beside the operator's. Nothing
+      is added with ``agy mcp add`` or ``agy plugin install``: both write the operator's
+      configuration.
+    - No private HOME and no links to the operator's state.
+    - Nothing is imposed on permissions: no ``--dangerously-skip-permissions`` (the launcher
+      adds it only for ``FACTORY_LANE_SANDBOX=off``).
+    - ``--conversation <id>`` continues the same conversation and is built whenever an id
+      is given."""
+
+    def turn(self, *, model: str, effort: str, cwd: Path, resume: str = "",
+             last_message_file: str = "", max_turns: int = 400,
+             extra: Sequence[str] = ()) -> Turn:
+        # The lane wrapper runs it in the lane's clone, which is its workspace.
+        argv = ["agy"]
         argv += ["--model", model] if model else []
         argv += ["--effort", effort] if effort else []
         argv += ["--conversation", resume] if resume else []
         argv += list(extra)
-        argv += ["--print"]  # the prompt follows as the last argument
-        return Turn(tuple(argv), "argv")
-
-    def outcome(self, stdout: str, last_message: str = "") -> Outcome:
-        session, said = "", []
-        tokens = {"input": 0, "cached": 0, "output": 0}
-        for line in stdout.splitlines():
-            event = _json_line(line)
-            if not event:
-                continue
-            if "response" in event:  # --output-format json: one document
-                usage = event.get("usage") if isinstance(event.get("usage"), dict) else {}
-                assert isinstance(usage, dict)
-                return Outcome(
-                    text=str(event.get("response") or ""),
-                    session=str(event.get("conversation_id") or ""), cost_usd=0.0,
-                    tokens={"input": _int(usage.get("input_tokens")),
-                            "cached": _int(usage.get("cache_read_tokens")),
-                            "output": _int(usage.get("output_tokens"))})
-            session = session or self.session_in(line)
-            step = event.get("step_update")
-            if isinstance(step, dict) and step.get("step_type") == "agent_response":
-                said.append(str(step.get("text_delta") or ""))
-                usage = step.get("usage")
-                if isinstance(usage, dict):
-                    tokens["input"] += _int(usage.get("input_tokens"))
-                    tokens["cached"] += _int(usage.get("cache_read_tokens"))
-                    tokens["output"] += _int(usage.get("output_tokens"))
-        return Outcome(text="".join(said), session=session, cost_usd=0.0, tokens=tokens)
-
-    def session_in(self, line: str) -> str:
-        event = _json_line(line)
-        if event.get("event") == "init":
-            return str(event.get("conversation_id") or "")
-        return ""
+        return Turn(tuple(argv), "terminal")
 
     def lane_setup(self, home: Path, *, model: str, server: Mapping[str, object] | None,
                    operator_home: Path, environ: Mapping[str, str]) -> LaneSetup:
-        # agy reads its MCP servers from ~/.gemini/config/mcp_config.json and migrates
-        # ~/.gemini/antigravity-cli/mcp_config.json into it once. The lane's HOME links every
-        # piece of the operator's antigravity-cli state (the sign-in token among them) except
-        # the MCP configuration, writes the lane's own in both places, and marks the migration
-        # done. The operator's GEMINI.md, hooks and skills are not linked.
-        private = _keychain_home(home, operator_home)
-        source = operator_home / ".gemini" / "antigravity-cli"
-        state = private / ".gemini" / "antigravity-cli"
-        state.mkdir(parents=True, exist_ok=True, mode=0o700)
-        own = {"mcp_config.json", "mcp_oauth_tokens.json", "mcp"}
-        if source.is_dir():
-            for entry in source.iterdir():
-                if entry.name not in own:
-                    _link(state / entry.name, entry)
-        document = json.dumps({"mcpServers": _mcp_servers(server)})
-        _write(state / "mcp_config.json", document)
-        _write(private / ".gemini" / "config" / "mcp_config.json", document)
-        _write(private / ".gemini" / "config" / ".migrated", "")
-        return LaneSetup(env={"HOME": str(private)})
+        # The lane's Kindex as the plugin's own server file, for agy_plan to place in the
+        # clone. Antigravity names a plugin's server <plugin>_<server> (its changelog), so
+        # it cannot be taken for a server of the operator's.
+        _write(home / "agy-mcp.json", json.dumps({"mcpServers": _mcp_servers(server)}))
+        return LaneSetup()
+
+
+#: The name every native lane gives its own Kindex server, apart from any server of the
+#: operator's (which is usually named ``kindex``), so nothing addressed to one reaches the other.
+LANE_SERVER = signet_hooks.CURSOR_LANE_KINDEX
 
 
 class Muse(Harness):
-    """Meta's Muse Code. ``muse exec --json`` streams session events; the first carries the
-    session id, and ``--session-id`` continues it. ``META_API_KEY`` overrides the account sign-in,
-    so a plan lane never admits it."""
+    """Meta's Muse Code, interactive: the operator's own sign-in, settings, hooks and MCP
+    servers, all untouched and all still loaded. Never ``muse exec``.
+
+    What decides the shape was observed on Muse Code 1.4.20 with its echo provider (no model,
+    no sign-in), by this adapter's author and independently by the tester, 2026-11-13:
+
+    - The lane's Kindex is one more server for this run, ``-c mcpServers.<lane server>=...``.
+      Muse adds it beside the operator's servers; it refuses the whole map and changes no
+      file. The server is named apart from any of the operator's. In that form Muse refuses
+      a ``type`` key ("unknown key") and any literal ``env`` value ("secret leaves need
+      exactly one whole-value ``${VAR}``"), so the server's variables, which are paths and
+      not secrets, are set by ``/usr/bin/env`` in front of its command and reach only it.
+    - The lane's hooks are the project file ``.muse/hooks.json`` in the lane's own clone,
+      written and removed by ``native_session.muse_plan``. A per-run ``-c hooks=`` is never
+      used: it replaces the operator's hooks instead of adding to them.
+    - Muse asks its own workspace-trust question; no ``--trust-workspace`` is passed.
+    - Nothing is imposed on permissions: no ``--yolo`` (the launcher adds it only for
+      ``FACTORY_LANE_SANDBOX=off``), no ``--disable-request-user-input``.
+    - ``resume <id>`` continues the same session and is built whenever a session id is given.
+
+    ``META_API_KEY`` overrides the account sign-in, so a plan lane never admits it."""
 
     def turn(self, *, model: str, effort: str, cwd: Path, resume: str = "",
              last_message_file: str = "", max_turns: int = 400,
              extra: Sequence[str] = ()) -> Turn:
-        argv = ["muse", "exec", "--json", "--workspace", str(cwd), "--yolo",
-                "--disable-request-user-input", "--no-foreign-personal-context"]
+        argv = ["muse", *(["resume", resume] if resume else []), "--workspace", str(cwd)]
         argv += ["--model", model] if model else []
         argv += ["--reasoning-effort", effort] if effort else []
-        argv += ["--session-id", resume] if resume else []
         argv += list(extra)
-        return Turn(tuple(argv), "argv")
-
-    def outcome(self, stdout: str, last_message: str = "") -> Outcome:
-        session, text = "", ""
-        for line in stdout.splitlines():
-            event = _json_line(line)
-            if not event:
-                continue
-            session = session or self.session_in(line)
-            payload = event.get("payload")
-            if str(event.get("payload_type", "")).startswith("run.terminal") \
-                    and isinstance(payload, dict):
-                text = str(payload.get("text") or text)
-        return Outcome(text=text, session=session, cost_usd=0.0)
-
-    def session_in(self, line: str) -> str:
-        stream = _json_line(line).get("stream")
-        if isinstance(stream, dict) and stream.get("kind") == "session":
-            return str(stream.get("id") or "")
-        return ""
+        return Turn(tuple(argv), "terminal")
 
     def lane_setup(self, home: Path, *, model: str, server: Mapping[str, object] | None,
                    operator_home: Path, environ: Mapping[str, str]) -> LaneSetup:
-        # Muse reads $XDG_CONFIG_HOME/muse: the lane's holds a link to the operator's sign-in and
-        # a settings file naming only the lane's Kindex. Muse passes an MCP child a small env
-        # allowlist plus the literal env map, and never expands ${VAR}.
-        base = Path(environ.get("XDG_CONFIG_HOME") or operator_home / ".config")
-        config = home / "xdg"
-        auth = base / "muse" / "auth.json"
-        if auth.is_file():
-            _link(config / "muse" / "auth.json", auth)
-        servers: dict[str, object] = {}
-        if server is not None:
-            command, args, env = _server(server)
-            servers["kindex"] = {"type": "stdio", "command": command, "args": args, "env": env,
-                                 "mode": "optional"}
-        _write(config / "muse" / "settings.json", json.dumps(
-            {"schema_version": 1, "provider": "meta", "mcpServers": servers}))
-        return LaneSetup(env={"XDG_CONFIG_HOME": str(config)})
+        # Nothing of the operator's configuration is replaced or linked.
+        if server is None:
+            return LaneSetup()
+        command, args, env = _server(server)
+        if any(not name.isidentifier() for name in env):
+            raise ValueError("the lane Kindex record names a variable that is not a name")
+        if env:
+            command, args = "/usr/bin/env", [*(f"{name}={value}" for name, value in env.items()),
+                                             command, *args]
+        entry = {"command": command, "args": args, "mode": "optional"}
+        return LaneSetup(argv=("-c", f"mcpServers.{LANE_SERVER}={json.dumps(entry)}"))
 
 
 class PrimeAgent(Harness):
@@ -559,20 +545,44 @@ class PrimeAgent(Harness):
         return str(event.get("id") or "") if event.get("type") == "session" else ""
 
 
+#: The lane's Kindex as Cursor knows it. Not "kindex": an operator who has their own server of
+#: that name keeps it, and the lane's permission rule must not be able to match theirs.
+CURSOR_LANE_SERVER = LANE_SERVER
+
+
 class CursorAgent(Harness):
-    """Cursor's agent CLI (Grok and the other models Cursor serves). The model name carries the
-    reasoning effort (``grok-4.7-xhigh``). Its stream's init event names the billing source:
-    ``login`` is the plan."""
+    """Cursor's agent CLI, interactive (Grok and the other models Cursor serves): the
+    operator's own sign-in, rules, hooks and MCP servers, all untouched and all still loaded.
+    The model name carries the reasoning effort (``grok-4.7-xhigh``).
+
+    The lane's hooks and its Kindex reach it the one lane-scoped way Cursor offers: the
+    project files ``.cursor/hooks.json`` and ``.cursor/mcp.json`` in the lane's own clone,
+    written and removed by ``native_session.cursor_plan`` and never over a target's own
+    file. The interface was proven against the interactive program by the independent
+    tester on 2026-11-13, and the tester then ran this adapter against real Cursor
+    (cursor-agent 2026.11.13): at ``aa8870b`` a lane started by ``tmux_lane.sh`` took its
+    first prompt and a second message sent by ``tmux_lane_message.sh``, reported
+    ``observed`` with matching text in the same session; at ``aae71ef`` the model called
+    the lane server's ``scope_info``. Not exercised live: resume, a Cursor coordinator
+    seat, and a required Signet guard.
+
+    Permissions are the operator's own. With their configuration loaded, Cursor's blanket
+    flags would reach everything they have configured, so none is passed: not ``--force``
+    (run everything unless denied), not ``--approve-mcps`` (approve every MCP server), and
+    not ``--trust``, which Cursor documents as headless-only and so grants nothing here.
+    The one thing added is the documented project rule ``Mcp(<lane server>:*)`` in
+    ``.cursor/cli.json``, for the lane's own Kindex server, which is named apart from any
+    server of the operator's so the rule can match nothing else."""
 
     def turn(self, *, model: str, effort: str, cwd: Path, resume: str = "",
              last_message_file: str = "", max_turns: int = 400,
              extra: Sequence[str] = ()) -> Turn:
-        argv = ["agent", "-p", "--output-format", "stream-json", "--force", "--trust",
-                "--approve-mcps", "--workspace", str(cwd)]
+        # The interactive program and no approval of anything: see the class note.
+        argv = ["agent", "--workspace", str(cwd)]
         argv += ["--model", model] if model else []
-        argv += ["--resume", resume] if resume else []
+        argv += [f"--resume={resume}"] if resume else []
         argv += list(extra)
-        return Turn(tuple(argv), "argv")
+        return Turn(tuple(argv), "terminal")
 
     def outcome(self, stdout: str, last_message: str = "") -> Outcome:
         doc = _last_json(stdout)
@@ -603,12 +613,20 @@ class CursorAgent(Harness):
 
     def lane_setup(self, home: Path, *, model: str, server: Mapping[str, object] | None,
                    operator_home: Path, environ: Mapping[str, str]) -> LaneSetup:
-        # cursor-agent reads ~/.cursor/mcp.json (and the operator's rules and hooks) from HOME;
-        # its sign-in is in the keychain. The lane's HOME has only its own mcp.json.
-        private = _keychain_home(home, operator_home)
-        config = private / ".cursor"
-        _write(config / "mcp.json", json.dumps({"mcpServers": _mcp_servers(server)}))
-        return LaneSetup(env={"HOME": str(private), "CURSOR_CONFIG_DIR": str(config)})
+        # The operator's HOME, ~/.cursor and keychain are the lane's too, exactly as they
+        # are. The lane's Kindex is left here for the wrapper, which places it in the lane
+        # clone's project MCP file for as long as the session runs.
+        lane = _mcp_servers(server).get("kindex")
+        servers = {CURSOR_LANE_SERVER: lane} if lane is not None else {}
+        _write(home / "cursor-mcp.json", json.dumps({"mcpServers": servers}))
+        if servers:
+            # Cursor's documented per-server rule (cli/reference/permissions): the lane's
+            # own server's tools, and nothing of the operator's. Cursor's schema for this
+            # file requires both lists; real Cursor (2026.11.13) refuses to start on a
+            # project file without `deny`. The empty list denies nothing.
+            _write(home / "cursor-cli.json", json.dumps(
+                {"permissions": {"allow": [f"Mcp({CURSOR_LANE_SERVER}:*)"], "deny": []}}))
+        return LaneSetup()
 
 
 # What stands between each remaining provider and the Claude arrangement (its own
@@ -622,49 +640,133 @@ _TO_SHOW = (
     " To clear: one live interactive session showing a start report, a report carrying a "
     "typed prompt, a stop report, and the lane Kindex loading from the mechanism named.")
 _BLOCKERS = {
-    "agy": "Antigravity. Established (its own `agy changelog`): hooks.json events "
-           "SessionStart, PreInvocation (input carries lastUserInput), Stop (input carries "
-           "continuation_active); hook input carries hookEventName and cwd; follow-up "
-           "messages are queued until the turn ends by default; plugins may bundle MCP "
-           "servers and a workspace may list plugins in .agents/plugins.json. Not "
-           "established: that a project .agents/hooks.json and a workspace plugin load "
-           "without an edit to the operator's configuration or a trust prompt." + _TO_SHOW,
-    "cursor-agent": "Cursor. Established (cursor.com/docs/agent/hooks, cursor.com/docs/cli/"
-                    "mcp): project <root>/.cursor/hooks.json runs beside user hooks; events "
-                    "sessionStart (session_id), beforeSubmitPrompt, stop (status, "
-                    "loop_count), sessionEnd; the CLI uses the editor's project MCP "
-                    "configuration. Not established: that beforeSubmitPrompt carries the "
-                    "prompt text, and that these hooks fire in the interactive CLI. A target "
-                    "that already has .cursor/ files is unhandled." + _TO_SHOW,
-    "muse": "Muse. Established (probed live on muse 1.4.6, 2026-10-12, and its own help): "
-            "events sessionStart, userPromptSubmit, stop, notification, sessionEnd; hooks by "
-            "per-run `-c hooks=<json>` or project .muse/hooks.json (off until the workspace "
-            "is trusted); project MCP file <repository>/.mcp.json. Not established: whether "
-            "`-c hooks=` adds to or replaces the operator's hooks (clashing keys refuse the "
-            "run), and the userPromptSubmit payload. Its sign-in has no status command, so "
-            "the preflight still reads whether a sign-in is stored." + _TO_SHOW,
+    # The lane is Antigravity's own interactive session with the operator's configuration.
+    # What follows is what is open, not conversion.
+    "agy": "Antigravity: hosted as its own interactive session. Two kinds of evidence, both on "
+           "agy 1.5.8, 2026-11-13. Lifecycle probes with no model turn (the probe's own hook "
+           "stopped each prompt before the model; by the adapter's author and independently "
+           "by the tester): a plugin in a trusted workspace loaded by itself, its hooks ran "
+           "beside the operator's, its server started beside the operator's, a typed marked "
+           "message was reported in full. Actual executions of this adapter through the "
+           "lane wrapper (author only, twice, on the operator's subscription, hooks not "
+           "stopping the model): the first message given by --prompt-interactive was "
+           "reported and matched, one stop report followed with terminationReason "
+           "NO_TOOL_CALL, the plugin was removed at exit. The model's reply was not read or "
+           "checked. Open. First, nothing with a tool call has been run, and those stop "
+           "reports carried no model text, so a lane's done line is not seen from its "
+           "reports. Second, later messages are not typed: "
+           "Antigravity's Stop report carries fullyIdle and continuationActive, but what "
+           "they say when a Stop hook continues the turn was not observed, so no report is "
+           "taken as a safe moment; a later message is kept `queued` with the reason and "
+           "left for a person to enter, and a review, an answer or a wrap-up notice does "
+           "not reach an Antigravity lane unattended. Third, no lane command restarts an "
+           "ended session, so wrap-up and review pauses are not offered. Fourth, there is "
+           "no Signet guard and a launch that requires one is refused: a user shell action "
+           "typed in the session ran with no hook called. This user-shell route did not "
+           "exercise PreToolUse; model-tool hook failure behavior remains unverified. "
+           "Fifth, the lane's server is named by Antigravity "
+           "(<plugin>_<server>, per its changelog); that name and a model calling it were "
+           "not observed.",
+    # The lane is Cursor's own interactive agent with the operator's configuration, and the
+    # independent tester has run it against real Cursor. What follows is what is still open.
+    "cursor-agent": "Cursor: hosted as its own interactive agent. The independent tester ran "
+                    "this adapter against real Cursor (cursor-agent 2026.11.13). At aa8870b a "
+                    "lane started by tmux_lane.sh took its first prompt and a second message "
+                    "sent by tmux_lane_message.sh, reported `observed` with matching text in "
+                    "the same session; the generated permission file was accepted and "
+                    "lane-kindex was listed ready beside the operator's servers. At aae71ef "
+                    "the model called the lane server's scope_info, read-only. Still open: "
+                    "unattended resume (no lane command resumes a session, and a resumed "
+                    "session reported nothing until prompted); a Cursor coordinator seat, "
+                    "which has not been exercised; a required Signet guard, not shown "
+                    "enforcing end to end; and what the lane's Kindex returns for a seeded "
+                    "search.",
+    # The lane is Muse's own interactive session with the operator's configuration. What is
+    # open is acceptance and what an echo run cannot show, not conversion.
+    "muse": "Muse: hosted as its own interactive session from an interface observed on Muse "
+            "Code 1.4.20 with its echo provider (2026-11-13, by the adapter's author and "
+            "independently by the tester): start, a first message given at launch, typed "
+            "follow-up messages, turn-end reports, lane hooks beside the operator's, a "
+            "per-run lane server beside the operator's. Not yet accepted, and three things "
+            "are open. First, everything a signed-in model run would show and echo cannot: "
+            "a model calling the lane's Kindex and a model's own tool call. There is no "
+            "Signet guard, and a launch that requires one is refused, for a reason that was "
+            "observed (1.4.20, echo, a user shell action, 2026-11-13): PreToolUse does fire, "
+            "also under --yolo, and an explicit deny or exit 2 blocks the tool; but the tool "
+            "runs when the hook exits 1, prints something that is not JSON, times out or "
+            "cannot be started. No supported fail-closed hook setting has been qualified; "
+            "tested failClosed/required entries were disabled. This tested hook-only "
+            "configuration cannot provide fail-closed enforcement across those failures. "
+            "Second, unattended resume: a resumed "
+            "session reports nothing until a prompt is typed, and Muse refuses a prompt "
+            "beside `resume`, so no lane command restarts an ended session and wrap-up and "
+            "review pauses are not offered. Third, no report of Muse asking the operator a "
+            "question was observed, so a lane waiting on one is not shown as such. Fourth, "
+            "and the largest: later messages are not typed into a Muse session. The "
+            "independent tester showed (ef8fdd7, /tmp/factory-muse-ef/RESULT.md) that a "
+            "message typed after Muse's stop report, while an operator Stop hook was still "
+            "deciding, was taken into the continued earlier turn with no prompt report of "
+            "its own. Muse reports no point at which typed input is safe, so a later "
+            "message is kept `queued` with the reason and left for a person to enter in "
+            "the lane's window: a review, an answer or a wrap-up notice does not reach a "
+            "Muse lane unattended.",
     "prime-agent": "Prime: not installed on the machine this was assessed on; its interactive "
                    "program and any report or MCP interface are unassessed.",
-    # Lane agents `codex` and `codex-ollama`. Their configuration defect is fixed (nothing of
-    # the operator's Codex configuration is ignored); their mode is not.
-    "codex": "Codex: this lane runs `codex exec`, the non-interactive mode, not the "
-             "interactive program. Established (`codex --help` here, and this harness's own "
-             "use): the interactive program is `codex [PROMPT]` (lane agent "
-             "codex-interactive), `codex resume [SESSION_ID]` continues a session, `codex "
-             "queue` queues a message for an existing session, and hooks given by `-c` are "
-             "skipped until the operator trusts them. Not established: any report from the "
-             "interactive program that it started, received a prompt or stopped, and that "
-             "`codex queue` reaches a live interactive session, so a codex-interactive lane "
-             "can be neither messaged nor resumed by the Factory and cannot replace exec "
-             "for unattended work." + _TO_SHOW,
+    # The registry entry `codex` is `codex exec`. The only lane agent still on it is
+    # `codex-ollama`; the lane agent `codex` is the interactive adapter (LANE_VARIANTS).
+    "codex": "Codex on a local Ollama model (`codex-ollama`): this lane runs `codex exec "
+             "--oss`, the non-interactive mode, not the interactive program. It is not "
+             "converted because Codex's interactive program on a local model has not been "
+             "run: nothing is known of its hooks, its queue or its resume there. The lane "
+             "agent `codex` does not run `codex exec`: it is Codex's own interactive "
+             "session, hosted (the adapter also named `codex-interactive`)." + _TO_SHOW,
+    # The lane agent `codex-interactive`: Codex's own interactive session, hosted. What is
+    # open is stated, not hidden.
+    "codex-interactive": "Codex interactive: hosted as its own interactive session from an "
+                         "interface observed on codex-cli 0.167.0 on the operator's ChatGPT "
+                         "sign-in (2026-11-13, by the adapter's author, three one-word "
+                         "turns): the first message given at launch was reported by "
+                         "Codex's prompt hook, a message given with `codex queue` between "
+                         "turns was reported the same way with nothing typed, and each "
+                         "stop report carried the reply. Not accepted. Open. First, Codex "
+                         "skips a hook it has not been told to trust: without that trust "
+                         "(given by the operator through Codex's own review, or for one "
+                         "run by the caller's explicit permissive choice) the lane reports "
+                         "nothing and stays `starting`. Second, a message queued while "
+                         "the model is in the middle of a turn was not observed; it stays "
+                         "`submitted` until Codex reports it. (One queued while a Stop hook "
+                         "was deciding was reported as its own prompt when the hook "
+                         "returned: 2026-11-14, one observation.) Third, restarting an "
+                         "ended session is built and only partly shown. Observed of Codex "
+                         "itself (2026-11-14, four one-word turns): `codex resume "
+                         "<options> <id>` keeps the session id; given nothing it reports "
+                         "nothing and stopped on Codex's own update question; given a "
+                         "message after `--` it reported its start and that message at "
+                         "once. So a lane message to an ended session restarts it that "
+                         "way, the message recorded as handed over before the program "
+                         "exists and never handed over twice. That path was run through "
+                         "tmux_lane.sh and tmux_lane_message.sh with a stand-in program "
+                         "that calls no model, and once against Codex itself (2026-11-14, "
+                         "codex-cli 0.167.0, a synthetic folder Codex already trusted, "
+                         "FACTORY_LANE_SANDBOX=off): the lane read its inputs with shell "
+                         "commands and answered; after a clean end a lane message "
+                         "restarted the same session id and was reported once; two "
+                         "follow-ups went through the queue and were each reported once. "
+                         "Not run: a restart after a crash, a watcher's pause or wrap-up "
+                         "of a Codex session, or a second machine. A restarted program "
+                         "that ends before reporting leaves that one message `unknown`, "
+                         "and another message is needed to restart the session. Fourth, "
+                         "the model ran shell commands and called the lane's Kindex in "
+                         "that one lane, but no tool hook of the Factory's and no Signet "
+                         "guard was in place, so nothing about either is established.",
 }
-#: Lane agents that share a registry entry, and the blocker each really has. A lane agent's
-#: truth is its own: `codex-interactive` is already the interactive program with the
-#: operator's configuration (no blocker in this sense, though the Factory cannot message or
-#: resume it), while `codex` and `codex-ollama` still run `codex exec`.
+#: Lane agents that are answered for by another registry entry. The lane agent `codex`, the
+#: default author lane, is the hosted interactive adapter `codex-interactive`: the launcher
+#: runs that and records that name. `codex-ollama` is the registry entry `codex`, which is
+#: `codex exec`, and is the only lane agent still on it.
 #: Each maps to (registry entry, blocker or None for the entry's own, resumable by the Factory).
 LANE_VARIANTS: Mapping[str, tuple[str, str | None, bool]] = {
-    "codex-interactive": ("codex", "", False),
+    "codex": ("codex-interactive", None, True),
     "codex-ollama": ("codex", None, True),
 }
 
@@ -685,23 +787,96 @@ HARNESSES: Mapping[str, Harness] = {
                          api_env=("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
                                   "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
                                   "CLAUDE_CODE_USE_VERTEX"), memory="beside-operator",
+                         dialect="claude",
+                         start_requires=(
+                             "Claude Code asks its own folder-trust question for a directory "
+                             "it has not seen; answer it in the lane's window. Until the "
+                             "session reports starting it is `starting` and nothing is typed "
+                             "to it."),
                          metered=False),
     "claude-ollama": ClaudeOllama("claude-ollama", "claude", ("IS_SANDBOX",), True,
-                                  memory="beside-operator"),
-    # Codex lanes are launched by tmux_lane.sh, with the operator's whole configuration, and
-    # still by `codex exec` (see LANE_VARIANTS for the interactive lane agent).
+                                  memory="beside-operator", dialect="claude"),
+    # `codex exec`, with the operator's whole configuration. Only the lane agent `codex-ollama`
+    # still runs on this entry; the lane agent `codex` is `codex-interactive` (LANE_VARIANTS).
     "codex": Codex("codex", "codex", ("CODEX_HOME",), True, api_env=("OPENAI_API_KEY",),
                    memory="beside-operator", native_blocker=_BLOCKERS["codex"]),
-    "agy": Antigravity("agy", "agy", (), True,
-                       api_env=("GEMINI_API_KEY", "GOOGLE_API_KEY", "AGY_LLM_GATEWAY_API_KEY"),
-                       native_blocker=_BLOCKERS["agy"]),
-    "muse": Muse("muse", "muse", (), True, api_env=("META_API_KEY",),
-                 native_blocker=_BLOCKERS["muse"]),
+    # Not resumable by the Factory yet, for the reasons its blocker gives. Antigravity's own
+    # resume is untouched: `turn(resume=<id>)` builds `--conversation <id>`.
+    # Resumable by the Factory: a lane message to an ended session restarts it with Codex's
+    # own resume and that message as its launch argument (tmux_lane_message.sh). What of that
+    # was run against Codex itself, and what only against a stand-in, is in its blocker.
+    "codex-interactive": CodexInteractive(
+        "codex-interactive", "codex", ("CODEX_HOME",), True, api_env=("OPENAI_API_KEY",),
+        memory="beside-operator", dialect="codex",
+        native_blocker=_BLOCKERS["codex-interactive"],
+        start_requires=(
+            "Codex asks its own folder-trust question in the lane's window for a clone it "
+            "has not been told to trust, and says it saves the answer; the Factory does not "
+            "answer it. Codex also skips this lane's report hooks (the clone's "
+            ".codex/hooks.json) until they are trusted: review them with Codex's /hooks in "
+            "the lane's window, or launch with FACTORY_LANE_SANDBOX=off, which is the "
+            "explicit per-run choice that passes Codex's own "
+            "--dangerously-bypass-hook-trust beside its approval and sandbox bypass. "
+            "Without one of those the lane works but reports nothing and stays `starting`.")),
+    "agy": Antigravity(
+        "agy", "agy", (), False,
+        api_env=("GEMINI_API_KEY", "GOOGLE_API_KEY", "AGY_LLM_GATEWAY_API_KEY"),
+        memory="beside-operator", dialect="agy", native_blocker=_BLOCKERS["agy"],
+        withhold_followups=True,
+        protocol_note=(
+            "- Your Kindex is the MCP server this lane's own plugin provides (Antigravity "
+            "lists it as\n  lane_kindex). Do not call the server named kindex: it is not "
+            "this lane's memory. The\n  directory .agents/plugins/lane is this lane's "
+            "runtime configuration, not the work: do not\n  edit it, and never add it to a "
+            "commit (not with git add -f either).\n"),
+        start_requires=(
+            "Antigravity asks its own workspace-trust question in the lane's window for a "
+            "clone it has not been told to trust, and the Factory does not answer it. The "
+            "lane's first message is given to Antigravity at launch. Nothing is typed into "
+            "an Antigravity session after that: a later message to the lane is kept queued, "
+            "and you enter it in the lane's window yourself.")),
+    # Not resumable by the Factory yet, for the reason its blocker gives. Muse's own resume is
+    # untouched: `turn(resume=<id>)` builds `resume <id>`, the same session and never a new one.
+    "muse": Muse(
+        "muse", "muse", (), False, api_env=("META_API_KEY",),
+        memory="beside-operator", dialect="muse", native_blocker=_BLOCKERS["muse"],
+        withhold_followups=True,
+        protocol_note=(
+            f"- Your Kindex is the MCP server named {LANE_SERVER}. It is this lane's own. "
+            "Do not call the\n  server named kindex: it is not this lane's memory. The file "
+            ".muse/hooks.json is this\n  lane's runtime configuration, not the work: do not "
+            "edit it, and never add it to a commit\n  (not with git add -f either).\n"),
+        start_requires=(
+            "Muse asks its own workspace-trust question in the lane's window for a clone it "
+            "has not been told to trust, and the Factory does not answer it or pass "
+            "--trust-workspace. The lane's first message is given to Muse at launch and is "
+            "submitted when that question is answered. Nothing is typed into a Muse "
+            "session after that: a later message to the lane is kept queued, and you enter "
+            "it in the lane's window yourself.")),
     "prime-agent": PrimeAgent("prime-agent", "prime-agent", (), True,
                               api_env=("OPENROUTER_API_KEY",), plan=False,
                               native_blocker=_BLOCKERS["prime-agent"]),
-    "cursor-agent": CursorAgent("cursor-agent", "agent", (), True, api_env=("CURSOR_API_KEY",),
-                                native_blocker=_BLOCKERS["cursor-agent"]),
+    # Not resumable by the Factory yet: no lane command restarts an ended Cursor session, and
+    # a resumed session reported nothing until it was given a prompt. Cursor's own resume is
+    # untouched: `turn(resume=<id>)` builds `--resume=<id>`, the same conversation and never a
+    # new one, and a lane message to a running session is typed into that session.
+    "cursor-agent": CursorAgent(
+        "cursor-agent", "agent", (), False, api_env=("CURSOR_API_KEY",),
+        memory="beside-operator", dialect="cursor", native_blocker=_BLOCKERS["cursor-agent"],
+        protocol_note=(
+            f"- Your Kindex is the MCP server named {CURSOR_LANE_SERVER}. It is this lane's own. "
+            "Do not call the\n  server named kindex: it is not this lane's memory. The files "
+            ".cursor/hooks.json,\n  .cursor/mcp.json and .cursor/cli.json are this lane's "
+            "runtime configuration, not the work:\n  do not edit them, and never add them to "
+            "a commit (not with git add -f either).\n"),
+        start_requires=(
+            "Cursor asks its own questions in the lane's window and the Factory answers none "
+            "of them: whether to trust the workspace, and whether to approve the lane's MCP "
+            f"server `{CURSOR_LANE_SERVER}` (`agent mcp enable {CURSOR_LANE_SERVER}`, run in "
+            "the lane's clone, approves that one server). What the lane may then run without "
+            "asking is your own Cursor permission configuration; the Factory adds one rule, "
+            f"`Mcp({CURSOR_LANE_SERVER}:*)`, and passes no --force, --approve-mcps or --trust. "
+            "Until the session reports starting it is `starting` and nothing is typed to it.")),
 }
 
 
@@ -768,7 +943,8 @@ def prepare_lane(name: str, *, billing: str, home: Path, model: str,
             filename = _write(home / "signet-settings.json", json.dumps(settings))
             setup = LaneSetup(env=setup.env, argv=(*setup.argv, "--settings", str(filename)))
         elif name == "cursor-agent":
-            _write(Path(setup.env["CURSOR_CONFIG_DIR"]) / "hooks.json", json.dumps(settings))
+            # Joined to the lane's project hook file by the wrapper, beside the operator's.
+            _write(home / "cursor-hooks.json", json.dumps(settings))
         else:
             raise ValueError("required Signet client adapter is not qualified")
     values = {variable: environ[variable] for variable in admitted if environ.get(variable)}
@@ -793,8 +969,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list", help="the registered harnesses")
-    describe = sub.add_parser("describe", help="resumable, plan, memory isolation and the "
-                              "native blocker (or empty), NUL-separated")
+    describe = sub.add_parser("describe", help="resumable, plan, memory isolation, the "
+                              "native blocker (or empty), what a start asks of the "
+                              "operator (or empty) and the lane protocol note (or empty), "
+                              "NUL-separated")
     describe.add_argument("--agent", required=True)
     turn = sub.add_parser("turn", help="print one headless turn's argv, NUL-separated")
     turn.add_argument("--agent", required=True)
@@ -868,7 +1046,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             chosen, blocker, resumable = describe_lane(args.agent)
             sys.stdout.write(f"{'resumable' if resumable else 'single'}\0"
                              f"{'plan' if chosen.plan else 'metered-only'}\0"
-                             f"memory:{chosen.memory}\0{blocker}\0")
+                             f"memory:{chosen.memory}\0{blocker}\0{chosen.start_requires}\0"
+                             f"{chosen.protocol_note}\0")
         elif args.command == "credential-env":
             print("\n".join(harness(args.agent).admitted_env(args.billing)))
         elif args.command == "lane-setup":

@@ -42,17 +42,21 @@ case "$AGENT" in
     # Coder to a login screen.
     HELP=$(codex --help 2>/dev/null) || HELP=""
     needs "$HELP" codex "$VERSION" --no-daemon --no-alt-screen
-    CONTRACT="codex-tui-no-daemon-v1" ;;
+    # A later message goes through Codex's own queue command, never typed.
+    QUEUE_HELP=$(codex queue --help 2>/dev/null) || QUEUE_HELP=""
+    needs "$QUEUE_HELP" "codex queue" "$VERSION" --thread --message
+    CONTRACT="codex-native-terminal-v1" ;;
   cursor-agent)
     VERSION=$(agent --version 2>/dev/null) || \
       fail "cursor-agent CLI (agent) is not runnable ($(at agent))"
     HELP=$(agent --help 2>/dev/null) || HELP=""
-    for REQUIRED in --print --model --force --trust --workspace --output-format --resume \
-        --approve-mcps; do
+    # The interactive program; no print-mode flag is required because none is used.
+    # Nor any blanket approval flag: the lane runs with the operator's own permissions.
+    for REQUIRED in --model --workspace --resume; do
       printf '%s' "$HELP" | grep -q -- "$REQUIRED" || \
         fail "cursor-agent CLI contract lacks $REQUIRED ($VERSION at $(at agent))"
     done
-    CONTRACT="cursor-agent-stream-resume-v1" ;;
+    CONTRACT="cursor-agent-native-terminal-v1" ;;
   claude|claude-ollama)
     # The operator's own interactive Claude Code, hosted on a terminal (native_session.py).
     # Only what an interactive session needs is required; no print-mode flag is.
@@ -61,7 +65,22 @@ case "$AGENT" in
     HELP=$(claude --help 2>/dev/null) || HELP=""
     needs "$HELP" claude "$VERSION" --session-id --resume --settings --mcp-config --name
     CONTRACT="claude-native-terminal-v1" ;;
-  agy|muse|prime-agent)
+  muse)
+    # Muse Code's own interactive session, hosted on a terminal (native_session.py). Only
+    # what that session uses is required; its headless subcommand is not, because it is
+    # never used.
+    VERSION=$(muse --version 2>/dev/null | head -1) || fail "muse CLI is not runnable ($(at muse))"
+    HELP=$(muse --help 2>/dev/null) || HELP=""
+    needs "$HELP" muse "$VERSION" --workspace --config --model --reasoning-effort resume
+    CONTRACT="muse-native-terminal-v1" ;;
+  agy)
+    # Antigravity's own interactive session, hosted on a terminal (native_session.py). Only
+    # what that session uses is required; its print mode is not, because it is never used.
+    VERSION=$(agy --version 2>/dev/null | head -1) || fail "agy CLI is not runnable ($(at agy))"
+    HELP=$(agy --help 2>&1) || HELP=""
+    needs "$HELP" agy "$VERSION" --prompt-interactive --conversation --model --effort
+    CONTRACT="agy-native-terminal-v1" ;;
+  prime-agent)
     # A registry harness (harness/agents.py): the registry builds its headless turn.
     if [ -z "$EXECUTABLE" ]; then
       # The Factory's own interpreter (exits 69 with the fix when there is none), never PATH's.

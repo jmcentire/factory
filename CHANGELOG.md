@@ -64,13 +64,122 @@ public API is still pre-1.0.
   Claude author lanes beside the lane's own Kindex; input separation rests on the role
   projections, separate clones and the lane protocol.
 - A lane launch records and prints `memory_isolation`. For Claude and Codex lanes it is
-  `beside-operator`: the operator's MCP servers are visible beside the lane's Kindex, so
+  `beside-operator` (Cursor too): the operator's MCP servers are visible beside the lane's
+  Kindex, so
   independence rests on the separate inputs and clones, not on memory.
+- Cursor lanes run Cursor's own interactive agent on the same terminal host, with the
+  operator's HOME, sign-in, rules, hooks, MCP servers and permission settings intact: no
+  `-p`, no private HOME. Lane hooks, the lane's Kindex (as server `lane-kindex`) and one
+  permission rule for it go into the clone's project files `.cursor/hooks.json`,
+  `.cursor/mcp.json` and `.cursor/cli.json` for as long as the session runs, never over a
+  target's own file (the lane refuses to start instead), excluded from commits and removed
+  on exit, before a relaunch and before a freeze. A resumed Cursor session that reports
+  nothing is not typed to.
+- For Cursor lanes: a required Signet hook evaluates the lane's `lane-kindex` server as
+  Kindex and refuses the operator's server named `kindex`; the lane's prompt names its own
+  server and says to leave the three project files alone; `tmux_lane.sh` refuses a clone
+  that already has any of them before reserving a budget or recording a launch; and
+  `validate_candidate.py` refuses a candidate commit that carries a lane's project file at
+  one of the three paths a lane writes, when that file is new or changed since the run's
+  base commit; a file unchanged from the base is the target's own and is never refused, and
+  copies under other names are not looked for. A base commit that cannot be read is
+  reported as `validation-unavailable`, never as the target lacking the file.
+  The generated `.cursor/cli.json` carries the empty `deny` list Cursor's schema requires.
+- Cursor lanes no longer pass `--force`, `--approve-mcps` or `--trust`. With the operator's
+  configuration loaded those would approve everything the operator has configured. Cursor
+  now asks its own workspace-trust and MCP-server questions in the lane's window, and what a
+  lane may run unasked is the operator's own Cursor permission configuration plus the single
+  rule `Mcp(lane-kindex:*)`. A launch prints and records what a start asks of the operator
+  (`start_requires`). This narrows what a Cursor lane does unattended, deliberately.
+- Muse lanes run Muse Code's own interactive session on the same terminal host, with the
+  operator's HOME, sign-in, settings, hooks and MCP servers intact: no `muse exec`, no
+  replaced `XDG_CONFIG_HOME`, no `--yolo` (except for `FACTORY_LANE_SANDBOX=off`), no
+  `--disable-request-user-input`. The lane's first message is Muse's launch argument; lane hooks are the clone's `.muse/hooks.json` (same custody as Cursor's
+  project files, including the launch and candidate refusals); the lane's Kindex is the
+  per-run server `lane-kindex`; the sign-in check is `muse usage` and no longer opens the
+  sign-in file. The hand-over of the first message is recorded durably before Muse is
+  spawned and never repeated for a slot. Nothing is typed into a Muse session after
+  launch: a later message is kept `queued` with the reason and left for a person to enter,
+  because the tester showed a message typed after Muse's stop report being taken into a
+  continued earlier turn, and Muse reports no safe moment. Observed end to end on Muse Code 1.4.20 with its echo provider only: not
+  accepted, and nothing about a signed-in model run is established (`docs/HARNESS.md`).
+  Narrower than before, deliberately: reviews, answers and other later messages do not
+  reach a Muse lane unattended; a Muse lane is no longer resumable by the Factory, so
+  wrap-up and progress-review pauses are not offered for it and a lane message does not
+  restart an ended Muse session; a Muse lane launched in print mode by an earlier version
+  is not resumed in print mode (`--replace-session`).
+- Antigravity author lanes run Antigravity's own interactive session on the same terminal
+  host, with the operator's HOME, sign-in, settings, hooks, plugins and MCP servers intact:
+  no `--print`, no private HOME, no links to the operator's state, and
+  `--dangerously-skip-permissions` only for `FACTORY_LANE_SANDBOX=off`. The lane's hooks and
+  its Kindex are a plugin in the clone, `.agents/plugins/lane/` (same custody as the other
+  lanes' project files); the first message is given at launch with `--prompt-interactive`
+  and its hand-over recorded before spawn. Partial and not accepted (`docs/HARNESS.md`).
+  Narrower than before, deliberately: later messages are not typed into an Antigravity
+  session, so reviews and answers do not reach the lane unattended; it is not resumable by
+  the Factory; a lane's done line is not seen, because Antigravity's stop report carries no
+  model text; there is no Signet guard, and a launch requiring one is refused.
+- The lane agent `codex-interactive` is hosted by the lane wrapper as Codex's own
+  interactive session (`codex --no-daemon --no-alt-screen`), instead of an unhosted window
+  the Factory could neither read nor message. Its first message is given at launch; a later
+  message goes through Codex's own `codex queue` with nothing typed, and is `observed` only
+  when Codex's prompt hook reports it; stop reports carry the reply. Lane hooks are the
+  clone's `.codex/hooks.json`. Codex's folder trust and hook trust are not given by the
+  Factory; `FACTORY_LANE_SANDBOX=off` is the explicit per-run choice that also passes
+  `--dangerously-bypass-hook-trust`. (As first written this was the lane agent
+  `codex-interactive` only; the two entries below make it resumable and the default.)
+- A lane message to a hosted session that has ended restarts that session on its own
+  conversation instead of failing. Since hosted sessions replaced print mode, a Claude Code
+  lane that had finished, been closed, or been ended by the watcher for a review pause or a
+  wrap-up could not be continued: the message command only spoke to the live process and
+  exited 70 ("persistent process exited or identity is stale"). It now restarts the session
+  in its pane with Claude Code's own `--resume`, as the launch recorded it, waits for the
+  session to report starting, and records the message delivered only on the session's own
+  prompt report. A pause or wrap-up needs its exit verified for a hosted lane as for any
+  other. Programs the registry does not report as resumable are refused (exit 70) with the
+  message left planned. A message a busy session could not take is now said to be not
+  given, rather than "do not resend".
+- **The default author lane, `codex`, is Codex's own interactive session, hosted, and no
+  longer `codex exec`.** The launcher runs `--agent codex` (and a launch with no `--agent`)
+  as the adapter `codex-interactive`, and records that name. Nothing falls back to `codex
+  exec`: a Codex lane an earlier Factory started as `codex exec` is refused a message and
+  told to start a hosted session with `--replace-session`. `--model` and `--effort` reach
+  the session and its restart; with no `--model` the operator's configured model keys are
+  recorded and passed, as before; billing is still Codex's own sign-in. `codex-ollama` is
+  unchanged and still runs `codex exec`. **For operators:** a default Codex lane now asks
+  what an interactive session asks. Codex asks its folder-trust question for a clone it
+  has not seen, and skips the lane's report hooks until they are trusted (Codex's
+  `/hooks`, or `FACTORY_LANE_SANDBOX=off`, the explicit per-run choice); without that
+  the lane works but reports nothing and stays `starting`. Run against Codex itself with
+  the default agent once (2026-11-14): launch, clean end, restart on the same session id,
+  a queued follow-up, three messages each reported once.
+- An ended `codex-interactive` session is restarted by a lane message with Codex's own
+  `codex resume`, the message given as the resume's launch argument, because a resumed
+  Codex session that is given nothing reports nothing (observed). The hand-over is recorded
+  before the program exists and a message is never handed over twice. The registry now
+  reports `codex-interactive` as resumable by the Factory. Shown with a stand-in program
+  and run once against Codex itself through `tmux_lane.sh` and `tmux_lane_message.sh`
+  (2026-11-14, codex-cli 0.167.0, a synthetic folder): launch, clean end, restart on the
+  same session id, two queued follow-ups, every message reported once.
+- `tmux_lane_message.sh --native-session-file` is removed and refused by name. It handed an
+  exited interactive Codex session to `codex exec resume`, a non-interactive run, after
+  reading Codex's own session file. A `codex-interactive` lane that an earlier Factory
+  started with nothing hosting it is refused a message; its conversation is continued with
+  Codex's own `codex resume <session id>`, or a hosted session is started with
+  `tmux_lane.sh launch --replace-session`. (A hosted session that has ended is restarted
+  by a lane message: the entry above.)
+- Antigravity coordinator seats no longer run print mode fed over stdin. A seat is still
+  allowed: it starts as Antigravity's own interactive session in its window and is driven
+  there, with a warning at start that wakes and messages are not delivered into it (a wake
+  for it is reported `unsupported` and stays in the inbox). It works attended, not
+  unattended, until Antigravity has a supported delivery route.
+- Removing a lane's project files never goes through a link: if a directory on the way has
+  been replaced by one since the files were written, they are left and reported. The
+  candidate check likewise never follows a link on the way to a lane's paths.
 - Not converted, each with its `native_blocker` recorded at launch (`docs/HARNESS.md`,
-  "Providers not yet native"): Antigravity, Cursor, Muse and Prime still start in print mode
-  with a private configuration, because no qualified interface lets their interactive
-  programs report readiness or receipt, and converting now would cost the lane its Kindex
-  and any way to message it. Codex still runs `codex exec`.
+  "Providers not yet native"): Prime still starts in print mode with a private
+  configuration and is not installed where this was written. `codex-ollama` still runs
+  `codex exec`.
 
 ## [0.8.29] - 2026-11-09
 

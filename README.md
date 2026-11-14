@@ -60,11 +60,12 @@ If a provider reports a model retired, the Validator checks that provider's curr
 |---|---|---|
 | Validator | `codex` (default), `claude`, `agy`, `prime-agent`, `ollama` (Codex on a local Ollama model) | `FACTORY_VALIDATOR_AGENT`, `FACTORY_VALIDATOR_MODEL` (`FACTORY_VALIDATOR_OLLAMA_MODEL`, required for `ollama`) |
 | Orchestrator | `agy` (default), `codex`, `claude`, `prime-agent` | `FACTORY_ORCHESTRATOR_AGENT`, `FACTORY_ORCHESTRATOR_MODEL` |
-| Coder, Tester | `codex` (`codex exec`, the default), `codex-interactive` (the Codex TUI), `codex-ollama` (Codex on a local Ollama model), `cursor-agent` (`agent -p`), `claude`, `agy`, `prime-agent` | `tmux_lane.sh --agent ... --model ...` (`codex-ollama` requires one) |
+| Coder, Tester | `codex` (the default: Codex's own interactive session, hosted; `codex-interactive` is the same adapter by its own name), `claude` and `claude-ollama` (Claude Code's own interactive session, hosted; the second on a local Ollama model), `cursor-agent` (Cursor's own interactive agent, hosted; never `agent -p`), `muse` and `agy` (Muse Code's and Antigravity's own interactive sessions, hosted; a later message is not delivered into either automatically and is held for a person to enter in the lane's window), `codex-ollama` (`codex exec` on a local Ollama model; not converted), `prime-agent` (still print mode; not converted) | `tmux_lane.sh --agent ... --model ...` (`codex-ollama` and `claude-ollama` require one) |
 
-`harness/agents.py` is the registry behind `claude`, `agy` and `prime-agent`: each entry states
-how the harness takes a headless turn, a model, an effort and a session to resume, and which
-credential variables it reads. Those credentials reach a seat through an owner-only file, never
+`harness/agents.py` is the registry behind these lane agents: each entry states how the harness
+starts the program (its own interactive session wherever one is hosted; `docs/HARNESS.md` says
+what was run for each and what is still open), a model, an effort and a session to resume, and
+which credential variables it reads. Those credentials reach a seat through an owner-only file, never
 the tmux launch string. A `prime-agent` model may name its provider (`provider/model`). On a host
 whose kernel cannot give Codex's sandbox a namespace (a gVisor container, for one), set
 `FACTORY_LANE_SANDBOX=off`: the container is then the sandbox.

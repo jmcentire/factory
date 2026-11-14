@@ -37,7 +37,7 @@ from tests.test_harness_scripts import (
 REPO = HARNESS.parent
 CODEX_HELP = (
     "--ignore-user-config --ignore-rules --strict-config --json --thread --no-alt-screen "
-    "--no-daemon --add-dir --model"
+    "--no-daemon --add-dir --model --message"
 )
 
 
@@ -148,7 +148,7 @@ class Lanes:
 # -- 1. agents and invocation shape ---------------------------------------------------------
 
 
-def test_cursor_agent_lane_runs_the_stream_mode_invocation_under_the_lane_wrapper(
+def test_cursor_agent_lane_runs_native_terminal_preserving_operator_settings(
     tmp_path: Path,
 ) -> None:
     lanes = Lanes(tmp_path)
@@ -157,17 +157,20 @@ def test_cursor_agent_lane_runs_the_stream_mode_invocation_under_the_lane_wrappe
     assert launched.returncode == 0, launched.stdout + launched.stderr
     lane = lanes.clone("coder").resolve()
     [call] = lanes.windows("coder")
-    assert ("-- agent -p --output-format stream-json --force --trust --approve-mcps "
-            f"--workspace {lane} --model grok-4.7-xhigh") in call
+    assert f"-- agent --workspace {lane} --model grok-4.7-xhigh" in call
+    for forbidden in (" -p ", "--output-format", "--force", "--trust", "--approve-mcps"):
+        assert forbidden not in call
+    assert "--persistent" in call
     assert "env -i" in call and "lane_agent.py run --slot coder" in call
     assert "--prompt-arg" in call and "coder-prompt.txt" in call
-    # A plan lane: the wrapper records its session as it streams and stops API billing.
+    # A plan lane: the resident wrapper records native identity and forbids API routing.
     assert "--session-agent cursor-agent" in call and "coder-thread-id" in call
     assert "--plan-only" in call and "coder-credentials.env" in call
-    # Its private HOME holds only the lane's Kindex, never the operator's MCP servers.
-    home = lanes.root / "tmux-lanes" / "coder-agent-home" / "home"
-    assert list(json.loads((home / ".cursor" / "mcp.json").read_text())["mcpServers"]) == \
-        ["kindex"]
+    # Additive staged project MCP does not replace the operator's HOME/config.
+    home = lanes.root / "tmux-lanes" / "coder-agent-home"
+    mcp = json.loads((home / "cursor-mcp.json").read_text())["mcpServers"]
+    assert list(mcp) == ["lane-kindex"]
+    assert str(lane) in mcp["lane-kindex"]["args"]
     turn = json.loads((lanes.root / "tmux-lanes" / "coder-turn.json").read_text())
     assert turn["agent"] == "cursor-agent" and turn["billing"] == "plan"
     # Plan billing removes the spending cap, not progress and completion observation.
@@ -177,8 +180,8 @@ def test_cursor_agent_lane_runs_the_stream_mode_invocation_under_the_lane_wrappe
     assert row["caps"]["wall_cap_s"] is None
     assert row["caps"]["enforcement"] == "none"
     assert row["status"] == "active" and row["agent"] == "cursor-agent"
-    assert row["model"] == "grok-4.7-xhigh" and row["prompt_via"] == "argv"
-    assert row["cli_contract"] == "cursor-agent-stream-resume-v1"
+    assert row["model"] == "grok-4.7-xhigh" and row["prompt_via"] == "terminal"
+    assert row["cli_contract"] == "cursor-agent-native-terminal-v1"
     assert row["auth_preflight"] == "cursor-agent-status"
     watch = dict(row["watch"])
     assert Path(watch.pop("runs_dir")).name == "runs"
@@ -186,7 +189,8 @@ def test_cursor_agent_lane_runs_the_stream_mode_invocation_under_the_lane_wrappe
     assert watch == {"read_allowance_s": 900, "stall_window_s": 1200, "poll_s": 30,
                      "wrap_s": 0, "review_every_s": 0, "review_wait_s": 900}
 
-    # Until the harness streams its session there is nothing to resume. Do not claim delivery
+    # Until the native harness reports its session there is no verified identity.
+    # Do not claim delivery
     # or prescribe replacement of a conversation that may still be starting.
     message = run(
         ["bash", str(HARNESS / "tmux_lane_message.sh"), "r1", "validator", "coder", "status",
@@ -217,8 +221,8 @@ def test_cursor_agent_without_a_named_model_runs_its_own_default(tmp_path: Path)
     launched = lanes.lane("coder", "--agent", "cursor-agent")
     assert launched.returncode == 0, launched.stdout + launched.stderr
     [call] = lanes.windows("coder")
-    assert "-- agent -p --output-format stream-json --force --trust --approve-mcps --workspace" \
-        in call and "--model" not in call
+    assert "-- agent --workspace" in call and "--model" not in call
+    assert " -p " not in call and "--force" not in call
     row = read_chain(lanes.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
     assert (row["model"], row["model_source"]) == ("", "agent")
 
@@ -486,7 +490,9 @@ def test_interactive_codex_runs_the_tui_without_its_daemon(tmp_path: Path) -> No
     launched = lanes.lane("coder", "--agent", "codex-interactive")
     assert launched.returncode == 0, launched.stdout + launched.stderr
     [call] = lanes.windows("coder")
-    assert "--terminal --prompt-arg" in call
+    assert "--prompt-arg" in call
+    assert "--session-agent codex-interactive" in call
+    assert "--persistent" in call
     assert "-- codex --no-daemon --no-alt-screen --ask-for-approval never" in call
     assert "never exec" not in call and "codex_lane_session" not in call
     assert "--disable apps" not in call
@@ -521,16 +527,18 @@ def test_interactive_codex_sandbox_off_replaces_approval_flag(tmp_path: Path, ag
     assert "--ask-for-approval" not in call
 
 
-def test_codex_exec_stays_the_default_author_lane(tmp_path: Path) -> None:
+def test_codex_native_stays_the_default_author_lane(tmp_path: Path) -> None:
     lanes = Lanes(tmp_path)
     assert lanes.lane("coder").returncode == 0
     [call] = lanes.windows("coder")
     assert "lane_agent.py run --slot coder" in call
-    assert "codex_lane_session.py" in call and "codex --ask-for-approval never exec" in call
+    assert "codex_lane_session.py" not in call and "codex exec" not in call
+    assert "--persistent" in call and "--prompt-arg" in call
+    assert "-- codex --no-daemon --no-alt-screen" in call
     assert "--disable apps" not in call
     assert "--strict-config" not in call and "--ignore-user-config" not in call
     row = read_chain(lanes.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
-    assert row["agent"] == "codex" and row["metered"] is False
+    assert row["agent"] == "codex-interactive" and row["metered"] is False
     assert row["caps"]["wall_cap_s"] is None
 
 
@@ -544,7 +552,7 @@ def test_signed_out_codex_is_refused_with_the_exact_fix_before_anything_starts(
     _codex_stub(lanes.stub, signed_in=False)
     refused = lanes.lane("coder")
     assert refused.returncode == 77, refused.stdout + refused.stderr
-    assert "AUTH: codex cannot start non-interactively" in refused.stderr
+    assert "AUTH:" in refused.stderr and "cannot start non-interactively" in refused.stderr
     assert "Not logged in" in refused.stderr
     assert "remediation: CODEX_HOME=" in refused.stderr
     assert "codex login --device-auth" in refused.stderr
@@ -595,15 +603,11 @@ def test_an_auth_check_that_waits_for_input_is_a_login_screen() -> None:
     def signed_in(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess([], 0, "Logged in", "")
 
-    # The msg-r2 Coder's TUI could not bind its socket under a long CODEX_HOME and fell back to
-    # its login screen: an interactive lane is refused before that can happen.
-    long_home = "/" + "x" * 100
-    with pytest.raises(lane_agent.PreflightRefused, match="login screen") as refused:
-        lane_agent.preflight("codex-interactive", environ={"CODEX_HOME": long_home},
-                             runner=signed_in)
-    assert "--agent codex" in refused.value.remediation
-    assert lane_agent.preflight("codex-interactive", environ={"CODEX_HOME": "/h"},
-                                runner=signed_in) == "codex-login-status"
+    # Native --no-daemon lanes do not bind a daemon socket inside CODEX_HOME.
+    # Preserve both short and long operator homes without fabricating login failure.
+    for home in ("/" + "x" * 100, "/h"):
+        assert lane_agent.preflight("codex-interactive", environ={"CODEX_HOME": home},
+                                    runner=signed_in) == "codex-login-status"
 
 
 # -- 3. spend caps for metered agents -------------------------------------------------------
@@ -1497,8 +1501,20 @@ def test_review_pauses_are_for_resumable_coder_launches_and_can_be_turned_off(
     lanes = Lanes(tmp_path)
     refused = lanes.lane("tester", "--review-every-minutes", "10")
     assert refused.returncode == 64 and "Coder launch only" in refused.stderr
-    refused = lanes.lane("coder", "--agent", "codex-interactive", "--review-every-minutes", "10")
+    # Cursor is still documented as unsupported for unattended ended-session
+    # recovery. Native Codex now has a qualified same-conversation resume path.
+    refused = lanes.lane("coder", "--agent", "cursor-agent", "--review-every-minutes", "10")
     assert refused.returncode == 64 and "need a resumable lane" in refused.stderr
+    native = Lanes(tmp_path / "native-codex")
+    _codex_stub(native.stub, signed_in=True)
+    accepted = native.lane("coder", "--agent", "codex-interactive",
+                           "--review-every-minutes", "10")
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    native_row = read_chain(native.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
+    assert native_row["watch"]["review_every_s"] == 600
+    [native_call] = native.windows("coder")
+    assert "--session-agent codex-interactive" in native_call
+    assert "codex exec" not in native_call
     assert lanes.lane("coder", "--review-every-minutes", "0").returncode == 0
     prompt = (lanes.root / "tmux-lanes" / "coder-prompt.txt").read_text(encoding="utf-8")
     assert "pauses this lane" not in prompt and "capped at" not in prompt
@@ -1643,7 +1659,10 @@ def test_a_lanes_commands_get_the_cache_and_runtime_on_launch_and_resume(tmp_pat
          "--runs", str(lanes.root.parent)],
         lanes.operator, lanes.env,
     )
-    assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+    # This command-recording tmux stub does not run a native process or emit
+    # its receipt. Inspect preserved launch inputs without pretending delivery.
+    assert resumed.returncode == 70, resumed.stdout + resumed.stderr
+    assert "NOT delivered" in resumed.stderr
     respawn = next(line for line in lanes.tmux_log.read_text().splitlines()
                    if "respawn-pane" in line)
     assert _policy(respawn) == expected
@@ -1718,11 +1737,13 @@ def test_a_tester_without_the_strategys_oracle_inputs_does_not_launch(tmp_path: 
 
 
 def test_freezing_incomplete_tests_preserves_evidence_without_acceptance(tmp_path: Path) -> None:
-    lanes = Lanes(tmp_path / "run")
+    lanes = Lanes(tmp_path / "run", budget="50")
     strategy = lanes.root / "artifacts" / "testing-strategy.md"
     strategy.write_text(strategy.read_text() + "planned-case: R16.11-a Critical\n"
                         "test-modules: *_test.ts\n")
-    assert lanes.lane("tester").returncode == 0
+    _ollama_stub(lanes.stub, available=True)
+    assert lanes.lane("tester", "--agent", "codex-ollama", "--model", "glm-test:cloud",
+                      *METERED_CAPS).returncode == 0
     clone = lanes.clone("tester")
     (clone / "cap_test.ts").write_text('Deno.test("request cap", () => {});\n')
 
@@ -1877,3 +1898,27 @@ def test_replaced_window_cannot_certify_old_lane_exit(tmp_path):
     assert watched.at(601) == 'stopping'
     assert watched.at(602) == 'stopping'
     assert not watched.rows('lane-output.jsonl')
+
+
+def test_explicit_codex_ollama_retains_its_separate_exec_transport(tmp_path: Path) -> None:
+    lanes = Lanes(tmp_path, budget="50")
+    _ollama_stub(lanes.stub, available=True)
+    launched = lanes.lane("coder", "--agent", "codex-ollama", "--model", "glm-test:cloud",
+                          *METERED_CAPS)
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+    [call] = lanes.windows("coder")
+    assert "codex_lane_session.py" in call
+    assert "exec" in call and "--oss" in call and "--local-provider ollama" in call
+    assert "--no-daemon" not in call and "--session-agent codex-interactive" not in call
+    row = read_chain(lanes.root / "tmux-lanes" / "coder-launch.jsonl")[-1]
+    assert row["agent"] == "codex-ollama"
+
+
+def test_resident_native_author_freeze_refuses_live_tree_snapshot(tmp_path: Path) -> None:
+    lanes = Lanes(tmp_path)
+    assert lanes.lane("tester").returncode == 0
+    result = run(["bash", str(HARNESS / "tmux_lane.sh"), "r1", "tester", "freeze",
+                  "--runs", str(lanes.root.parent)], lanes.operator, lanes.env)
+    assert result.returncode == 64
+    assert "committed SHA" in result.stderr and "endgame.sh" in result.stderr
+    assert not list((lanes.root / "validation").glob("*/result.json"))

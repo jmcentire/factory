@@ -123,12 +123,15 @@ def test_admission_rejects_existing_hardlink_without_reading_contents(tmp_path):
 
 
 def shared_runtime(tmp_path):
-    from harness.agents import _keychain_home
     peer = tmp_path / "private/author"
     operator = tmp_path / "operator"
     (operator / "Library").mkdir(parents=True)
-    home = _keychain_home(peer / ".git/factory-runtime/tester/agent", operator)
+    # Exercise the boundary against a legacy alias directly. Native AGY no
+    # longer creates private homes; its removed helper is not the safety oracle.
+    home = peer / ".git/factory-runtime/tester/agent/home"
+    home.mkdir(parents=True)
     link = home / "Library"
+    link.symlink_to(operator / "Library", target_is_directory=True)
     value = contract(tmp_path)
     value["shared_read_aliases"] = {str(link): str(operator / "Library")}
     return value, link, peer, operator / "Library"

@@ -11,7 +11,9 @@ USAGE='usage: tmux_lane.sh <run> <coder|tester> <launch|qualify|freeze|retire-pr
                   [--agent codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent] [--model <model>]
                   [--effort <low|medium|high|xhigh|max>]
                   [--persistent (resident native session; always on for Claude, which runs
-                   as an interactive Claude Code session and never in print mode)]
+                   as an interactive Claude Code session and never in print mode, and for
+                   codex, the default, which is Codex'"'"'s own interactive session: the
+                   lane agent codex-interactive, never codex exec)]
                   [--metered] [--spend-cap-usd <usd> --usd-per-hour <usd>]
                   [--wall-cap-minutes <min, metered lanes and qualify only>]
                   [--round <tag> --replace-session <why the session cannot resume>]
@@ -125,9 +127,21 @@ exec 4< <("$FACTORY_PYTHON" "$(dirname "${BASH_SOURCE[0]}")/model_settings.py" "
 { IFS= read -r -d '' AGENT <&4 && IFS= read -r -d '' MODEL_ARG <&4 &&
   IFS= read -r -d '' EFFORT <&4; } || exit 64
 exec 4<&-
+# An author lane on Codex is Codex's own interactive session, hosted by the lane wrapper: the
+# adapter the lane agent `codex-interactive` names. `codex`, the default, is that adapter, and
+# everything from here on, the launch record included, says `codex-interactive`. No author
+# lane runs `codex exec` for it, and nothing falls back to it. `codex-ollama` is a different
+# lane agent and is unchanged: Codex on a local Ollama model has not been run interactively.
+[ "$AGENT" != codex ] || AGENT=codex-interactive
 # Claude Code is a resident native terminal session for every action: it has no print mode here.
+# So is Cursor's agent: its interactive program, never `-p`. So is Muse Code: its interactive
+# session, never `muse exec`. So is Antigravity: its interactive session, never `--print`.
+# So is Codex (`codex`, which is the lane agent codex-interactive): its interactive session,
+# hosted by the wrapper, never `codex exec`.
 case "$ACTION:$AGENT" in
-  launch:claude|qualify:claude|launch:claude-ollama|qualify:claude-ollama|launch:agy)
+  launch:claude|qualify:claude|launch:claude-ollama|qualify:claude-ollama|\
+  launch:cursor-agent|qualify:cursor-agent|launch:muse|qualify:muse|launch:agy|qualify:agy|\
+  launch:codex-interactive|qualify:codex-interactive)
     PERSISTENT=1; PERSISTENT_ARGS=(--persistent) ;;
 esac
 case "$AGENT" in codex|codex-interactive|codex-ollama|cursor-agent|claude|claude-ollama|agy|muse|prime-agent) ;;
@@ -135,8 +149,10 @@ case "$AGENT" in codex|codex-interactive|codex-ollama|cursor-agent|claude|claude
 esac
 if [ "$PERSISTENT" = 1 ]; then
   case "$ACTION:$AGENT" in
-    launch:claude|qualify:claude|launch:claude-ollama|qualify:claude-ollama|launch:agy) ;;
-    *) echo "tmux-lane: --persistent requires --agent claude, claude-ollama or (launch only) agy" >&2; exit 64 ;;
+    launch:claude|qualify:claude|launch:claude-ollama|qualify:claude-ollama|\
+    launch:cursor-agent|qualify:cursor-agent|launch:muse|qualify:muse|launch:agy|qualify:agy|\
+    launch:codex-interactive|qualify:codex-interactive) ;;
+    *) echo "tmux-lane: --persistent requires --agent claude, claude-ollama, cursor-agent, muse, agy or codex-interactive" >&2; exit 64 ;;
   esac
 fi
 case "$EFFORT" in ""|minimal|low|medium|high|xhigh|max) ;;
@@ -222,8 +238,7 @@ if [ "$ACTION" != "freeze" ]; then
   # A lane whose session a lane message can resume: a Codex exec thread, or a registry harness's
   # session (harness/agents.py), which the lane wrapper records the moment the harness streams it.
   case "$AGENT" in
-    codex|codex-ollama) AGENT_RESUMABLE=1 ;;
-    codex-interactive) AGENT_RESUMABLE=0 ;;
+    codex|codex-ollama|codex-interactive) AGENT_RESUMABLE=1 ;;
     *) DESCRIBED=$("$FACTORY_PYTHON" "$D/agents.py" describe --agent "$AGENT" | tr '\0' ' ')
        case "$DESCRIBED" in resumable*) AGENT_RESUMABLE=1 ;; *) AGENT_RESUMABLE=0 ;; esac
        case "$DESCRIBED" in *metered-only*) METERED=true ;; esac
@@ -240,7 +255,8 @@ if [ "$ACTION" != "freeze" ]; then
   # registry entry but not a blocker.
   exec 4< <("$FACTORY_PYTHON" "$D/agents.py" describe --agent "$AGENT")
   { IFS= read -r -d '' _ <&4 && IFS= read -r -d '' _ <&4 &&
-    IFS= read -r -d '' MEMORY_ISOLATION <&4 && IFS= read -r -d '' NATIVE_BLOCKER <&4; } || exit 70
+    IFS= read -r -d '' MEMORY_ISOLATION <&4 && IFS= read -r -d '' NATIVE_BLOCKER <&4 &&
+    IFS= read -r -d '' START_REQUIRES <&4 && IFS= read -r -d '' PROTOCOL_NOTE <&4; } || exit 70
   exec 4<&-
   MEMORY_ISOLATION=${MEMORY_ISOLATION#memory:}
   if [ "$AGENT" = claude-ollama ] && [ -z "$MODEL" ]; then
@@ -459,6 +475,43 @@ PY
       "give each lane and each parallel instance its own clone (git clone <source> <dir>), never a git worktree: the Codex sandbox blocks writes to the parent repository's git directory"
   REPOSITORY=$(printf '%s' "$REPOSITORY_RECEIPT" | "$FACTORY_PYTHON" -c \
     'import json,sys; print(json.load(sys.stdin)["root"])')
+  # A native session removes the project files it wrote when it ends; one that was killed
+  # could not. Remove exactly those (by each earlier slot's own record, unchanged bytes
+  # only) before this lane's inputs are checked, unless the lane is still running. Only this
+  # lane's own slots ("$LANE" and "$LANE.<round>") and its own clone are looked at: another
+  # instance such as "$LANE-b" is another lane, with its own clone and possibly live.
+  if ! tmux list-windows -t "$RUN" -F '#{window_name} #{pane_dead}' 2>/dev/null | grep -qx "$LANE 0"; then
+    for MANIFEST in "$TMUX_ROOT/$LANE"-agent-home/*-project-files.json \
+        "$TMUX_ROOT/$LANE".*-agent-home/*-project-files.json \
+        "$REPOSITORY"/.git/factory-runtime/*/agent/*-project-files.json; do
+      [ -f "$MANIFEST" ] && [ ! -L "$MANIFEST" ] || continue
+      "$FACTORY_PYTHON" "$D/native_session.py" clean-project --manifest "$MANIFEST" >/dev/null || \
+        refuse 70 "an earlier session's project files could not be accounted for ($MANIFEST)"
+    done
+    # With the lane's own leftovers gone, anything at the paths a Cursor or Muse lane writes
+    # is the target project's. It is never edited or replaced, so the lane cannot run here.
+    # Say so now, before a budget is reserved or a launch recorded, not from inside the lane.
+    if [ "$AGENT" = cursor-agent ]; then
+      OCCUPIED=$("$FACTORY_PYTHON" "$D/native_session.py" check-project --workspace "$REPOSITORY" 2>&1) || \
+        refuse 70 "the lane's repository has Cursor project configuration of its own, which is not edited or replaced: $OCCUPIED" \
+          "a Cursor lane reads its hooks and its Kindex only from those paths and cannot run in this repository; choose another agent for this lane"
+    fi
+    if [ "$AGENT" = codex-interactive ]; then
+      OCCUPIED=$("$FACTORY_PYTHON" "$D/native_session.py" check-project --agent codex-interactive --workspace "$REPOSITORY" 2>&1) || \
+        refuse 70 "the lane's repository has a Codex project hook file of its own, which is not edited or replaced: $OCCUPIED" \
+          "an interactive Codex lane's hooks can be added beside the operator's only through that path, so it cannot run in this repository; choose another agent for this lane"
+    fi
+    if [ "$AGENT" = agy ]; then
+      OCCUPIED=$("$FACTORY_PYTHON" "$D/native_session.py" check-project --agent agy --workspace "$REPOSITORY" 2>&1) || \
+        refuse 70 "the lane's repository has an Antigravity plugin of its own at .agents/plugins/lane, which is not edited or added to: $OCCUPIED" \
+          "an Antigravity lane's hooks and Kindex reach it only as a plugin in that directory, so it cannot run in this repository; choose another agent for this lane"
+    fi
+    if [ "$AGENT" = muse ]; then
+      OCCUPIED=$("$FACTORY_PYTHON" "$D/native_session.py" check-project --agent muse --workspace "$REPOSITORY" 2>&1) || \
+        refuse 70 "the lane's repository has a Muse project hook file of its own, which is not edited or replaced: $OCCUPIED" \
+          "a Muse lane's hooks can be added beside the operator's only through that path, so it cannot run in this repository; choose another agent for this lane"
+    fi
+  fi
   if [ "$ACTION" = launch ]; then
     PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" "$D/role_inputs.py" verify \
       --runs "$RUNS_ARG" --run "$RUN" --role "$ROLE" --repo "$REPOSITORY" \
@@ -546,7 +599,7 @@ PY
   # or disabled. With no --model, the model keys of that config are read here only so the
   # launch record names what the lane ran and a resume runs the same; the lane runs what the
   # operator's own `codex` would. A config that names no model leaves Codex's own default.
-  if [ "$AGENT" = codex ] && [ -z "$MODEL" ]; then
+  if [ "$AGENT" = codex-interactive ] && [ -z "$MODEL" ]; then
     exec 4< <("$FACTORY_PYTHON" "$D/lane_agent.py" codex-model --codex-home "$SAFE_CODEX_HOME")
     IFS= read -r -d '' MODEL <&4 || refuse 70 "the model in $SAFE_CODEX_HOME/config.toml could not be read" \
       "fix $SAFE_CODEX_HOME/config.toml, or name the model with --model"
@@ -685,7 +738,7 @@ PY
   printf -v CLOCK_CMD '%q %q remaining --root %q --slot %q' \
     "$FACTORY_PYTHON" "$D/lane_watchdog.py" "$ROOT" "$SLOT"
   RESUMABLE="$AGENT_RESUMABLE"
-  PROMPT_DIGEST=$(PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" - "$TASK_COPY" "$PROMPT" "$ROLE" "$SLOT" "$STANDARD_BLOCK" \
+  PROMPT_DIGEST=$(LANE_PROTOCOL_NOTE="$PROTOCOL_NOTE" PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" - "$TASK_COPY" "$PROMPT" "$ROLE" "$SLOT" "$STANDARD_BLOCK" \
     "$LANE_ENV_NOTICE" "$WALL_CAP_S" "$WRAP_S" "$REVIEW_S" "$RESUMABLE" "$CLOCK_CMD" \
     "$REPOSITORY" "$BRIEF_MANIFEST" "$ROOT" "$D" <<'PY'
 import hashlib, json, os, pathlib, sys
@@ -737,6 +790,9 @@ if int(review) and resumable == "1":
     )
 if environment:
     protocol += "- Your shell commands run with this environment:\n" + environment + "\n"
+# What this lane's provider needs said (harness/agents.py protocol_note), e.g. which MCP
+# server is the lane's own Kindex.
+protocol += os.environ.get("LANE_PROTOCOL_NOTE", "")
 git_dir = repository / ".git"
 if not git_dir.is_dir() or git_dir.is_symlink():
     raise SystemExit("tmux-lane: the lane repository has no .git directory to hold its brief")
@@ -869,7 +925,7 @@ PY
   fi
   DIALOGUE_BASELINE=$("$FACTORY_PYTHON" "$D/lane_admission.py" --root "$ROOT" --run "$RUN" \
     --role "$ROLE" --action baseline) || refuse 70 "cannot retain dialogue baseline"
-  PLANNED=$(LANE_MEMORY_ISOLATION="$MEMORY_ISOLATION" LANE_NATIVE_BLOCKER="$NATIVE_BLOCKER" LANE_DIALOGUE_BASELINE="$DIALOGUE_BASELINE" LANE_PERSISTENT="$PERSISTENT" LANE_AUTHOR_CUSTODY="$AUTHOR_CUSTODY" LANE_KERNEL_BOUNDARY="$BOUNDARY_RECORD" LANE_INDEPENDENCE="$INDEPENDENCE" "$FACTORY_PYTHON" - "$RUN" "$ROLE" "$AGENT" "$REPOSITORY" \
+  PLANNED=$(LANE_START_REQUIRES="$START_REQUIRES" LANE_MEMORY_ISOLATION="$MEMORY_ISOLATION" LANE_NATIVE_BLOCKER="$NATIVE_BLOCKER" LANE_DIALOGUE_BASELINE="$DIALOGUE_BASELINE" LANE_PERSISTENT="$PERSISTENT" LANE_NATIVE_DIR="$AGENT_HOME" LANE_CLAUDE_LAUNCHER="${FACTORY_CLAUDE_LAUNCHER:-}" LANE_AUTHOR_CUSTODY="$AUTHOR_CUSTODY" LANE_KERNEL_BOUNDARY="$BOUNDARY_RECORD" LANE_INDEPENDENCE="$INDEPENDENCE" "$FACTORY_PYTHON" - "$RUN" "$ROLE" "$AGENT" "$REPOSITORY" \
     "$PROMPT" "$PROMPT_DIGEST" "$TASK_DIGEST" "$PROFILE_DIGEST" \
     "$REPOSITORY_RECEIPT" "$AGENT_VERSION" "$MODEL" "$KINDEX" \
     "$LANE" "$SLOT" "$INSTANCE" "$ROUND" "$ACTION" "$METERED" "$PROMPT_VIA" "$AGENT_TTY" \
@@ -908,6 +964,12 @@ print(json.dumps({
     "dialogue_baseline": int(os.environ["LANE_DIALOGUE_BASELINE"]),
     "agent": agent,
     **({"persistent": True} if os.environ["LANE_PERSISTENT"] == "1" else {}),
+    # What a lane message needs to restart an ended hosted session as it was started
+    # (tmux_lane_message.sh): where its hook settings and journal live, and the command the
+    # operator starts Claude Code with (null: none was named, so the default applies again).
+    **({"native": {"dir": os.environ["LANE_NATIVE_DIR"],
+                   "claude_launcher": os.environ["LANE_CLAUDE_LAUNCHER"] or None}}
+       if os.environ["LANE_PERSISTENT"] == "1" else {}),
     # What the lane actually ran, for provenance: the model, where it came from (operator,
     # codex-config, agy-config or agent), and config overrides, which a resume reuses.
     "model": model,
@@ -961,6 +1023,8 @@ print(json.dumps({
     "memory_isolation": os.environ["LANE_MEMORY_ISOLATION"],
     # Why this provider still runs in print mode with a private configuration, or null.
     "native_blocker": os.environ["LANE_NATIVE_BLOCKER"] or None,
+    # What the provider's own program asks the operator at start; the Factory answers none.
+    "start_requires": os.environ["LANE_START_REQUIRES"] or None,
     "lane_env": json.loads(lane_env),
     "repository": repository,
     "prompt_path": prompt,
@@ -1021,9 +1085,13 @@ PY
       printf '%s\0' '-c' 'features.hooks=true' '-c' "$SIGNET_OVERRIDE" > \
         "$TMUX_ROOT/$SLOT-lane-setup.nul"
     fi
+    # The interactive lane's record names it and says it is a resident session, which is
+    # what a lane message checks before it hands a message to the wrapper.
+    TURN_RECORD_AGENT=codex
+    [ "$AGENT" != codex-interactive ] || TURN_RECORD_AGENT=codex-interactive
     "$FACTORY_PYTHON" "$D/agents.py" turn-record --output "$TMUX_ROOT/$SLOT-turn.json" \
-      --agent codex --model "$MODEL" --effort "$EFFORT" --billing plan \
-      --env-file "" --setup "$TMUX_ROOT/$SLOT-lane-setup.nul" || \
+      --agent "$TURN_RECORD_AGENT" --model "$MODEL" --effort "$EFFORT" --billing plan \
+      --env-file "" --setup "$TMUX_ROOT/$SLOT-lane-setup.nul" ${PERSISTENT_ARGS[@]+"${PERSISTENT_ARGS[@]}"} || \
       refuse 70 "the lane's turn record could not be written"
   fi
   THREAD_FILE="$TMUX_ROOT/$SLOT-thread-id"
@@ -1047,16 +1115,18 @@ PY
   if [ "$PERSISTENT" = 1 ]; then
     printf -v PERSISTENT_WRAP ' --persistent --run-root %q' "$ROOT"
     WRAP+="$PERSISTENT_WRAP"
-    case "$AGENT" in claude|claude-ollama)
+    case "$AGENT" in claude|claude-ollama|cursor-agent|muse|agy|codex-interactive)
       # The session's own hook commands write its lifecycle journal here, so it is the lane's
       # private runtime, which a kernel boundary leaves writable, not the host control tree.
+      # For Cursor, Muse and Antigravity it also holds the record of the project files the
+      # session wrote.
       printf -v NATIVE_WRAP ' --native-dir %q' "$AGENT_HOME"
       WRAP+="$NATIVE_WRAP" ;;
     esac
   fi
   # Codex's trusted event/session driver stays outside the model boundary. Other clients
   # are direct children of lane_agent, which retains their process/exit evidence on the host.
-  case "$AGENT" in codex|codex-ollama) ;; *) WRAP+="$BOUNDARY_MODEL_ARGS" ;; esac
+  case "$AGENT" in codex-ollama) ;; *) WRAP+="$BOUNDARY_MODEL_ARGS" ;; esac
   # On a host whose kernel will not give Codex's own sandbox a namespace (a gVisor container,
   # for one), the operator sets FACTORY_LANE_SANDBOX=off: the container is then the sandbox.
   CODEX_SANDBOX_ARG=""
@@ -1066,14 +1136,22 @@ PY
   # The operator's Codex configuration, rules, apps and MCP servers stay as they are. The lane
   # adds its permission profile, shell policy and scoped Kindex as -c overrides beside them.
   case "$AGENT" in
-    codex|codex-ollama)
+    codex-ollama)
+      # The one lane that still runs `codex exec` (with --oss): see the note where AGENT is set.
       printf -v LANE_CMD '%s %s -- %q %q --prompt %q --thread-file %q --events %q --root %q --role %q%s -- codex %s exec %s --json -C %q -c %q -c %q -c %q -c %q -' \
         "$ENV_PREFIX" "$WRAP" "$FACTORY_PYTHON" "$D/codex_lane_session.py" \
         "$PROMPT" "$THREAD_FILE" "$CODEX_EVENTS" "$ROOT" "$LANE" "$BOUNDARY_CODEX_ARGS" "$CODEX_POLICY_ARG" "$LOCAL_ARGS" "$REPOSITORY" \
         'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_OVERRIDE" ;;
     codex-interactive)
-      printf -v LANE_CMD '%s %s --terminal --prompt-arg %q -- codex --no-daemon --no-alt-screen %s %s -C %q -c %q -c %q -c %q -c %q' \
-        "$ENV_PREFIX" "$WRAP" "$PROMPT" "$CODEX_POLICY_ARG" "$LOCAL_ARGS" "$REPOSITORY" \
+      # Codex's own interactive session on a terminal the wrapper owns (harness/native_session.py
+      # codex_plan): the wrapper adds the lane's report hooks and gives the first message at
+      # launch. Codex skips a hook it has not been told to trust; FACTORY_LANE_SANDBOX=off is
+      # the explicit per-run choice that also passes its own bypass for that. Nothing else
+      # about trust is decided here.
+      CODEX_HOOK_TRUST_ARG=""
+      [ "${FACTORY_LANE_SANDBOX:-on}" != off ] || CODEX_HOOK_TRUST_ARG="--dangerously-bypass-hook-trust"
+      printf -v LANE_CMD '%s %s --session-agent codex-interactive --session-file %q --prompt-arg %q -- codex --no-daemon --no-alt-screen %s %s %s -C %q -c %q -c %q -c %q -c %q' \
+        "$ENV_PREFIX" "$WRAP" "$THREAD_FILE" "$PROMPT" "$CODEX_POLICY_ARG" "$CODEX_HOOK_TRUST_ARG" "$LOCAL_ARGS" "$REPOSITORY" \
         'default_permissions="factory-lane"' "$PERMISSION_PROFILE" "$SHELL_POLICY" "$KINDEX_OVERRIDE" ;;
     cursor-agent|claude|claude-ollama|agy|muse|prime-agent)
       # A registry harness (harness/agents.py). Its lane configuration (the lane's scoped
@@ -1102,6 +1180,16 @@ PY
         # Retain the explicit choice with the turn, so later resumes do not fall back to
         # the user's unrelated Cursor configuration.
         printf '%s\0' '--sandbox' 'disabled' >> "$SETUP_OUT"
+      fi
+      if [ "$AGENT" = agy ] && [ "${FACTORY_LANE_SANDBOX:-on}" = off ]; then
+        # Nothing is imposed on Antigravity's approvals otherwise. This is the one
+        # configuration that adds its native permissive flag, retained with the turn.
+        printf '%s\0' '--dangerously-skip-permissions' >> "$SETUP_OUT"
+      fi
+      if [ "$AGENT" = muse ] && [ "${FACTORY_LANE_SANDBOX:-on}" = off ]; then
+        # Nothing is imposed on Muse's approvals or sandbox otherwise. This is the one
+        # configuration that adds its native permissive flag, retained with the turn.
+        printf '%s\0' '--yolo' >> "$SETUP_OUT"
       fi
       SETUP_ARGS=()
       while IFS= read -r -d '' PART; do SETUP_ARGS+=("--extra-arg=$PART"); done < "$SETUP_OUT"
@@ -1211,7 +1299,8 @@ PY
   if [ "$MEMORY_ISOLATION" = beside-operator ]; then
     echo "tmux-lane: memory: the operator's own settings and MCP servers are intact and the lane's Kindex is added beside them. Any memory server the operator configured is visible to this lane, so Coder/Tester independence rests on their separate inputs and clones, not on memory."
   fi
-  [ -z "$NATIVE_BLOCKER" ] || echo "tmux-lane: not yet native: $NATIVE_BLOCKER"
+  [ -z "$NATIVE_BLOCKER" ] || echo "tmux-lane: open for this provider: $NATIVE_BLOCKER"
+  [ -z "$START_REQUIRES" ] || echo "tmux-lane: this start asks you: $START_REQUIRES"
   case "$AGENT" in claude|claude-ollama)
     if [ "${FACTORY_LANE_SANDBOX:-on}" = off ]; then
       echo "tmux-lane: permissions: you selected FACTORY_LANE_SANDBOX=off, so Claude Code is given --dangerously-skip-permissions (not when your launcher is your own shell function, which decides for itself)."
@@ -1270,6 +1359,19 @@ fi
   echo "tmux-lane: $RUN:$LANE is not quiescent; stop the agent before freezing" >&2
   exit 70
 }
+# A native session removes the project files it wrote when it ends. One that was killed
+# could not; remove exactly those files (by the lane's own record, unchanged bytes only)
+# before the tree is exported, so no candidate carries a lane's hook or MCP file.
+for MANIFEST in "$TMUX_ROOT/$SLOT-agent-home/$SLOT-project-files.json" \
+    "$REPOSITORY/.git/factory-runtime/$SLOT/agent/$SLOT-project-files.json"; do
+  [ ! -f "$MANIFEST" ] || [ -L "$MANIFEST" ] || {
+    LEFT=$("$FACTORY_PYTHON" "$D/native_session.py" clean-project --manifest "$MANIFEST") || exit 70
+    [ -z "$LEFT" ] || {
+      echo "tmux-lane: a file this lane wrote changed afterwards and was left in place; inspect it before freezing: $LEFT" >&2
+      exit 70
+    }
+  }
+done
 
 EXPORT=$(PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" "$REPO_ROOT/harness/lane_repository.py" freeze \
   --source "$REPOSITORY" --store "$TMUX_ROOT/snapshots" --durable-through "$ROOT" \

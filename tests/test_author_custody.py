@@ -257,7 +257,8 @@ def test_registry_guard_configuration_binds_author_without_inheriting_environmen
             'FACTORY_SIGNET_CONTRACT':config['policy']['contract'],
             'FACTORY_SIGNET_DIGEST':config['policy']['contract_digest'],
             'FACTORY_AUTHOR_CUSTODY_CONFIG':str(path),'FACTORY_AUTHOR_CUSTODY_DIGEST':digest})
-    setting=json.loads((pathlib.Path(setup.env['CURSOR_CONFIG_DIR'])/'hooks.json').read_text())
+    assert 'CURSOR_CONFIG_DIR' not in setup.env and 'HOME' not in setup.env
+    setting=json.loads((base/'cursor-hooks.json').read_text())
     for event in ('preToolUse','beforeShellExecution','beforeMCPExecution'):
         hook=setting['hooks'][event][0]
         assert hook['failClosed'] and '--author-config' in hook['command']
@@ -361,7 +362,7 @@ def test_canonical_launch_and_resume_retain_author_broker(prepared, tmp_path, mo
     config['policy']['contract_digest']=signet_hooks.digest(guard)
     path.write_text(json.dumps(config))
     digest=lane_custody._digest(config)
-    # A CLI fixture supports only read-only hooks/list; no provider/model is invoked.
+    # A synthetic CLI reports hooks/list and native lifecycle; no provider/model is invoked.
     # Locate the existing fixture binary by its known setup helper's PATH.
     env=environment
     stub=pathlib.Path(env['PATH'].split(':')[0])/'codex'
@@ -370,9 +371,12 @@ if '--version' in sys.argv: print('fixture');raise SystemExit
 if 'login' in sys.argv and 'status' in sys.argv: raise SystemExit(0)
 if '--help' in sys.argv:
  print('--ignore-user-config --ignore-rules --strict-config --json --thread '
-       '--no-alt-screen --add-dir --model')
+       '--no-alt-screen --no-daemon --add-dir --model --message')
  raise SystemExit(0)
-if 'app-server' not in sys.argv: raise SystemExit('no model fixture permitted')
+if 'app-server' not in sys.argv:
+ from tests.test_codex_ended_native_recovery import PROVIDER
+ exec(PROVIDER)
+ raise SystemExit
 override=next(x for x in sys.argv if x.startswith('hooks.PreToolUse='))
 handler=tomllib.loads(override)['hooks']['PreToolUse'][0]['hooks'][0]
 for line in sys.stdin:
@@ -385,6 +389,10 @@ for line in sys.stdin:
  else: continue
  print(json.dumps({'id':request['id'],'result':result}),flush=True)
 ''')
+    from tests.test_codex_ended_native_recovery import PROVIDER
+    stub.write_text(stub.read_text().replace(
+        'from tests.test_codex_ended_native_recovery import PROVIDER',
+        'PROVIDER = ' + repr(PROVIDER)))
     stub.chmod(0o700)
     boundary=config['boundary']
     result=launch('coder','--boundary-contract',boundary['contract'],
@@ -398,12 +406,17 @@ for line in sys.stdin:
     command=next(row for row in tmux_log.read_text().splitlines() if '-n coder' in row)
     assert 'author_custody.py' in command and '--shell-command' in command
     assert '--author-config' in command and digest in command
-    (root/'tmux-lanes/coder-thread-id').write_text('12345678-1234-4234-8234-123456789abc')
+    from tests.test_author_boundary import _run_recorded_native_author
+    _run_recorded_native_author(tmux_log, repository, root)
     env.update(FACTORY_AUTHOR_CUSTODY_CONFIG='/ignored-ambient',
                FACTORY_AUTHOR_CUSTODY_DIGEST='0'*64)
     result=run(['bash',str(HARNESS/'tmux_lane_message.sh'),'r1','validator','coder','status',
                 '--runs',str(root.parent)],operator,env)
-    assert result.returncode==0,result.stdout+result.stderr
+    assert result.returncode==70,result.stdout+result.stderr
+    assert "NOT delivered" in result.stderr
+    # The recorder does not execute the respawn, so no delivery can be claimed.
     resumed=next(row for row in tmux_log.read_text().splitlines() if 'respawn-pane' in row)
     assert 'author_custody.py' in resumed and digest in resumed
     assert '/ignored-ambient' not in resumed
+    assert 'codex exec' not in resumed
+    assert 'resume' in resumed and '12345678-1234-4234-8234-123456789abc' in resumed

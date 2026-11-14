@@ -1,4 +1,4 @@
-"""Any harness in any seat: the registry, plan-only billing, each lane's private configuration,
+"""Any harness in any seat: the registry, plan-only billing, operator configuration custody,
 the lane wrapper's session and billing watch, and preflight."""
 
 from __future__ import annotations
@@ -42,7 +42,6 @@ def test_registry_lists_every_harness_the_lanes_accept() -> None:
     assert lane_agent.agent("claude").auth == "claude-plan"
     assert lane_agent.agent("claude-ollama").auth == "ollama-server"
     assert lane_agent.agent("agy").auth == "agy-plan"
-    assert lane_agent.agent("muse").auth == "muse-plan"
     assert lane_agent.agent("prime-agent").auth == "registry"
     # Metered by construction: a prime-agent lane needs a spend cap even without --metered.
     assert lane_agent.agent("prime-agent").metered
@@ -70,14 +69,14 @@ def test_turn_cli_describes_native_terminal_without_print_mode(tmp_path: Path) -
 
 
 @pytest.mark.parametrize(("name", "flag"), [
-    ("claude", "--resume"), ("claude-ollama", "--resume"), ("muse", "--session-id"),
-    ("cursor-agent", "--resume"), ("agy", "--conversation"),
+    ("claude", "--resume"), ("claude-ollama", "--resume"), ("muse", "resume"),
+    ("agy", "--conversation"),
 ])
 def test_every_registry_harness_resumes_its_session(name: str, flag: str, tmp_path: Path) -> None:
     made = agents.harness(name).turn(model="m", effort="", cwd=tmp_path, resume="sess-1234")
     assert made.argv[made.argv.index(flag) + 1] == "sess-1234"
     if name == "agy":
-        assert made.argv[-1] == "--print"  # the prompt follows it
+        assert "--print" not in made.argv and "--output-format" not in made.argv
 
 
 def test_claude_ollama_is_native_claude_code_on_the_loopback_server(tmp_path: Path) -> None:
@@ -128,46 +127,116 @@ def test_lane_setup_writes_only_admitted_variables(tmp_path: Path) -> None:
 
 
 
-def test_muse_lane_sees_only_the_lane_kindex(tmp_path: Path) -> None:
+def test_muse_setup_preserves_operator_home_and_adds_only_its_scoped_mcp(tmp_path: Path) -> None:
+    # Native Muse uses the operator's account and settings. The lane may add a
+    # scoped server, not substitute a private HOME/config or rewrite sign-in.
     operator = _home(tmp_path)
-    setup = agents.prepare_lane("muse", billing="plan", home=tmp_path / "lane",
+    config = operator / ".config" / "muse"
+    (config / "auth.json").write_text("opaque native credential format: do not parse")
+    (config / "hooks.json").write_text('{"operator_hook": "retain"}')
+    original = {path: path.read_bytes() for path in config.iterdir()}
+    custom_xdg = tmp_path / "operator-xdg"
+    custom_xdg.mkdir()
+    environ = {"HOME": str(operator), "XDG_CONFIG_HOME": str(custom_xdg),
+               "META_API_KEY": "synthetic-must-not-travel"}
+    lane_home = tmp_path / "lane"
+    env_file = tmp_path / "creds.env"
+    setup = agents.prepare_lane("muse", billing="plan", home=lane_home,
                                 model="muse-wonder-1.0", kindex_record=RECORD,
-                                env_file=tmp_path / "creds.env",
-                                environ={"HOME": str(operator), "META_API_KEY": "mk-no"})
-    config = Path(setup.env["XDG_CONFIG_HOME"]) / "muse"
-    settings = json.loads((config / "settings.json").read_text())
-    assert list(settings["mcpServers"]) == ["kindex"]
-    assert settings["mcpServers"]["kindex"]["mode"] == "optional"
-    assert "mcp_servers" not in settings  # both keys together drop the whole MCP member
-    assert (config / "auth.json").is_symlink()
-    assert "mk-no" not in (tmp_path / "creds.env").read_text()
+                                env_file=env_file, environ=environ)
+    effective = {**environ, **setup.env}
+    assert effective["HOME"] == str(operator)
+    assert effective["XDG_CONFIG_HOME"] == str(custom_xdg)
+    assert {path: path.read_bytes() for path in config.iterdir()} == original
+    assert not any(path.name == "auth.json" for path in lane_home.rglob("*"))
+    assert "META_API_KEY" not in setup.env
+    assert "synthetic-must-not-travel" not in env_file.read_text()
+    assert env_file.stat().st_mode & 0o077 == 0
+    configs = [setup.argv[index + 1] for index, value in enumerate(setup.argv)
+               if value == "-c"]
+    assert len(configs) == 1
+    key, encoded = configs[0].split("=", 1)
+    assert key == "mcpServers.lane-kindex"
+    server = json.loads(encoded)
+    # Muse needs server environment assignments in its command, not a literal
+    # env table. The launched server must still receive this exact lane scope.
+    assert server["command"] == "/usr/bin/env"
+    command_index = server["args"].index(SERVER["command"])
+    assert set(server["args"][:command_index]) == {
+        f"{key}={value}" for key, value in SERVER["env"].items()
+    }
+    assert server["args"][command_index + 1:] == SERVER["args"]
+    assert "env" not in server
 
 
-def test_cursor_and_agy_lanes_get_a_private_home_that_keeps_the_keychain(tmp_path: Path) -> None:
+def test_muse_turn_is_native_interactive_without_automatic_factory_resume(tmp_path: Path) -> None:
+    # CLI description is a public interface; this does not launch a model.
+    out = subprocess.run(
+        [sys.executable, str(REPO / "harness" / "agents.py"), "turn", "--agent", "muse",
+         "--model", "operator-selected-model", "--cwd", str(tmp_path)],
+        capture_output=True, check=True,
+    ).stdout.decode().split("\0")
+    assert out[0] == "terminal" and out[1] == "muse"
+    assert out[out.index("--workspace") + 1] == str(tmp_path)
+    assert out[out.index("--model") + 1] == "operator-selected-model"
+    assert not {"exec", "--output-format", "--print", "--json", "--yolo",
+                "--disable-request-user-input"}.intersection(out)
+    assert not agents.harness("muse").resumable
+    assert "muse" not in lane_watchdog.RESUMABLE_AGENTS
+
+
+def test_cursor_preserves_operator_home_and_config(tmp_path: Path) -> None:
     operator = _home(tmp_path)
-    environ = {"HOME": str(operator)}
+    config = operator / ".cursor"
+    config.mkdir()
+    settings = config / "cli.json"
+    settings.write_text('{"operator": "keep unchanged"}')
+    environ = {"HOME": str(operator), "CURSOR_CONFIG_DIR": str(config)}
     cursor = agents.prepare_lane("cursor-agent", billing="plan", home=tmp_path / "cursor",
                                  model="grok-4.7-xhigh", kindex_record=RECORD,
                                  env_file=tmp_path / "c.env", environ=environ)
-    private = Path(cursor.env["HOME"])
-    assert (private / "Library").resolve() == (operator / "Library").resolve()
-    assert list(json.loads((private / ".cursor" / "mcp.json").read_text())["mcpServers"]) == \
-        ["kindex"]
-    assert cursor.env["CURSOR_CONFIG_DIR"] == str(private / ".cursor")
+    effective = {**environ, **cursor.env}
+    assert effective["HOME"] == str(operator)
+    assert effective["CURSOR_CONFIG_DIR"] == str(config)
+    assert settings.read_text() == '{"operator": "keep unchanged"}'
+    assert not (tmp_path / "cursor" / "Library").exists()
 
-    agy = agents.prepare_lane("agy", billing="plan", home=tmp_path / "agy", model="",
+
+def test_agy_setup_preserves_operator_home_settings_and_credentials(tmp_path: Path) -> None:
+    # Native interactive AGY must inherit the operator's configuration rather
+    # than replace it with a private HOME or linked authentication files.
+    operator = _home(tmp_path)
+    original = {path.relative_to(operator): path.read_bytes()
+                for path in operator.rglob("*") if path.is_file()}
+    environ = {"HOME": str(operator), "XDG_CONFIG_HOME": str(tmp_path / "operator-config")}
+    lane_home = tmp_path / "agy"
+    agy = agents.prepare_lane("agy", billing="plan", home=lane_home, model="",
                               kindex_record=RECORD, env_file=tmp_path / "a.env",
                               environ=environ)
-    state = Path(agy.env["HOME"]) / ".gemini"
-    assert (state / "antigravity-cli" / "antigravity-oauth-token").is_symlink()
-    assert not (state / "antigravity-cli" / "mcp_config.json").is_symlink()
-    for path in (state / "antigravity-cli" / "mcp_config.json",
-                 state / "config" / "mcp_config.json"):
-        assert list(json.loads(path.read_text())["mcpServers"]) == ["kindex"]
-    assert (state / "config" / ".migrated").exists()
-    # A relaunch rebuilds the same home in place.
-    agents.prepare_lane("agy", billing="plan", home=tmp_path / "agy", model="",
-                        kindex_record=RECORD, env_file=tmp_path / "a.env", environ=environ)
+    effective = {**environ, **agy.env}
+    assert effective["HOME"] == environ["HOME"]
+    assert effective["XDG_CONFIG_HOME"] == environ["XDG_CONFIG_HOME"]
+    assert {path.relative_to(operator): path.read_bytes()
+            for path in operator.rglob("*") if path.is_file()} == original
+    assert not (lane_home / ".gemini").exists()
+    assert not any(path.is_symlink() and path.resolve().is_relative_to(operator.resolve())
+                   for path in lane_home.rglob("*"))
+    assert "--print" not in agy.argv
+    assert "--dangerously-skip-permissions" not in agy.argv
+
+
+def test_agy_turn_is_native_interactive_without_automatic_factory_resume(tmp_path: Path) -> None:
+    out = subprocess.run(
+        [sys.executable, str(REPO / "harness" / "agents.py"), "turn", "--agent", "agy",
+         "--model", "operator-selected-model", "--cwd", str(tmp_path)],
+        capture_output=True, check=True,
+    ).stdout.decode().split("\0")
+    assert out[0] == "terminal" and out[1] == "agy"
+    assert out[out.index("--model") + 1] == "operator-selected-model"
+    assert not {"--print", "--input-format", "--output-format",
+                "--dangerously-skip-permissions"}.intersection(out)
+    assert not agents.harness("agy").resumable
+    assert "agy" not in lane_watchdog.RESUMABLE_AGENTS
 
 
 # First streamed lines, as each harness printed them (2026-10-16, values shortened).
@@ -177,11 +246,7 @@ STREAMS = {
     "cursor-agent": ('{"type":"system","subtype":"init","apiKeySource":"login","session_id":'
                      '"7e565b43-db46-4bbe-b991-8d180c2d29c7"}',
                      "7e565b43-db46-4bbe-b991-8d180c2d29c7"),
-    "agy": ('{"event":"init","conversation_id":"63cad11c-be83-4b67-b890-353b3a784d62"}',
-            "63cad11c-be83-4b67-b890-353b3a784d62"),
-    "muse": ('{"schema_version":1,"stream":{"kind":"session","id":"01a14609-38d9-7751-9cca-'
-             'b4f193d1ec5f"},"payload_type":"runtime.command.accepted","payload":{}}',
-             "01a14609-38d9-7751-9cca-b4f193d1ec5f"),
+
 }
 
 
@@ -203,15 +268,6 @@ def test_billing_source_is_read_from_the_init_event() -> None:
 
 
 def test_outcomes_read_each_harness_final_event() -> None:
-    muse = agents.harness("muse").outcome(
-        STREAMS["muse"][0] + "\n" + '{"stream":{"kind":"session","id":"x"},"payload_type":'
-        '"run.terminal.completed","payload":{"text":"DONE"}}')
-    assert muse.text == "DONE" and muse.session == STREAMS["muse"][1]
-    agy = agents.harness("agy").outcome(
-        STREAMS["agy"][0] + "\n" + '{"event":"step_update","step_update":{"step_type":'
-        '"agent_response","text_delta":"OK\\n","usage":{"input_tokens":3,"output_tokens":1}}}')
-    assert agy.text == "OK\n" and agy.session == STREAMS["agy"][1]
-    assert agy.tokens["input"] == 3
     cursor = agents.harness("cursor-agent").outcome(
         '{"type":"result","result":"OK","session_id":"s-123456789","usage":{"inputTokens":5}}')
     assert cursor.text == "OK" and cursor.session == "s-123456789"
@@ -296,16 +352,29 @@ def test_plan_wrapper_requires_a_subscription_capable_identity(tmp_path: Path, a
         )
 
 
-def test_wrapper_records_the_session_as_soon_as_it_streams(tmp_path: Path) -> None:
+def test_cursor_stream_wrapper_refuses_without_starting(tmp_path: Path) -> None:
+    marker = tmp_path / "started"
     session_file = tmp_path / "coder-thread-id"
-    rc = lane_agent.run_lane(
-        [sys.executable, "-c", f"print({STREAMS['cursor-agent'][0]!r})"],
-        slot="coder", log=tmp_path / "lane.log", exits=tmp_path / "exits.jsonl",
-        session_agent="cursor-agent", session_file=session_file, plan_only=True,
+    with pytest.raises(ValueError, match="native terminal"):
+        lane_agent.run_lane(
+            [sys.executable, "-c", f"from pathlib import Path; Path({str(marker)!r}).touch()"],
+            slot="coder", log=tmp_path / "lane.log", exits=tmp_path / "exits.jsonl",
+            session_agent="cursor-agent", session_file=session_file, plan_only=True,
+        )
+    assert not marker.exists()
+    assert not session_file.exists()
+
+
+def test_cursor_does_not_silently_replace_a_requested_resume(tmp_path: Path) -> None:
+    cursor = agents.harness("cursor-agent")
+    assert not cursor.resumable
+    # Factory does not promise automatic lane restart, but an explicitly
+    # requested native resume must retain the exact conversation identity.
+    made = cursor.turn(model="", effort="", cwd=tmp_path, resume="existing-session")
+    assert "--resume=existing-session" in made.argv or (
+        "--resume" in made.argv
+        and made.argv[made.argv.index("--resume") + 1] == "existing-session"
     )
-    assert rc == 0
-    assert session_file.read_text().strip() == STREAMS["cursor-agent"][1]
-    assert session_file.stat().st_mode & 0o077 == 0
 
 
 @pytest.mark.parametrize("plan_only", [True, False])
@@ -341,16 +410,45 @@ def test_claude_preflight_proves_a_plan_sign_in(tmp_path: Path) -> None:
         lane_agent.preflight("claude", environ=environ, runner=_runner('{"loggedIn": false}'))
 
 
-def test_muse_preflight_refuses_an_api_key_and_a_missing_sign_in(tmp_path: Path) -> None:
+def test_muse_preflight_uses_native_usage_and_never_parses_private_sign_in(tmp_path: Path) -> None:
+    # The real subprocess seam must invoke Muse's account command, not trust a
+    # private file schema or an injected runner that succeeds for every command.
     operator = _home(tmp_path)
-    assert lane_agent.preflight("muse", environ={"HOME": str(operator)},
-                                runner=_runner("muse 1.4.10")) == "muse-auth-stored"
-    with pytest.raises(lane_agent.PreflightRefused, match="META_API_KEY"):
-        lane_agent.preflight("muse", environ={"HOME": str(operator), "META_API_KEY": "k"},
-                             runner=_runner(""))
-    with pytest.raises(lane_agent.PreflightRefused, match="no stored sign-in"):
-        lane_agent.preflight("muse", environ={"HOME": str(tmp_path / "nobody")},
-                             runner=_runner(""))
+    auth = operator / ".config" / "muse" / "auth.json"
+    auth.write_text("native opaque sign-in, deliberately not JSON")
+    original = auth.read_bytes()
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    native = binary / "muse"
+    calls = tmp_path / "usage-calls"
+    signed_out = tmp_path / "signed-out"
+    native.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, pathlib, sys\n"
+        "if sys.argv[1:] != ['usage']: raise SystemExit(97)\n"
+        f"with pathlib.Path({str(calls)!r}).open('a') as out:\n"
+        "    out.write(json.dumps(dict(argv=sys.argv[1:], home=os.environ.get('HOME'))) + '\\n')\n"
+        f"if pathlib.Path({str(signed_out)!r}).exists():\n"
+        "    print('Please sign in', file=sys.stderr)\n"
+        "    raise SystemExit(1)\n"
+        "print('Plan account active')\n"
+    )
+    native.chmod(0o755)
+    environ = {"HOME": str(operator), "PATH": str(binary)}
+    lane_agent.preflight("muse", environ=environ)
+    assert [json.loads(line) for line in calls.read_text().splitlines()] == [
+        {"argv": ["usage"], "home": str(operator)}
+    ]
+    assert auth.read_bytes() == original
+    with pytest.raises(lane_agent.PreflightRefused, match="META_API_KEY") as rejected:
+        lane_agent.preflight("muse", environ={**environ, "META_API_KEY": "synthetic-only"})
+    assert "synthetic-only" not in str(rejected.value)
+    assert len(calls.read_text().splitlines()) == 1  # no paid routing even for the check
+    signed_out.touch()
+    with pytest.raises(lane_agent.PreflightRefused):
+        lane_agent.preflight("muse", environ=environ)
+    assert len(calls.read_text().splitlines()) == 2
+    assert auth.read_bytes() == original
 
 
 def test_agy_preflight_refuses_a_signed_out_cli() -> None:
