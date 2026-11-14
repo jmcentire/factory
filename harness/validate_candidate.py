@@ -29,7 +29,24 @@ _native = (importlib.import_module("harness.native_session") if __package__
            else importlib.import_module("native_session"))
 
 
-def lane_project_files(root: Path, task: dict[str, Any], candidate: Path) -> list[str]:
+def _base_entry(task: dict[str, Any], relative: str) -> tuple[str, bytes] | None:
+    """What the run's base commit holds at ``relative``: ("link", its target) or
+    ("file", its bytes); None when the base has nothing there."""
+
+    source, commit = Path(task["repository"]), task["resolved_commit"]
+    try:
+        listing = run_host_git(source, ["ls-tree", commit, "--", relative]).decode()
+        if not listing.strip():
+            return None
+        mode = listing.split(None, 1)[0]
+        content = run_host_git(source, ["show", f"{commit}:{relative}"])
+    except (ValueError, OSError, RuntimeError, subprocess.SubprocessError):
+        return None
+    return ("link" if mode == "120000" else "file", content)
+
+
+def lane_project_files(root: Path, task: dict[str, Any], candidate: Path,
+                       repository: Path | None = None) -> list[str]:
     """The lane runtime files a candidate carries, each with why it is one.
 
     A Cursor lane writes its hooks, its Kindex and one permission rule into its clone's
@@ -47,6 +64,14 @@ def lane_project_files(root: Path, task: dict[str, Any], candidate: Path) -> lis
     server name. A file the target already had and has since changed, in a run with no
     Cursor lane, is the target's own work on its own file and is left alone.
 
+    A link at one of the paths is compared the same way, as a link: unchanged from the
+    base it is the target's own; new or changed in a run that launched a Cursor lane it is
+    refused. It is never followed, so what it points at is not read.
+
+    Lane manifests are read from the run's control tree and, when ``repository`` is the
+    lane's own clone, from its private runtime under ``.git/factory-runtime``, which is
+    where a lane under a kernel boundary keeps them.
+
     Scope, exactly: the three paths a Cursor lane writes (``.cursor/hooks.json``,
     ``.cursor/mcp.json``, ``.cursor/cli.json``). A copy of a lane's file committed under
     another name or elsewhere in the tree is not looked for.
@@ -56,6 +81,12 @@ def lane_project_files(root: Path, task: dict[str, Any], candidate: Path) -> lis
     usable = lanes.is_dir() and not lanes.is_symlink()
     manifests = sorted(lanes.glob("*-agent-home/*-project-files.json")) if usable else []
     journals = sorted(lanes.glob("*-launch.jsonl")) if usable else []
+    if repository is not None:
+        runtime = repository / ".git" / "factory-runtime"
+        if runtime.is_dir() and not runtime.is_symlink() \
+                and not (repository / ".git").is_symlink():
+            manifests += sorted(runtime.glob("*/agent/*-project-files.json"))
+    manifests = [manifest for manifest in manifests if not manifest.is_symlink()]
     cursor_lane = False
     for journal in journals:
         if journal.is_symlink():
@@ -70,15 +101,20 @@ def lane_project_files(root: Path, task: dict[str, Any], candidate: Path) -> lis
     found: list[str] = []
     for relative in _native.CURSOR_PROJECT_FILES:
         path = candidate / relative
-        if path.is_symlink() or not path.is_file():
+        base = _base_entry(task, relative)
+        if path.is_symlink():
+            # A link is judged as a link and never followed.
+            if base == ("link", os.readlink(path).encode()):
+                continue  # the target's own link, exactly as it was before the run
+            reason = ("a Cursor lane ran in this run and the link is new or changed since "
+                      "the run's base commit") if cursor_lane else ""
+            if reason:
+                found.append(f"{relative} ({reason})")
+            continue
+        if not path.is_file():
             continue
         data = path.read_bytes()
-        try:
-            base = run_host_git(Path(task["repository"]),
-                                ["show", f"{task['resolved_commit']}:{relative}"])
-        except (ValueError, OSError, RuntimeError, subprocess.SubprocessError):
-            base = None  # the base commit has no such file: the candidate added it
-        if base == data:
+        if base == ("file", data):
             continue  # the target's own file, exactly as it was before the run
         # What the file says counts only where the target had no such file: words alone do
         # not make the target's own file a lane's. A recorded digest counts either way.
@@ -200,7 +236,7 @@ def validate(
             max_lfs_bytes=16 * 1024**3 if lfs_objects is not None else None,
         )
         result["candidate"] = dataclasses.asdict(materialized)
-        carried = lane_project_files(root, task, candidate)
+        carried = lane_project_files(root, task, candidate, repository.resolve())
         if carried:
             raise ValueError(
                 "candidate commit carries a lane's own Cursor project configuration, which "

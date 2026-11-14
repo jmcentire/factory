@@ -201,7 +201,9 @@ a stub shaped by that evidence.
   server name. A file the target already had and has changed, in a run with no Cursor
   lane, is the target's own work and is left alone. The guard looks at exactly the three paths a
   Cursor lane writes; a copy of a lane's file committed under another name or elsewhere in
-  the tree is not looked for.
+  the tree is not looked for. A link at one of those paths is compared as a link and never
+  followed. Lane manifests are read from the run's control tree and from the lane clone's
+  own private runtime.
 - **Signet sees the lane's Kindex as Kindex.** A required Signet hook evaluates a call to
   `lane-kindex` as `mcp__kindex__<tool>`, so the lane's own memory satisfies rules written
   about Kindex. A call to the operator's server named `kindex` is refused under that hook
