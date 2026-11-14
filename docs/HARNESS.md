@@ -193,10 +193,15 @@ a stub shaped by that evidence.
   files out of an ordinary `git add`, and the lane's prompt says to leave them alone, but
   an author can still force one into a commit. `validate_candidate.py` therefore refuses a
   candidate that carries one (`status: validation-failed`, `exit_code: 70` in its retained
-  result) before running any check: a file that holds the lane's own hook command or
-  server name, or is byte-for-byte what a lane's manifest recorded, or, in a run that
-  launched a Cursor lane, is new or changed since the run's base commit. A target that
-  tracked its own `.cursor` files before the run, unchanged, is never refused for them.
+  result) before running any check. The run's base commit is consulted first: a file that
+  is byte-for-byte what the target held there is the target's own, whatever it contains,
+  and is never refused. A file that is new or changed since then is refused when it is
+  byte-for-byte what a lane's manifest recorded, or the run launched a Cursor lane; a file
+  the base did not have at all is also refused when it holds the lane's own hook command or
+  server name. A file the target already had and has changed, in a run with no Cursor
+  lane, is the target's own work and is left alone. The guard looks at exactly the three paths a
+  Cursor lane writes; a copy of a lane's file committed under another name or elsewhere in
+  the tree is not looked for.
 - **Signet sees the lane's Kindex as Kindex.** A required Signet hook evaluates a call to
   `lane-kindex` as `mcp__kindex__<tool>`, so the lane's own memory satisfies rules written
   about Kindex. A call to the operator's server named `kindex` is refused under that hook

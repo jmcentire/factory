@@ -79,7 +79,10 @@ public API is still pre-1.0.
   Kindex and refuses the operator's server named `kindex`; the lane's prompt names its own
   server and says to leave the three project files alone; `tmux_lane.sh` refuses a clone
   that already has any of them before reserving a budget or recording a launch; and
-  `validate_candidate.py` refuses a candidate commit that carries a lane's project file.
+  `validate_candidate.py` refuses a candidate commit that carries a lane's project file at
+  one of the three paths a lane writes, when that file is new or changed since the run's
+  base commit; a file unchanged from the base is the target's own and is never refused, and
+  copies under other names are not looked for.
   The generated `.cursor/cli.json` carries the empty `deny` list Cursor's schema requires.
 - Cursor lanes no longer pass `--force`, `--approve-mcps` or `--trust`. With the operator's
   configuration loaded those would approve everything the operator has configured. Cursor

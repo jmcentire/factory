@@ -401,16 +401,20 @@ def project_collisions(workspace: pathlib.Path,
     return found
 
 
-def lane_file_in_candidate(relative: str, data: bytes, manifests: Sequence[pathlib.Path] = ()
-                           ) -> str:
+def lane_file_in_candidate(relative: str, data: bytes, manifests: Sequence[pathlib.Path] = (),
+                           *, marks: bool = True) -> str:
     """Why ``data`` at ``relative`` in a candidate is a lane's own project file, or "".
 
     By what it contains (the lane's hook command, the lane server's name), or by being
-    byte-for-byte a file some lane's manifest recorded writing.
+    byte-for-byte a file some lane's manifest recorded writing. These words can also
+    appear in a project's own configuration, so a caller asks this only about a file that
+    is new or changed since the run began, never about one the target already held, and
+    passes ``marks=False`` for a path the target had before, where only a recorded digest
+    is evidence.
     """
 
-    marks = _LANE_MARKS.get(relative)
-    if marks and all(mark in data for mark in marks):
+    wanted = _LANE_MARKS.get(relative) if marks else None
+    if wanted and all(mark in data for mark in wanted):
         return "it holds a lane's own hook command or lane server"
     digest = _sha(data)
     for manifest in manifests:

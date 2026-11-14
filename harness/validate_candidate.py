@@ -36,10 +36,20 @@ def lane_project_files(root: Path, task: dict[str, Any], candidate: Path) -> lis
     ``.cursor/`` and keeps them out of ordinary commits, but an author can force one in. A
     candidate is the work, not the lane's configuration, so such a commit is not validated.
 
-    A file is the lane's when it holds the lane's own hook command or server name, or is
-    byte-for-byte what a lane's manifest recorded, or (in a run that launched a Cursor
-    lane) was added or changed relative to the run's base commit. A target that tracked
-    its own ``.cursor`` files before the run, unchanged, is never refused for them.
+    The run's base commit is consulted first. A file that is byte-for-byte what the target
+    held at that commit is the target's own, whatever it says and whatever ran, and is
+    never refused: a project may legitimately track Cursor configuration that mentions the
+    same words a lane's file does. Only a file that is new or changed since the base is
+    judged. It is the lane's when it is byte-for-byte what a lane's manifest recorded, or
+    when the run launched a Cursor lane (a lane never starts where one of these paths is
+    already the target's, so in such a run any difference is the lane's). A file the base
+    did not have at all is also the lane's when it holds the lane's own hook command or
+    server name. A file the target already had and has since changed, in a run with no
+    Cursor lane, is the target's own work on its own file and is left alone.
+
+    Scope, exactly: the three paths a Cursor lane writes (``.cursor/hooks.json``,
+    ``.cursor/mcp.json``, ``.cursor/cli.json``). A copy of a lane's file committed under
+    another name or elsewhere in the tree is not looked for.
     """
 
     lanes = root / "tmux-lanes"
@@ -63,16 +73,20 @@ def lane_project_files(root: Path, task: dict[str, Any], candidate: Path) -> lis
         if path.is_symlink() or not path.is_file():
             continue
         data = path.read_bytes()
-        reason = _native.lane_file_in_candidate(relative, data, manifests)
+        try:
+            base = run_host_git(Path(task["repository"]),
+                                ["show", f"{task['resolved_commit']}:{relative}"])
+        except (ValueError, OSError, RuntimeError, subprocess.SubprocessError):
+            base = None  # the base commit has no such file: the candidate added it
+        if base == data:
+            continue  # the target's own file, exactly as it was before the run
+        # What the file says counts only where the target had no such file: words alone do
+        # not make the target's own file a lane's. A recorded digest counts either way.
+        reason = _native.lane_file_in_candidate(
+            relative, data, manifests, marks=base is None)
         if not reason and cursor_lane:
-            try:
-                base = run_host_git(Path(task["repository"]),
-                                    ["show", f"{task['resolved_commit']}:{relative}"])
-            except (ValueError, OSError, RuntimeError, subprocess.SubprocessError):
-                base = None  # the base commit has no such file: the candidate added it
-            if base != data:
-                reason = ("a Cursor lane ran in this run and the file is new or changed "
-                          "since the run's base commit")
+            reason = ("a Cursor lane ran in this run and the file is new or changed since "
+                      "the run's base commit")
         if reason:
             found.append(f"{relative} ({reason})")
     return found
