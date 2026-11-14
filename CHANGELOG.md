@@ -147,7 +147,9 @@ public API is still pre-1.0.
   progress-review pauses are offered for it. A first launch and messages to a running
   session are unchanged. Cursor's resume was observed directly (same conversation id, the
   message reported byte for byte, no start report); the restart was run through the lane
-  commands with a stand-in program, not yet against Cursor. A restart that fails before
+  commands with a stand-in program, and once against Cursor itself (2026-11-14: launch,
+  clean end, restart on the same conversation id with no question asked, a typed
+  follow-up, every message reported once). A restart that fails before
   reporting now says the message was handed over and its outcome is unknown, instead of
   "planned and NOT delivered" (Codex and Cursor).
 - **The default author lane, `codex`, is Codex's own interactive session, hosted, and no

@@ -234,10 +234,25 @@ candidate guard were exercised on temporary repositories, not through a live lan
   no model: live follow-up, clean end, restart with the message `observed` on the same
   conversation id, a follow-up typed into the restarted session, a failed restart, no
   repeat, a restart by another sender's message; five messages, five different marks.
-  **Not run against Cursor:** this adapter's restart. A real lane's project files are
-  written again at a restart, and what Cursor then asks in the window (workspace trust, the
-  `lane-kindex` approval) is not known; nor is a restart after a crash, or a watcher's
-  pause or wrap-up of a Cursor session.
+  **Run once against Cursor itself, through the public commands** (2026-11-14,
+  cursor-agent 2026.11.13, the account's sign-in with no API key in the lane's
+  environment, a new synthetic workspace, default sandbox setting, no blanket option):
+  `tmux_lane.sh launch --agent cursor-agent` started the lane; Cursor asked its trust
+  question for the new workspace, which also enables that workspace's own server (the
+  lane's Kindex), and it was answered `a` in the lane's window; the first message was
+  `observed`; the model read the lane's two input files and asked to run one `shasum`
+  and `wc` command, approved once. After a clean end (`.cursor/` removed, exit 0),
+  `tmux_lane_message.sh ... status` restarted the same conversation id, **with no trust
+  or approval question asked**, and that message was `observed` (`via: launch-argument`,
+  exact); Cursor's answer drew on the first turn. A second status message was typed into
+  the restarted session and `observed`. Cursor's own hook receipts for the run: one
+  conversation id; start, prompt, stop, end, prompt, stop, prompt, stop, end (no start
+  report on the resume); three prompt reports with three generation ids, each bound to
+  one message. For the two typed messages Cursor's report carried no mark and they were
+  matched by their exact text, as before; the launch-argument message carried its mark.
+  **Not run against Cursor:** a restart after a crash, or one whose program fails; a
+  restart in a workspace Cursor was not asked to trust at launch; a watcher's pause or
+  wrap-up of a Cursor session.
   One more thing seen: Cursor's workspace trust follows the exact spelling of the path
   (`/private/tmp/...` was trusted, the same folder as `/tmp/...` was asked about again).
 - **Typing, as observed.** Cursor's terminal takes a bracketed paste followed by the typed
