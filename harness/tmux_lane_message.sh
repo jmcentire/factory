@@ -591,6 +591,9 @@ deliver_hosted() {
 # registry says the Factory can restart that program; otherwise the message is refused and
 # stays planned. A session is never replaced to deliver a message.
 HOSTED_RESUME=0
+# 1 when the restart gives this message to the program as its launch argument (recorded before
+# the program exists), rather than typing it once the restarted session reports starting.
+LAUNCH_ARGUMENT_RESTART=0
 # How long a restarted session is given to report starting before this command stops waiting.
 HOSTED_START_WAIT_S=90
 if [ "$PERSISTENT" = 1 ]; then
@@ -608,9 +611,12 @@ if [ "$PERSISTENT" = 1 ]; then
         echo "lane-message: $RUN:$SLOT's $AGENT session has ended, and its launch (by an earlier Factory) did not record what a restart needs, so $MESSAGE_ID is planned and NOT delivered. Start a new hosted session with tmux_lane.sh launch --replace-session '<why>'" >&2
         exit 70
       }
-      if [ "$AGENT" = codex-interactive ]; then
-        # Codex takes the message that restarts it as its launch argument. One an earlier
-        # wrapper already gave, whatever became of it, does not restart the session again.
+      case "$AGENT" in codex-interactive|cursor-agent) LAUNCH_ARGUMENT_RESTART=1 ;; esac
+      if [ "$LAUNCH_ARGUMENT_RESTART" = 1 ]; then
+        # Codex and Cursor take the message that restarts them as the launch argument of
+        # their own resume, because a resumed session of either reports nothing until it is
+        # given a message. One an earlier wrapper already gave, whatever became of it, does
+        # not restart the session again.
         GIVEN=$("$FACTORY_PYTHON" - "$TMUX_ROOT/$SLOT-persistent.json" "$MESSAGE_ID" <<'PY'
 import json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
@@ -796,7 +802,17 @@ PY
       for PART in "${TURN[@]:1}"; do printf -v QUOTED_TURN '%s %q' "$QUOTED_TURN" "$PART"; done
       PLAN_FLAG=""
       [ "$TURN_BILLING" != plan ] || PLAN_FLAG="--plan-only"
-      if [ "$HOSTED_RESUME" = 1 ]; then
+      if [ "$HOSTED_RESUME" = 1 ] && [ "$LAUNCH_ARGUMENT_RESTART" = 1 ]; then
+        # The same hosted session, restarted with this message as the launch argument of
+        # the program's own resume (Cursor: native_session.cursor_plan). The wrapper records
+        # the hand-over before the program exists, under this message's id, so it is never
+        # given twice, and keeps the conversation's delivery record, so its first prompt is
+        # never given again.
+        printf -v RESUME_CMD '%s %q %q run --slot %q --log %q --exits %q --persistent --run-root %q --native-dir %q%s --env-file %q --session-agent %q --session-file %q %s --prompt-arg %q --launch-message-id %q --%s' \
+          "$ENV_PREFIX" "$FACTORY_PYTHON" "$D/lane_agent.py" "$SLOT" "$LANE_LOG" "$LANE_EXITS" \
+          "$ROOT" "$NATIVE_DIR" \
+          "$BOUNDARY_MODEL_ARGS" "$TURN_ENV_FILE" "$AGENT" "$THREAD_FILE" "$PLAN_FLAG" "$RETAINED_MESSAGE" "$MESSAGE_ID" "$QUOTED_TURN"
+      elif [ "$HOSTED_RESUME" = 1 ]; then
         # The same hosted session, restarted: the wrapper keeps the conversation's delivery
         # record, so its first prompt (named here as at launch) is never given again, and
         # this message is given below, once the session reports that it has started.
@@ -834,15 +850,16 @@ PY
   # The turn is measured against its delivery limit and recorded; over the limit is never a
   # refusal (lane_agent.py places an oversized argv turn in .git/factory-brief/ by reference).
   "$FACTORY_PYTHON" - "$LAUNCHES" "$RUN" "$LANE" "$SLOT" "$SENDER" "$MESSAGE_KIND" "$MESSAGE_ID" \
-    "$RETAINED_MESSAGE" "$AGENT" "$HOSTED_RESUME" <<'PY'
+    "$RETAINED_MESSAGE" "$AGENT" "$HOSTED_RESUME" "$LAUNCH_ARGUMENT_RESTART" <<'PY'
 import datetime, json, os, sys
-journal, run, role, slot, sender, kind, message_id, message, agent, hosted = sys.argv[1:]
+(journal, run, role, slot, sender, kind, message_id, message, agent, hosted,
+ launch_argument) = sys.argv[1:]
 size = os.path.getsize(message)
 # A codex-ollama resume reads the turn from stdin. A registry harness takes it as one argv
-# element, and so does a restarted Codex session (its resume's launch argument). Any other
-# restarted hosted session is given it through its lane server, as a typed message is
-# (native_session.TYPED_LIMIT).
-typed = hosted == "1" and agent != "codex-interactive"
+# element, and so does a restarted Codex or Cursor session (its resume's launch argument).
+# Any other restarted hosted session is given it through its lane server, as a typed message
+# is (native_session.TYPED_LIMIT).
+typed = hosted == "1" and launch_argument != "1"
 limit = None if agent == "codex-ollama" else 16384 if typed else 131071
 via = "terminal" if typed else "argv"
 delivery = "stdin" if limit is None else ("file-pointer" if size > limit else via)
@@ -890,11 +907,19 @@ PY
         case "$NATIVE_STATE" in *'"session_started": true'*) STARTED=1; break ;; esac
       fi
       case "$(lane_pane_state)" in 1|missing)
-        echo "lane-message: the restarted $AGENT session for $RUN:$SLOT ended before it reported starting (see its lane log $LANE_LOG), so $MESSAGE_ID is planned and NOT delivered" >&2
+        if [ "$LAUNCH_ARGUMENT_RESTART" = 1 ]; then
+          echo "lane-message: the restarted $AGENT session for $RUN:$SLOT ended before it reported anything (see its lane log $LANE_LOG). $MESSAGE_ID was handed to it as its launch argument unless the lane log shows the start itself was refused; whether the program took it is not known, it is NOT recorded as delivered, and it is never handed over again" >&2
+        else
+          echo "lane-message: the restarted $AGENT session for $RUN:$SLOT ended before it reported starting (see its lane log $LANE_LOG), so $MESSAGE_ID is planned and NOT delivered" >&2
+        fi
         exit 70 ;;
       esac
       sleep 1
     done
+    if [ "$STARTED" != 1 ] && [ "$LAUNCH_ARGUMENT_RESTART" = 1 ]; then
+      echo "lane-message: $RUN:$SLOT's $AGENT session was restarted on its own conversation with $MESSAGE_ID as its launch argument, and has reported nothing after ${HOSTED_START_WAIT_S}s (it may be asking a question in its window). The message is NOT recorded as delivered and is never handed over again; its state: harness/persistent_lane.py status --root $ROOT --slot $SLOT" >&2
+      exit 75
+    fi
     [ "$STARTED" = 1 ] || {
       echo "lane-message: $RUN:$SLOT's $AGENT session was restarted on its own conversation but has not reported starting after ${HOSTED_START_WAIT_S}s (it may be asking a question in its window), so $MESSAGE_ID is planned and NOT delivered. Run this command again once it has started: the same id is never given twice" >&2
       exit 75

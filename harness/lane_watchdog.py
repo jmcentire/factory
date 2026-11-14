@@ -118,7 +118,7 @@ REVIEW_EXPIRY_WAITS = 4
 # That is a statement about what the Factory does, not about those programs, whose own resume
 # argument the registry still builds.
 RESUMABLE_AGENTS = frozenset({"codex", "codex-ollama", "codex-interactive", "claude",
-                              "claude-ollama", "prime-agent"})
+                              "claude-ollama", "cursor-agent", "prime-agent"})
 # The count ends the marker: some harnesses run the next message straight on with no newline
 # ("commits=21Top finding"), and that is still a completion.
 _DONE = re.compile(r"^\W*__LANE_DONE__\s+(\S+)\s+commits=\d+(?!\d)")

@@ -851,9 +851,12 @@ def run_lane(
                        or run_root is None or session_file is None or prompt is None):
         raise ValueError("persistent mode requires Claude/Agy, run root, session file and prompt")
     native = persistent and session_agent in NATIVE_TERMINAL_AGENTS
-    if launch_message_id and not (native and chosen is not None and chosen.dialect == "codex"):
-        # Never dropped quietly: only Codex's resume is known to take a message this way.
-        raise ValueError("--launch-message-id is for a resumed interactive Codex session only")
+    if launch_message_id and not (native and chosen is not None
+                                  and chosen.dialect in ("codex", "cursor")):
+        # Never dropped quietly: only Codex's and Cursor's resume are known to take a
+        # message this way.
+        raise ValueError("--launch-message-id is for a resumed interactive Codex or Cursor "
+                         "session only")
     if prompt is not None and not persistent:
         argv.append(argv_prompt(prompt, pathlib.Path.cwd()))
     child_env = dict(os.environ)
@@ -942,9 +945,14 @@ def run_lane(
                     prompt=argv_prompt(prompt, pathlib.Path.cwd()), python=sys.executable)
             elif chosen is not None and chosen.dialect == "cursor":
                 # Cursor reads lane hooks and the lane's Kindex only from its workspace.
+                # A restart of an ended session carries the message that restarts it, as its
+                # launch argument and under that message's own id (``--launch-message-id``).
+                assert prompt is not None
                 native_plan = native_session.cursor_plan(
                     argv[1:], executable=launcher.path, directory=native_dir or log.parent,
-                    slot=slot, workspace=pathlib.Path.cwd(), python=sys.executable)
+                    slot=slot, workspace=pathlib.Path.cwd(), python=sys.executable,
+                    **(dict(prompt=argv_prompt(prompt, pathlib.Path.cwd()),
+                            message_id=launch_message_id) if launch_message_id else {}))
             else:
                 native_plan = native_session.plan(
                     argv[1:], launcher=launcher, directory=native_dir or log.parent,
@@ -1390,7 +1398,8 @@ def main(argv: list[str] | None = None) -> int:
     runner.add_argument("--prompt-arg", type=pathlib.Path)
     runner.add_argument("--launch-message-id", default="",
                         help="for a resumed native session whose program takes the message "
-                             "that restarts it as its launch argument: that message's id")
+                             "that restarts it as its launch argument (Codex, Cursor): that "
+                             "message's id")
     runner.add_argument("--terminal", action="store_true")
     runner.add_argument("--env-file", type=pathlib.Path)
     runner.add_argument("--session-agent", default="")

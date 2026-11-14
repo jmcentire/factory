@@ -601,7 +601,8 @@ def remove_project_files(manifest: pathlib.Path) -> list[str]:
 
 
 def cursor_plan(arguments: Sequence[str], *, executable: str, directory: pathlib.Path,
-                slot: str, workspace: pathlib.Path, python: str = sys.executable) -> Plan:
+                slot: str, workspace: pathlib.Path, python: str = sys.executable,
+                prompt: str = "", message_id: str = "") -> Plan:
     """A native start of Cursor's interactive agent.
 
     ``arguments`` exclude the executable. The lane's observation hooks, any required hook
@@ -611,6 +612,18 @@ def cursor_plan(arguments: Sequence[str], *, executable: str, directory: pathlib
     permissions, which are untouched and still apply. Cursor chooses its
     own conversation id, so it is known only when the session reports starting, unless
     ``--resume=<id>`` names one.
+
+    A first start is given no message here: its first prompt is typed once the session
+    reports starting. A resumed session is different (observed on cursor-agent
+    2026.11.13, 2026-11-14): given nothing it reports nothing, not even a start, so there is
+    no report after which to type; given a message as its launch argument (``agent
+    [options] -- <message>``, Cursor's own ``[prompt...]``) it reported that message at
+    once, on the same conversation id, byte for byte, including one that began with a dash
+    and held a newline. It sent no start report then either. So the message that restarts
+    an ended session is its launch argument: with ``message_id`` the resumed start carries
+    ``prompt`` after ``--``, marked for that message in that conversation, and the plan
+    says so in ``launched``. Without ``message_id`` a resumed start is given nothing, as
+    before.
     """
 
     args = _split_values(list(arguments), ("--resume",))
@@ -628,6 +641,14 @@ def cursor_plan(arguments: Sequence[str], *, executable: str, directory: pathlib
             raise ValueError("native conversation id missing or malformed") from None
         # The one spelling proven against the interactive program.
         args[index:index + 2] = [f"--resume={session}"]
+    if message_id and (not resumed or not MESSAGE_ID.fullmatch(message_id)):
+        raise ValueError("a launch message id names the message that restarts a resumed "
+                         "session, and nothing else")
+    if "--" in args:
+        raise ValueError("native Cursor session refuses `--`: what follows it is the "
+                         "launch message, which is given here and nowhere else")
+    if message_id and "\0" in prompt:
+        raise ValueError("the message holds a NUL byte and cannot be a launch argument")
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     journal = directory / f"{slot}-native-events.jsonl"
     if journal.is_symlink():
@@ -655,9 +676,17 @@ def cursor_plan(arguments: Sequence[str], *, executable: str, directory: pathlib
         offset = journal.stat().st_size
     except FileNotFoundError:
         offset = 0
+    launched = None
+    if message_id:
+        # The mark a typed message of this id would carry in this conversation.
+        mark = message_token(session, message_id)
+        given = marked(prompt, mark)
+        args += ["--", given]
+        launched = {"token": mark, "typed_sha256": text_digest(given),
+                    "body_sha256": text_digest(prompt), "message_id": message_id}
     name = pathlib.Path(executable).name
     return Plan((executable, *args), session, resumed, journal,
-                Launcher(name, "executable", path=executable), offset, manifest)
+                Launcher(name, "executable", path=executable), offset, manifest, launched)
 
 
 #: Muse subcommands a lane's session may begin with. Everything else Muse offers as a

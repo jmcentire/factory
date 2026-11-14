@@ -139,6 +139,17 @@ public API is still pre-1.0.
   other. Programs the registry does not report as resumable are refused (exit 70) with the
   message left planned. A message a busy session could not take is now said to be not
   given, rather than "do not resend".
+- An ended `cursor-agent` session is restarted by a lane message, with Cursor's own
+  `--resume=<id>` and the message as its launch argument (`agent ... -- <message>`),
+  because a resumed Cursor session that is given nothing reports nothing. The hand-over is
+  recorded before the program exists and a message is never handed over twice. The
+  registry now reports `cursor-agent` as resumable by the Factory, so wrap-up and
+  progress-review pauses are offered for it. A first launch and messages to a running
+  session are unchanged. Cursor's resume was observed directly (same conversation id, the
+  message reported byte for byte, no start report); the restart was run through the lane
+  commands with a stand-in program, not yet against Cursor. A restart that fails before
+  reporting now says the message was handed over and its outcome is unknown, instead of
+  "planned and NOT delivered" (Codex and Cursor).
 - **The default author lane, `codex`, is Codex's own interactive session, hosted, and no
   longer `codex exec`.** The launcher runs `--agent codex` (and a launch with no `--agent`)
   as the adapter `codex-interactive`, and records that name. Nothing falls back to `codex

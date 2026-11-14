@@ -675,12 +675,26 @@ _BLOCKERS = {
                     "sent by tmux_lane_message.sh, reported `observed` with matching text in "
                     "the same session; the generated permission file was accepted and "
                     "lane-kindex was listed ready beside the operator's servers. At aae71ef "
-                    "the model called the lane server's scope_info, read-only. Still open: "
-                    "unattended resume (no lane command resumes a session, and a resumed "
-                    "session reported nothing until prompted); a Cursor coordinator seat, "
-                    "which has not been exercised; a required Signet guard, not shown "
-                    "enforcing end to end; and what the lane's Kindex returns for a seeded "
-                    "search.",
+                    "the model called the lane server's scope_info, read-only. Restarting an "
+                    "ended session is built and partly shown. Observed of Cursor itself "
+                    "(cursor-agent 2026.11.13, 2026-11-14, four one-word turns in a workspace "
+                    "Cursor already trusted, by the adapter's author; the hook capture was "
+                    "read independently): `agent --resume=<id>` given nothing reported "
+                    "nothing; given a message after `--` it reported that message at once on "
+                    "the same conversation id, byte for byte, with no start report; a "
+                    "message then typed into it was reported too. So a lane message to an "
+                    "ended session restarts it that way, the message recorded as handed "
+                    "over before the program exists and never handed over twice. That path "
+                    "was run through tmux_lane.sh and tmux_lane_message.sh with a stand-in "
+                    "program that calls no model; this adapter's restart has not been run "
+                    "against Cursor. A restarted program that ends before reporting leaves "
+                    "that one message `unknown`, and another message is needed to restart "
+                    "the session. Still open: what Cursor asks in the window when a lane's "
+                    "project files are written again at a restart (workspace trust, the "
+                    "lane-kindex approval); a restart after a crash; a watcher's pause or "
+                    "wrap-up of a Cursor session; a Cursor coordinator seat, which has not "
+                    "been exercised; a required Signet guard, not shown enforcing end to "
+                    "end; and what the lane's Kindex returns for a seeded search.",
     # The lane is Muse's own interactive session with the operator's configuration. What is
     # open is acceptance and what an echo run cannot show, not conversion.
     "muse": "Muse: hosted as its own interactive session from an interface observed on Muse "
@@ -856,12 +870,13 @@ HARNESSES: Mapping[str, Harness] = {
     "prime-agent": PrimeAgent("prime-agent", "prime-agent", (), True,
                               api_env=("OPENROUTER_API_KEY",), plan=False,
                               native_blocker=_BLOCKERS["prime-agent"]),
-    # Not resumable by the Factory yet: no lane command restarts an ended Cursor session, and
-    # a resumed session reported nothing until it was given a prompt. Cursor's own resume is
-    # untouched: `turn(resume=<id>)` builds `--resume=<id>`, the same conversation and never a
-    # new one, and a lane message to a running session is typed into that session.
+    # Resumable by the Factory: a lane message to an ended session restarts it with Cursor's
+    # own `--resume=<id>` and that message as its launch argument, because a resumed session
+    # given nothing reports nothing (tmux_lane_message.sh, native_session.cursor_plan). A
+    # message to a running session is typed into it, as before. What was run against Cursor
+    # itself, and what only against a stand-in, is in its blocker.
     "cursor-agent": CursorAgent(
-        "cursor-agent", "agent", (), False, api_env=("CURSOR_API_KEY",),
+        "cursor-agent", "agent", (), True, api_env=("CURSOR_API_KEY",),
         memory="beside-operator", dialect="cursor", native_blocker=_BLOCKERS["cursor-agent"],
         protocol_note=(
             f"- Your Kindex is the MCP server named {CURSOR_LANE_SERVER}. It is this lane's own. "
