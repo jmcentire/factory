@@ -71,7 +71,7 @@ def test_turn_cli_describes_native_terminal_without_print_mode(tmp_path: Path) -
 
 @pytest.mark.parametrize(("name", "flag"), [
     ("claude", "--resume"), ("claude-ollama", "--resume"), ("muse", "--session-id"),
-    ("cursor-agent", "--resume"), ("agy", "--conversation"),
+    ("agy", "--conversation"),
 ])
 def test_every_registry_harness_resumes_its_session(name: str, flag: str, tmp_path: Path) -> None:
     made = agents.harness(name).turn(model="m", effort="", cwd=tmp_path, resume="sess-1234")
@@ -143,18 +143,26 @@ def test_muse_lane_sees_only_the_lane_kindex(tmp_path: Path) -> None:
     assert "mk-no" not in (tmp_path / "creds.env").read_text()
 
 
-def test_cursor_and_agy_lanes_get_a_private_home_that_keeps_the_keychain(tmp_path: Path) -> None:
+def test_cursor_preserves_operator_home_and_config(tmp_path: Path) -> None:
     operator = _home(tmp_path)
-    environ = {"HOME": str(operator)}
+    config = operator / ".cursor"
+    config.mkdir()
+    settings = config / "cli.json"
+    settings.write_text('{"operator": "keep unchanged"}')
+    environ = {"HOME": str(operator), "CURSOR_CONFIG_DIR": str(config)}
     cursor = agents.prepare_lane("cursor-agent", billing="plan", home=tmp_path / "cursor",
                                  model="grok-4.7-xhigh", kindex_record=RECORD,
                                  env_file=tmp_path / "c.env", environ=environ)
-    private = Path(cursor.env["HOME"])
-    assert (private / "Library").resolve() == (operator / "Library").resolve()
-    assert list(json.loads((private / ".cursor" / "mcp.json").read_text())["mcpServers"]) == \
-        ["kindex"]
-    assert cursor.env["CURSOR_CONFIG_DIR"] == str(private / ".cursor")
+    effective = {**environ, **cursor.env}
+    assert effective["HOME"] == str(operator)
+    assert effective["CURSOR_CONFIG_DIR"] == str(config)
+    assert settings.read_text() == '{"operator": "keep unchanged"}'
+    assert not (tmp_path / "cursor" / "Library").exists()
 
+
+def test_agy_lane_gets_a_private_home_that_keeps_the_keychain(tmp_path: Path) -> None:
+    operator = _home(tmp_path)
+    environ = {"HOME": str(operator)}
     agy = agents.prepare_lane("agy", billing="plan", home=tmp_path / "agy", model="",
                               kindex_record=RECORD, env_file=tmp_path / "a.env",
                               environ=environ)
@@ -296,16 +304,24 @@ def test_plan_wrapper_requires_a_subscription_capable_identity(tmp_path: Path, a
         )
 
 
-def test_wrapper_records_the_session_as_soon_as_it_streams(tmp_path: Path) -> None:
+def test_cursor_stream_wrapper_refuses_without_starting(tmp_path: Path) -> None:
+    marker = tmp_path / "started"
     session_file = tmp_path / "coder-thread-id"
-    rc = lane_agent.run_lane(
-        [sys.executable, "-c", f"print({STREAMS['cursor-agent'][0]!r})"],
-        slot="coder", log=tmp_path / "lane.log", exits=tmp_path / "exits.jsonl",
-        session_agent="cursor-agent", session_file=session_file, plan_only=True,
-    )
-    assert rc == 0
-    assert session_file.read_text().strip() == STREAMS["cursor-agent"][1]
-    assert session_file.stat().st_mode & 0o077 == 0
+    with pytest.raises(ValueError, match="native terminal"):
+        lane_agent.run_lane(
+            [sys.executable, "-c", f"from pathlib import Path; Path({str(marker)!r}).touch()"],
+            slot="coder", log=tmp_path / "lane.log", exits=tmp_path / "exits.jsonl",
+            session_agent="cursor-agent", session_file=session_file, plan_only=True,
+        )
+    assert not marker.exists()
+    assert not session_file.exists()
+
+
+def test_cursor_does_not_silently_replace_a_requested_resume(tmp_path: Path) -> None:
+    cursor = agents.harness("cursor-agent")
+    assert not cursor.resumable
+    with pytest.raises(ValueError, match="resume"):
+        cursor.turn(model="", effort="", cwd=tmp_path, resume="existing-session")
 
 
 @pytest.mark.parametrize("plan_only", [True, False])
