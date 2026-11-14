@@ -623,7 +623,24 @@ if [ "$PERSISTENT" = 1 ]; then
         echo "lane-message: $RUN:$SLOT's $AGENT session has ended, and its launch (by an earlier Factory) did not record what a restart needs, so $MESSAGE_ID is planned and NOT delivered. Start a new hosted session with tmux_lane.sh launch --replace-session '<why>'" >&2
         exit 70
       }
-      case "$AGENT" in codex-interactive|cursor-agent) LAUNCH_ARGUMENT_RESTART=1 ;; esac
+      case "$AGENT" in muse|agy)
+        # A hosted session is one a hosting wrapper started. One that an earlier Factory ran
+        # as the provider's terminal UI is not taken over by a host it never had.
+        [ -f "$NATIVE_DIR/$SLOT-hosted.json" ] && [ ! -L "$NATIVE_DIR/$SLOT-hosted.json" ] || {
+          echo "lane-message: $RUN:$SLOT's $AGENT session was started as the program's own terminal UI by an earlier Factory, not as a hosted session, so it is not restarted here and $MESSAGE_ID is planned and NOT delivered. Start a hosted session in its place: tmux_lane.sh launch --round <name> --replace-session '<why>'" >&2
+          exit 70
+        }
+        # No Signet guard and no custody exist for these two (harness/agents.py), and a
+        # restart is a start: refused before anything is spawned, as a launch is.
+        if [ "${FACTORY_REQUIRE_SIGNET:-0}" = 1 ] || [ -n "${FACTORY_SIGNET_CONTRACT:-}" ] || \
+            [ -n "${FACTORY_SIGNET_DIGEST:-}" ] || [ "${FACTORY_REQUIRE_AUTHOR_CUSTODY:-0}" = 1 ] || \
+            [ -n "${FACTORY_AUTHOR_CUSTODY_CONFIG:-}" ] || [ -n "${FACTORY_AUTHOR_CUSTODY_DIGEST:-}" ] || \
+            [ "$AUTHOR_CUSTODY" != null ]; then
+          echo "lane-message: a Signet guard or author custody is required, and neither is qualified for a hosted $AGENT session (no gate on every tool action and no read isolation is established), so $RUN:$SLOT is not restarted and $MESSAGE_ID is planned and NOT delivered. Nothing was started" >&2
+          exit 77
+        fi ;;
+      esac
+      case "$AGENT" in codex-interactive|cursor-agent|muse|agy) LAUNCH_ARGUMENT_RESTART=1 ;; esac
       if [ "$LAUNCH_ARGUMENT_RESTART" = 1 ]; then
         # Codex and Cursor take the message that restarts them as the launch argument of
         # their own resume, because a resumed session of either reports nothing until it is
@@ -934,6 +951,13 @@ PY
         case "$NATIVE_STATE" in *'"session_started": true'*) STARTED=1; break ;; esac
       fi
       case "$(lane_pane_state)" in 1|missing)
+        REFUSAL="$NATIVE_DIR/$SLOT-hosted-refusal.json"
+        if [ -f "$REFUSAL" ] && [ ! -L "$REFUSAL" ] && [ "$REFUSAL" -nt "$TMUX_ROOT/$SLOT-process.json" ]; then
+          # The host itself refused: the kept session could not be re-entered as itself.
+          WHY=$("$FACTORY_PYTHON" -c 'import json,sys; print(str(json.load(open(sys.argv[1])).get("refused") or "")[:400])' "$REFUSAL" 2>/dev/null || true)
+          echo "lane-message: $RUN:$SLOT's $AGENT session could not be re-entered as itself, so nothing was prompted and no other session was made: $WHY. $MESSAGE_ID is NOT delivered and is not handed over again under this id" >&2
+          exit 70
+        fi
         if [ "$LAUNCH_ARGUMENT_RESTART" = 1 ]; then
           echo "lane-message: the restarted $AGENT session for $RUN:$SLOT ended before it reported anything (see its lane log $LANE_LOG). $MESSAGE_ID was handed to it as its launch argument unless the lane log shows the start itself was refused; whether the program took it is not known, it is NOT recorded as delivered, and it is never handed over again" >&2
         else

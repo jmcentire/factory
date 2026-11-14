@@ -414,23 +414,17 @@ class CodexInteractive(Harness):
 
 
 class Antigravity(Harness):
-    """Google's Antigravity CLI, interactive: the operator's own sign-in, settings, hooks,
-    plugins and MCP servers, all untouched and all still loaded. Never ``--print``.
+    """Google's Antigravity, hosted through its own session server (``agy acp --stdio``): the
+    operator's sign-in, settings, hooks, plugins and MCP servers, all untouched and all still
+    loaded. Never ``--print``.
 
-    The shape follows what was observed of agy 1.5.8 in a trusted throwaway workspace, with
-    prompts its own hook stopped before any model call (2026-11-13, by this adapter's author
-    and independently by the tester):
-
-    - The lane's hooks and its Kindex are a plugin in the lane's own clone,
-      ``.agents/plugins/lane/``, written and removed by ``native_session.agy_plan``.
-      Antigravity found it there by itself and ran its hooks beside the operator's. Nothing
-      is added with ``agy mcp add`` or ``agy plugin install``: both write the operator's
-      configuration.
-    - No private HOME and no links to the operator's state.
-    - Nothing is imposed on permissions: no ``--dangerously-skip-permissions`` (the launcher
-      adds it only for ``FACTORY_LANE_SANDBOX=off``).
-    - ``--conversation <id>`` continues the same conversation and is built whenever an id
-      is given."""
+    The arguments built here are terminal-shaped (``--model``, ``--effort``,
+    ``--conversation <id>``); ``protocol_host`` reads them as settings of the hosted session
+    and refuses any it cannot honour. Nothing is written into the lane's clone and nothing
+    of the operator's is edited: no ``agy mcp add``, no ``agy plugin install``, no private
+    HOME. Nothing is imposed on permissions: ``--dangerously-skip-permissions`` is added by
+    the launcher only for ``FACTORY_LANE_SANDBOX=off``. ``--conversation <id>`` is the kept
+    session, re-entered with ``session/resume`` and never ``session/load``."""
 
     def turn(self, *, model: str, effort: str, cwd: Path, resume: str = "",
              last_message_file: str = "", max_turns: int = 400,
@@ -445,9 +439,9 @@ class Antigravity(Harness):
 
     def lane_setup(self, home: Path, *, model: str, server: Mapping[str, object] | None,
                    operator_home: Path, environ: Mapping[str, str]) -> LaneSetup:
-        # The lane's Kindex as the plugin's own server file, for agy_plan to place in the
-        # clone. Antigravity names a plugin's server <plugin>_<server> (its changelog), so
-        # it cannot be taken for a server of the operator's.
+        # The lane's Kindex, for protocol_host to name in the session's own MCP servers
+        # (as the lane's server, apart from any of the operator's). Kept beside the lane's
+        # other private files; nothing goes into the clone.
         _write(home / "agy-mcp.json", json.dumps({"mcpServers": _mcp_servers(server)}))
         return LaneSetup()
 
@@ -458,25 +452,24 @@ LANE_SERVER = signet_hooks.CURSOR_LANE_KINDEX
 
 
 class Muse(Harness):
-    """Meta's Muse Code, interactive: the operator's own sign-in, settings, hooks and MCP
-    servers, all untouched and all still loaded. Never ``muse exec``.
+    """Meta's Muse Code, hosted through its own session server (``muse serve``): the
+    operator's own sign-in, settings, hooks and MCP servers, all untouched and all still
+    loaded. Never ``muse exec``.
 
-    What decides the shape was observed on Muse Code 1.4.20 with its echo provider (no model,
-    no sign-in), by this adapter's author and independently by the tester, 2026-11-13:
+    The arguments built here are terminal-shaped (``resume <id>``, ``--workspace``,
+    ``--model``, ``--reasoning-effort``, ``-c``); ``protocol_host`` reads them as settings of
+    the hosted session and refuses any it cannot honour.
 
-    - The lane's Kindex is one more server for this run, ``-c mcpServers.<lane server>=...``.
-      Muse adds it beside the operator's servers; it refuses the whole map and changes no
-      file. The server is named apart from any of the operator's. In that form Muse refuses
-      a ``type`` key ("unknown key") and any literal ``env`` value ("secret leaves need
-      exactly one whole-value ``${VAR}``"), so the server's variables, which are paths and
-      not secrets, are set by ``/usr/bin/env`` in front of its command and reach only it.
-    - The lane's hooks are the project file ``.muse/hooks.json`` in the lane's own clone,
-      written and removed by ``native_session.muse_plan``. A per-run ``-c hooks=`` is never
-      used: it replaces the operator's hooks instead of adding to them.
-    - Muse asks its own workspace-trust question; no ``--trust-workspace`` is passed.
-    - Nothing is imposed on permissions: no ``--yolo`` (the launcher adds it only for
-      ``FACTORY_LANE_SANDBOX=off``), no ``--disable-request-user-input``.
-    - ``resume <id>`` continues the same session and is built whenever a session id is given.
+    - The lane's Kindex is one more server for this run, ``-c mcpServers.<lane server>=...``,
+      which the server takes as the terminal UI does (observed on the UI, Muse Code 1.4.20,
+      2026-11-13): added beside the operator's servers, no file changed. In that form Muse
+      refuses a ``type`` key and any literal ``env`` value, so the server's variables, which
+      are paths and not secrets, are set by ``/usr/bin/env`` in front of its command.
+    - A per-run ``-c hooks=`` is never used: it replaces the operator's hooks.
+    - Nothing is written into the lane's clone, and no ``--trust-workspace`` is passed.
+    - Nothing is imposed on permissions: ``--yolo`` is added by the launcher only for
+      ``FACTORY_LANE_SANDBOX=off``, and the host then selects Muse's own ``allowAll`` mode.
+    - ``resume <id>`` is the kept session, re-entered with ``session/resume``.
 
     ``META_API_KEY`` overrides the account sign-in, so a plan lane never admits it."""
 
@@ -649,41 +642,22 @@ _TO_SHOW = (
 _BLOCKERS = {
     # The lane is Antigravity's own interactive session with the operator's configuration.
     # What follows is what is open, not conversion.
-    "agy": "Antigravity: hosted as its own interactive session. Two kinds of evidence, both on "
-           "agy 1.5.8, 2026-11-13. Lifecycle probes with no model turn (the probe's own hook "
-           "stopped each prompt before the model; by the adapter's author and independently "
-           "by the tester): a plugin in a trusted workspace loaded by itself, its hooks ran "
-           "beside the operator's, its server started beside the operator's, a typed marked "
-           "message was reported in full. Actual executions of this adapter through the "
-           "lane wrapper (author only, twice, on the operator's subscription, hooks not "
-           "stopping the model): the first message given by --prompt-interactive was "
-           "reported and matched, one stop report followed with terminationReason "
-           "NO_TOOL_CALL, the plugin was removed at exit. The model's reply was not read or "
-           "checked. Open. First, nothing with a tool call has been run, and those stop "
-           "reports carried no model text, so a lane's done line is not seen from its "
-           "reports. Second, later messages are not typed: "
-           "Antigravity's Stop report carries fullyIdle and continuationActive, but what "
-           "they say when a Stop hook continues the turn was not observed, so no report is "
-           "taken as a safe moment; a later message is kept `queued` with the reason and "
-           "left for a person to enter, and a review, an answer or a wrap-up notice does "
-           "not reach an Antigravity lane unattended. When a person enters exactly that "
-           "message followed by its own mark (the lane writes that one entry to a file) and "
-           "Antigravity's own prompt report says so, it is recorded as received and later "
-           "messages are accepted. The words without the mark settle nothing, because a "
-           "report of the same words cannot be told from an earlier one repeated; none of "
-           "Antigravity's counters is taken as proof of a fresh submission. (The settlement "
-           "is the same code as Muse's and was run against Muse's echo provider only; "
-           "against Antigravity only its report's mapping was checked.) Third, no lane "
-           "command restarts an "
-           "ended session, so wrap-up and review pauses are not offered. Fourth, there is "
-           "no Signet guard and a launch that requires one is refused: a user shell action "
-           "typed in the session ran with no hook called. This user-shell route did not "
-           "exercise PreToolUse; model-tool hook failure behavior remains unverified. "
-           "Fifth, the lane's server is named by Antigravity "
-           "(<plugin>_<server>, per its changelog); that name and a model calling it were "
-           "not observed.",
-    # The lane is Cursor's own interactive agent with the operator's configuration, and the
-    # independent tester has run it against real Cursor. What follows is what is still open.
+    "agy": "Antigravity: hosted through its own session server (`agy acp --stdio`, the Agent "
+           "Client Protocol), on the operator's sign-in and settings, with no terminal UI "
+           "driven and nothing written into the lane's clone. An ended session is re-entered "
+           "only with session/resume and the kept id, and the answer must name that id; "
+           "session/load is never sent (Antigravity accepts an unknown id through it). The "
+           "transport was run against stand-in servers only: no real Antigravity turn has "
+           "been run through it, and what Antigravity sends before a prompt's answer was not "
+           "observed. Not resumable by the Factory's watcher (a message restarts an ended "
+           "session; nothing stops a live one for a pause or wrap-up). No Signet guard and "
+           "no custody: a launch that requires either is refused before anything is "
+           "started, because Antigravity does not ask about actions its own settings "
+           "already allow and skips a hook that fails, so no all-tool gate or read "
+           "isolation is established. A permission request the session does raise is shown "
+           "in the lane's window and held for a person; nothing is approved for them. After "
+           "the host ends, `agy --conversation <id>` reopens the conversation in "
+           "Antigravity's own UI.",
     "cursor-agent": "Cursor: hosted as its own interactive agent. The independent tester ran "
                     "this adapter against real Cursor (cursor-agent 2026.11.13). At aa8870b a "
                     "lane started by tmux_lane.sh took its first prompt and a second message "
@@ -724,40 +698,21 @@ _BLOCKERS = {
                     "search.",
     # The lane is Muse's own interactive session with the operator's configuration. What is
     # open is acceptance and what an echo run cannot show, not conversion.
-    "muse": "Muse: hosted as its own interactive session from an interface observed on Muse "
-            "Code 1.4.20 with its echo provider (2026-11-13, by the adapter's author and "
-            "independently by the tester): start, a first message given at launch, typed "
-            "follow-up messages, turn-end reports, lane hooks beside the operator's, a "
-            "per-run lane server beside the operator's. Not yet accepted, and three things "
-            "are open. First, everything a signed-in model run would show and echo cannot: "
-            "a model calling the lane's Kindex and a model's own tool call. There is no "
-            "Signet guard, and a launch that requires one is refused, for a reason that was "
-            "observed (1.4.20, echo, a user shell action, 2026-11-13): PreToolUse does fire, "
-            "also under --yolo, and an explicit deny or exit 2 blocks the tool; but the tool "
-            "runs when the hook exits 1, prints something that is not JSON, times out or "
-            "cannot be started. No supported fail-closed hook setting has been qualified; "
-            "tested failClosed/required entries were disabled. This tested hook-only "
-            "configuration cannot provide fail-closed enforcement across those failures. "
-            "Second, unattended resume: a resumed "
-            "session reports nothing until a prompt is typed, and Muse refuses a prompt "
-            "beside `resume`, so no lane command restarts an ended session and wrap-up and "
-            "review pauses are not offered. Third, no report of Muse asking the operator a "
-            "question was observed, so a lane waiting on one is not shown as such. Fourth, "
-            "and the largest: later messages are not typed into a Muse session. The "
-            "independent tester showed (ef8fdd7, /tmp/factory-muse-ef/RESULT.md) that a "
-            "message typed after Muse's stop report, while an operator Stop hook was still "
-            "deciding, was taken into the continued earlier turn with no prompt report of "
-            "its own. Muse reports no point at which typed input is safe, so a later "
-            "message is kept `queued` with the reason and left for a person to enter in "
-            "the lane's window: a review, an answer or a wrap-up notice does not reach a "
-            "Muse lane unattended. When a person enters exactly that message followed by "
-            "its own mark (the lane writes that one entry to a file) and Muse's own prompt "
-            "report says so, it is recorded as received and later messages are accepted. "
-            "The words without the mark settle nothing, because a report of the same words "
-            "cannot be told from an earlier one repeated (run against Muse Code 1.4.20 "
-            "with its echo provider, 2026-11-14, with two messages of the same words: the "
-            "words alone, the first message's entry repeated, and a mark that was nobody's "
-            "all left the second held; its own entry settled it).",
+    "muse": "Muse: hosted through its own session server (`muse serve`, the Muse session "
+            "protocol), on the operator's sign-in and settings, with no terminal UI driven "
+            "and nothing written into the lane's clone. An ended session is re-entered only "
+            "with session/resume and the kept id. Each message is a turn under its own "
+            "command id, queued by Muse behind a running turn. Run against Muse Code 1.4.20 "
+            "on its echo provider (no model) and against stand-in servers; no real model "
+            "turn and no tool call has been run through it. Not resumable by the Factory's "
+            "watcher (a message restarts an ended session; nothing stops a live one for a "
+            "pause or wrap-up). No Signet guard and no custody: a launch that requires "
+            "either is refused before anything is started, because Muse does not ask about "
+            "actions an existing grant or mode already allows and continues past a hook "
+            "that fails or times out, so no all-tool gate or read isolation is "
+            "established. An approval the session does request is shown in the lane's "
+            "window and held for a person; nothing is approved for them. After the host "
+            "ends, `muse resume <id>` reopens the session in Muse's own UI.",
     "prime-agent": "Prime: not installed on the machine this was assessed on; its interactive "
                    "program and any report or MCP interface are unassessed.",
     # The registry entry `codex` is `codex exec`. The only lane agent still on it is
@@ -866,45 +821,35 @@ HARNESSES: Mapping[str, Harness] = {
             "explicit per-run choice that passes Codex's own "
             "--dangerously-bypass-hook-trust beside its approval and sandbox bypass. "
             "Without one of those the lane works but reports nothing and stays `starting`.")),
+    # Hosted through the provider's own session server (protocol_host). Restartable by a
+    # lane message, never stopped and continued by the watcher.
     "agy": Antigravity(
         "agy", "agy", (), False,
         api_env=("GEMINI_API_KEY", "GOOGLE_API_KEY", "AGY_LLM_GATEWAY_API_KEY"),
         memory="beside-operator", dialect="agy", native_blocker=_BLOCKERS["agy"],
-        withhold_followups=True,
+        restart_by_message=True,
         protocol_note=(
-            "- Your Kindex is the MCP server this lane's own plugin provides (Antigravity "
-            "lists it as\n  lane_kindex). Do not call the server named kindex: it is not "
-            "this lane's memory. The\n  directory .agents/plugins/lane is this lane's "
-            "runtime configuration, not the work: do not\n  edit it, and never add it to a "
-            "commit (not with git add -f either).\n"),
+            f"- Your Kindex is the MCP server named {LANE_SERVER}. It is this lane's own. "
+            "Do not call the\n  server named kindex: it is not this lane's memory.\n"),
         start_requires=(
-            "Antigravity asks its own workspace-trust question in the lane's window for a "
-            "clone it has not been told to trust, and the Factory does not answer it. The "
-            "lane's first message is given to Antigravity at launch. Nothing is typed into "
-            "an Antigravity session after that: a later message to the lane is kept queued, "
-            "and you enter it in the lane's window yourself, exactly as its entry file "
-            "gives it (the message followed by its mark); the lane records it as received "
-            "when Antigravity reports that entry.")),
-    # Not resumable by the Factory yet, for the reason its blocker gives. Muse's own resume is
-    # untouched: `turn(resume=<id>)` builds `resume <id>`, the same session and never a new one.
+            "Antigravity is run as its own session server in the lane's window, on your "
+            "sign-in and settings; its terminal UI is not shown. If the session asks "
+            "permission for an action, the window shows the request and waits: press a to "
+            "allow that one action, d to deny it. Nothing is approved for you. After the "
+            "lane ends, `agy --conversation <id>` reopens the conversation in Antigravity.")),
     "muse": Muse(
         "muse", "muse", (), False, api_env=("META_API_KEY",),
         memory="beside-operator", dialect="muse", native_blocker=_BLOCKERS["muse"],
-        withhold_followups=True,
+        restart_by_message=True,
         protocol_note=(
             f"- Your Kindex is the MCP server named {LANE_SERVER}. It is this lane's own. "
-            "Do not call the\n  server named kindex: it is not this lane's memory. The file "
-            ".muse/hooks.json is this\n  lane's runtime configuration, not the work: do not "
-            "edit it, and never add it to a commit\n  (not with git add -f either).\n"),
+            "Do not call the\n  server named kindex: it is not this lane's memory.\n"),
         start_requires=(
-            "Muse asks its own workspace-trust question in the lane's window for a clone it "
-            "has not been told to trust, and the Factory does not answer it or pass "
-            "--trust-workspace. The lane's first message is given to Muse at launch and is "
-            "submitted when that question is answered. Nothing is typed into a Muse "
-            "session after that: a later message to the lane is kept queued, and you enter "
-            "it in the lane's window yourself, exactly as its entry file gives it (the "
-            "message followed by its mark); the lane records it as received when Muse "
-            "reports that entry.")),
+            "Muse is run as its own session server in the lane's window, on your sign-in "
+            "and settings; its terminal UI is not shown. If the session asks approval for "
+            "an action, the window shows the request and waits: press a to allow that one "
+            "action, d to deny it. Nothing is approved for you. After the lane ends, "
+            "`muse resume <id>` reopens the session in Muse.")),
     "prime-agent": PrimeAgent("prime-agent", "prime-agent", (), True,
                               api_env=("OPENROUTER_API_KEY",), plan=False,
                               native_blocker=_BLOCKERS["prime-agent"]),

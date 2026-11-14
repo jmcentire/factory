@@ -852,11 +852,12 @@ def run_lane(
         raise ValueError("persistent mode requires Claude/Agy, run root, session file and prompt")
     native = persistent and session_agent in NATIVE_TERMINAL_AGENTS
     if launch_message_id and not (native and chosen is not None
-                                  and chosen.dialect in ("codex", "cursor")):
-        # Never dropped quietly: only Codex's and Cursor's resume are known to take a
-        # message this way.
+                                  and chosen.dialect in ("codex", "cursor", "muse", "agy")):
+        # Never dropped quietly: only these take the message that restarts a session at
+        # their start (Codex and Cursor as a launch argument, a hosted Muse or Antigravity
+        # session through its host).
         raise ValueError("--launch-message-id is for a resumed interactive Codex or Cursor "
-                         "session only")
+                         "session, or a hosted Muse or Antigravity session, only")
     if prompt is not None and not persistent:
         argv.append(argv_prompt(prompt, pathlib.Path.cwd()))
     child_env = dict(os.environ)
@@ -916,14 +917,20 @@ def run_lane(
             else:
                 # claude-ollama talks only to the loopback server its own variables name.
                 launcher = native_session.Launcher(argv[0], "executable", path=found)
-            if chosen is not None and chosen.dialect == "muse":
-                # Muse runs lane hooks from its workspace and takes its first message as
-                # its launch argument (it reports no start until a prompt is submitted).
+            if chosen is not None and chosen.dialect in ("muse", "agy"):
+                # Muse and Antigravity are hosted through their own session servers
+                # (protocol_host): no terminal UI is driven and nothing is written into the
+                # lane's clone. The first message, or the one that restarts an ended
+                # session (``--launch-message-id``), is the host's launch argument.
+                import protocol_host
+
                 assert prompt is not None
-                native_plan = native_session.muse_plan(
-                    argv[1:], executable=launcher.path, directory=native_dir or log.parent,
-                    slot=slot, workspace=pathlib.Path.cwd(),
-                    prompt=argv_prompt(prompt, pathlib.Path.cwd()), python=sys.executable)
+                native_plan = protocol_host.plan(
+                    argv[1:], dialect=chosen.dialect, executable=launcher.path,
+                    directory=native_dir or log.parent, slot=slot,
+                    workspace=pathlib.Path.cwd(),
+                    prompt=argv_prompt(prompt, pathlib.Path.cwd()), python=sys.executable,
+                    message_id=launch_message_id, api_env=chosen.api_env)
             elif chosen is not None and chosen.dialect == "codex":
                 # Codex runs lane hooks from its workspace, takes its first message as its
                 # launch argument and later ones through its own queue command.
@@ -935,14 +942,6 @@ def run_lane(
                     slot=slot, workspace=pathlib.Path.cwd(),
                     prompt=argv_prompt(prompt, pathlib.Path.cwd()), python=sys.executable,
                     message_id=launch_message_id)
-            elif chosen is not None and chosen.dialect == "agy":
-                # Antigravity loads lane hooks and the lane's Kindex from a plugin in its
-                # workspace and takes its first message at launch.
-                assert prompt is not None
-                native_plan = native_session.agy_plan(
-                    argv[1:], executable=launcher.path, directory=native_dir or log.parent,
-                    slot=slot, workspace=pathlib.Path.cwd(),
-                    prompt=argv_prompt(prompt, pathlib.Path.cwd()), python=sys.executable)
             elif chosen is not None and chosen.dialect == "cursor":
                 # Cursor reads lane hooks and the lane's Kindex only from its workspace.
                 # A restart of an ended session carries the message that restarts it, as its
@@ -1131,6 +1130,7 @@ def run_lane(
         if native_plan is not None:
             import native_session
             import persistent_lane
+            import protocol_host
 
             assert run_root is not None and session_file is not None and prompt is not None
 
@@ -1158,7 +1158,13 @@ def run_lane(
                     **(dict(bind_by_mark=True, queue_env=child_env,
                             queue_command=functools.partial(
                                 native_session.codex_queue, native_plan.launcher.path))
-                       if chosen is not None and chosen.dialect == "codex" else {}))
+                       if chosen is not None and chosen.dialect == "codex" else
+                       # A later message goes to the host that owns the session, over its
+                       # own socket; the host gives it to the provider's server.
+                       dict(queue_env=child_env, queue_command=functools.partial(
+                           protocol_host.queue, sys.executable, protocol_host.record_path(
+                               native_dir or log.parent, slot)))
+                       if chosen is not None and chosen.dialect in ("muse", "agy") else {}))
         elif terminal:
             process = subprocess.Popen(argv, env=child_env)
             register()

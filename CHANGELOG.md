@@ -150,6 +150,17 @@ public API is still pre-1.0.
   that cannot be told. A lane message that restarts an ended lane session does the same
   (exit 75, message left planned). The earlier life is never signalled.
   `lane_watchdog.py previous-owner` runs the check by itself.
+- Muse and Antigravity author lanes are hosted through the provider's own session server
+  (`muse serve`, `agy acp --stdio`) by `harness/protocol_host.py`, on the operator's sign-in
+  and settings, instead of driving the provider's terminal UI. Nothing is written into the
+  lane's clone. A later message now reaches a running lane (it was held for a person
+  before), an ended session is restarted by a message, and a lane's done line is seen. An
+  ended session is re-entered only with `session/resume` and its kept id; any other answer
+  sends no prompt and exits 70, and `session/load` is never sent. This is transport only:
+  a launch or restart that requires a Signet guard or author custody is refused with exit
+  77 before any provider check, because neither provider offers a gate on every tool
+  action. Run against stand-in servers and Muse's echo provider; no model turn has been
+  run through it (`docs/HARNESS.md`).
 - A new round of a lane is no longer started beside an earlier round that is still
   stopping. `tmux_lane.sh launch` decided "finished" by the lane's tmux window alone, and a
   closed window or an ended tmux server can leave the earlier round's wrapper and program

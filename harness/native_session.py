@@ -1019,8 +1019,12 @@ def record_hook(journal: pathlib.Path, payload: Mapping[str, object],
             row["generation"] = payload["generation_id"]
         if event == "Stop" and isinstance(payload.get("status"), str):
             row["status"] = payload["status"]
-    if dialect in ("muse", "codex") and isinstance(payload.get("turn_id"), str):
+    if dialect in ("muse", "codex", "hosted") and isinstance(payload.get("turn_id"), str):
         row["generation"] = payload["turn_id"]
+    if dialect == "hosted" and event == "Stop" and isinstance(payload.get("status"), str):
+        # A hosted session's turn ends with the provider's own terminal word (Muse's
+        # completed, failed or cancelled; Antigravity's stop reason), kept as given.
+        row["status"] = payload["status"]
     if dialect == "agy" and event == "UserPromptSubmit":
         # One user message is reported once per model call. The number is kept so a reader
         # can tell the calls apart; the driver counts a repeated message once.
