@@ -19,6 +19,7 @@ import shlex
 import socket
 import subprocess
 import sys
+import time
 import uuid
 from typing import Any
 
@@ -202,26 +203,69 @@ def evaluate_with_health(client: str, payload: Any,
     return translate(client, json.loads(completed.stdout), payload["hook_event_name"]), advertised
 
 
-def evaluate_host(client: str, payload: Any, address: str, plan_digest: str) -> dict[str, Any]:
+#: How long a client is told to wait for this hook (the handler's own ``timeout``).
+HOOK_TIMEOUT_S = 25
+#: How long the whole exchange with the custody service may take: connect, send and the
+#: complete answer, measured once on a monotonic clock. It ends well inside the client's
+#: timer, so that a slow or silent service becomes this hook's own explicit denial. If the
+#: client's timer fired first, what happened would be the client's rule for a hook that
+#: timed out, and not every client blocks on that.
+HOST_DEADLINE_S = 18
+
+
+def _exchange(address: str, raw: bytes, deadline_s: float) -> Any:
+    """One request and its one-line answer over the local socket, inside one deadline.
+
+    Each socket step is given only the time that is left, so neither a peer that accepts
+    and says nothing nor one that sends a byte now and then can hold the hook past it.
+    """
+
+    deadline = time.monotonic() + deadline_s
+
+    def left() -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("policy custody did not answer in time")
+        return remaining
+
+    with socket.socket(socket.AF_UNIX) as connection:
+        connection.settimeout(left())
+        connection.connect(address)
+        connection.settimeout(left())
+        connection.sendall(raw)
+        body = bytearray()
+        while b"\n" not in body:
+            connection.settimeout(left())
+            block = connection.recv(min(4096, MAX_INPUT + 1 - len(body)))
+            if not block:
+                raise ValueError("incomplete policy custody answer")
+            body.extend(block)
+            if len(body) > MAX_INPUT:
+                raise ValueError("policy custody answer exceeds bound")
+    line, trailing = bytes(body).split(b"\n", 1)
+    if trailing.strip():
+        raise ValueError("one answer per connection is required")
+    return json.loads(line)
+
+
+def evaluate_host(client: str, payload: Any, address: str, plan_digest: str,
+                  deadline_s: float = HOST_DEADLINE_S) -> dict[str, Any]:
     """The only alternative evaluator is the pinned, already-authorized local custody service.
 
     A disconnected/invalid service is a denial, never fallback to stateless local evaluation.
     Raw tool data travels only over this local socket and is not printed or journaled.
+    The exchange is bounded as a whole (``HOST_DEADLINE_S``), inside the client's own timer
+    for the hook (``HOOK_TIMEOUT_S``): the caller turns the timeout into a denial.
     """
     if (not pathlib.Path(address).is_absolute()
             or not re.fullmatch(r"[0-9a-f]{64}", plan_digest)):
         raise ValueError("invalid policy custody binding")
-    import lane_custody
     request = {"kind": "policy", "request_id": uuid.uuid4().hex,
                "plan_digest": plan_digest, "payload": payload}
     raw = json.dumps(request).encode() + b"\n"
     if len(raw) > MAX_INPUT:
         raise ValueError("policy request exceeds bound")
-    with socket.socket(socket.AF_UNIX) as connection:
-        connection.settimeout(22)
-        connection.connect(address)
-        connection.sendall(raw)
-        result = lane_custody._receive(connection, timeout=22, maximum=MAX_INPUT)
+    result = _exchange(address, raw, deadline_s)
     if (not isinstance(result, dict) or set(result) != {"status", "output"}
             or result["status"] != "policy"):
         raise ValueError("policy custody unavailable or refused")
@@ -265,13 +309,13 @@ def configuration(client: str, path: pathlib.Path, expected: str, python: pathli
         arguments += ["--custody-socket", custody_socket, "--custody-digest", custody_digest]
     command = shlex.join(arguments)
     if client == "cursor-agent":
-        base = {"command": command, "timeout": 25, "failClosed": True}
+        base = {"command": command, "timeout": HOOK_TIMEOUT_S, "failClosed": True}
         return {"version": 1, "hooks": {
             "preToolUse": [{**base, "matcher": r"^(?!(?:Shell$|MCP:|mcp__))"}],
             "beforeShellExecution": [base], "beforeMCPExecution": [base]}}
     if client not in ("claude", "codex"):
         raise ValueError("client has no qualified hook configuration")
-    handler: dict[str, Any] = {"type": "command", "command": command, "timeout": 25}
+    handler: dict[str, Any] = {"type": "command", "command": command, "timeout": HOOK_TIMEOUT_S}
     if client == "claude":
         handler["onFailure"] = "block"
     return {"hooks": {"PreToolUse": [{"hooks": [handler]}]}}

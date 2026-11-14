@@ -1324,8 +1324,12 @@ def run_terminal(
             return {"state": "busy", "message_id": identifier,
                     "reason": "the session is asking the operator a question on screen"}
         if typing is not None or waiting or outstanding():
+            held = withhold_followups and any(
+                record.get("held") for record in deliveries.values())
             return {"state": "busy", "message_id": identifier,
-                    "reason": "an earlier message is not yet accounted for"}
+                    "reason": ("an earlier message is held for a person to enter: this "
+                               "program takes no later message automatically"
+                               if held else "an earlier message is not yet accounted for")}
         return accept(row)
 
     with tempfile.TemporaryDirectory(prefix="factory-live-", dir="/tmp") as directory:

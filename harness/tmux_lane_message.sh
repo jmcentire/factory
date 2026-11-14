@@ -536,9 +536,19 @@ if [ "$PERSISTENT" = 1 ]; then
     fi
     [ "$DELIVERY_RC" = 75 ] || exit "$DELIVERY_RC"
     case "$DELIVERY_STATE" in *'"state": "busy"'*) [ "$ATTEMPT" -lt 5 ] || break ;; esac
+    # A lane whose program takes no later message automatically answers "queued" with
+    # "held" at once and for good: waiting changes nothing, so do not wait.
+    case "$DELIVERY_STATE" in *'"held":'*) break ;; esac
     [ "$ATTEMPT" = 60 ] || sleep 0.25
   done
   [ -z "$DELIVERY_STATE" ] || printf '%s\n' "$DELIVERY_STATE"
+  case "$DELIVERY_RC:$DELIVERY_STATE" in
+    75:*'"held":'*)
+      # Recorded, not typed, and not going to be typed: say exactly that, and keep the
+      # not-delivered exit code so no caller takes it for a delivery.
+      echo "lane-message: $MESSAGE_ID is recorded for $RUN:$SLOT as queued and HELD, not delivered: this lane's program takes no later message automatically, nothing was typed and nothing will be. Enter the message in the lane's own window to deliver it. Do not resend it; its state: harness/persistent_lane.py status --root $ROOT --slot $SLOT" >&2
+      exit 75 ;;
+  esac
   if [ "$DELIVERY_RC" != 0 ]; then
     echo "lane-message: $RUN:$SLOT has not reported receiving $MESSAGE_ID, so it is not recorded as delivered. Do not resend it: the same id is never sent twice, and a message typed while the session works waits in the program's own input queue until the session reports it. Its state: harness/persistent_lane.py status --root $ROOT --slot $SLOT" >&2
     exit "$DELIVERY_RC"
