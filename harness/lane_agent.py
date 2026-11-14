@@ -64,6 +64,8 @@ EXIT_SCHEMA = "factory-lane-exit/1"
 REFUSED = 77
 # A plan lane whose harness announced API billing is stopped at once with this code.
 BILLING_REFUSED = 78
+#: How much of a native program's output before its session starts is kept in the lane log.
+STARTUP_LOG_LIMIT = 256 * 1024
 # A prompt passed as one argv element must fit the smallest per-argument limit we run on
 # (Linux MAX_ARG_STRLEN is 128 KiB); a larger prompt is refused, never truncated.
 MAX_ARGV_PROMPT = 128 * 1024 - 1
@@ -1004,18 +1006,22 @@ def run_lane(
         finally:
             os.set_blocking(descriptor, True)
 
+    startup_logged = 0
+
+    def startup_output(raw: bytes) -> None:
+        # What a native terminal program writes before its session reports starting, into
+        # the lane log, bounded: a refusal's own words, or the question it stopped to ask.
+        nonlocal startup_logged
+        room = STARTUP_LOG_LIMIT - startup_logged
+        if room > 0:
+            _append(log, raw[:room])
+            startup_logged += len(raw)
+
     def native_rejection() -> None:
-        # What a native terminal program printed before it ended, bounded, into the log.
+        # The program ended before a session existed: keep what it said (the terminal relays
+        # it to this wrapper's output as well) and its own exit code.
         assert hosted is not None
-        kept = 0
-
-        def keep(raw: bytes) -> None:
-            nonlocal kept
-            if kept < 4 * 1024 * 1024:
-                _append(log, raw)
-                kept += len(raw)
-
-        hosted.drain(keep)
+        hosted.drain(startup_output)
 
     def _stop(signum: int, _frame: object) -> None:
         nonlocal stopped
@@ -1060,7 +1066,8 @@ def run_lane(
                     prompt=argv_prompt(prompt, pathlib.Path.cwd()), session_file=session_file,
                     session_id=native_plan.session_id, journal=native_plan.journal,
                     journal_offset=native_plan.journal_offset,
-                    launcher=native_plan.launcher.record(), note=note)
+                    launcher=native_plan.launcher.record(), note=note,
+                    diagnostic=startup_output)
         elif terminal:
             process = subprocess.Popen(argv, env=child_env)
             register()

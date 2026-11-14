@@ -732,8 +732,14 @@ def run_terminal(
     journal_offset: int,
     launcher: dict,
     note,
+    diagnostic=None,
 ) -> int:
     """Own one native terminal session until its actual exit.
+
+    ``diagnostic`` receives what the program writes to its terminal until its session
+    reports starting: a program that refuses to start, or stops to ask something, says so
+    there and nowhere else, and that text belongs in the lane's log. After the start
+    report its terminal is the session's own screen and is not logged.
 
     ``terminal`` is the ``native_session.Terminal`` holding the program. ``note`` receives
     log lines (never the pane). Typed input waits for the session's own start report; a
@@ -1086,7 +1092,8 @@ def run_terminal(
                 while child.poll() is None:
                     readable, writable, _ = select.select(
                         [server.fileno(), *terminal.readers()], terminal.writers(), [], 0.2)
-                    terminal.service(readable, writable)
+                    terminal.service(
+                        readable, writable, None if state["session_started"] else diagnostic)
                     before = json.dumps(state, sort_keys=True, default=str)
                     for row in events.read():
                         observe(row)
@@ -1114,7 +1121,8 @@ def run_terminal(
                                     )
                                 except OSError:
                                     pass
-                terminal.drain()
+                # What it wrote last, as it ended: its reason, if it never started.
+                terminal.drain(None if state["session_started"] else diagnostic)
                 for row in events.read():
                     observe(row)
                 return child.wait()

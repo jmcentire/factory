@@ -439,7 +439,11 @@ class Terminal:
     def __init__(self, argv: Sequence[str], *, env: Mapping[str, str],
                  cwd: str | None = None) -> None:
         self.inbound = 0 if os.isatty(0) else -1
-        self.outbound = 1 if os.isatty(1) else -1
+        # Everything the program writes is relayed to the wrapper's own output, whatever
+        # that is: a pane, a pipe or a file. A program that refuses to start says why on
+        # its terminal, and that must not be lost because nobody was attached.
+        self.outbound = 1
+        self.sized_by = 1 if os.isatty(1) else -1
         self.master, slave = pty.openpty()
         self._resize(slave)
         try:
@@ -463,9 +467,9 @@ class Terminal:
 
     def _resize(self, descriptor: int) -> None:
         size = struct.pack("HHHH", 50, 200, 0, 0)
-        if self.outbound >= 0:
+        if self.sized_by >= 0:
             try:
-                size = fcntl.ioctl(self.outbound, termios.TIOCGWINSZ, size)
+                size = fcntl.ioctl(self.sized_by, termios.TIOCGWINSZ, size)
             except OSError:
                 pass
         try:
@@ -499,8 +503,8 @@ class Terminal:
             if data == b"":
                 self._open = False
             elif data:
-                if self.outbound >= 0:
-                    _write_all(self.outbound, data)
+                if self.outbound >= 0 and not _write_all(self.outbound, data):
+                    self.outbound = -1  # the wrapper's output is gone; keep the program
                 if output is not None:
                     output(data)
         if self.inbound >= 0 and self.inbound in readable:
@@ -543,14 +547,17 @@ class Terminal:
             pass
 
 
-def _write_all(descriptor: int, data: bytes) -> None:
+def _write_all(descriptor: int, data: bytes) -> bool:
+    """Write all of ``data``; False when the descriptor can no longer be written."""
+
     while data:
         try:
             data = data[os.write(descriptor, data):]
         except BlockingIOError:
             select.select([], [descriptor], [], 0.2)
         except OSError:
-            return
+            return False
+    return True
 
 
 def paste(text: str) -> bytes:
