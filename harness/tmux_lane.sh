@@ -1085,10 +1085,10 @@ PY
         --env-file "$CREDENTIALS" > "$SETUP_OUT" || \
         refuse 70 "the agent registry could not prepare $AGENT's lane home"
       case "$AGENT" in claude|claude-ollama)
-        # No permission mode is imposed on Claude Code. Only the operator's explicit
-        # FACTORY_LANE_SANDBOX=off adds its native permissive flag, retained with the turn.
-        # A launcher that is the operator's own function makes that choice itself, and the
-        # wrapper passes no permission argument over it.
+        # No permission mode is imposed on Claude Code. FACTORY_LANE_SANDBOX=off is the
+        # configuration that adds its native permissive flag, retained with the turn. A
+        # launcher that is a shell function carries its own flags, and the wrapper passes
+        # no permission argument over it.
         if [ "${FACTORY_LANE_SANDBOX:-on}" = off ]; then
           printf '%s\0' '--dangerously-skip-permissions' >> "$SETUP_OUT"
         fi ;;

@@ -20,11 +20,10 @@ public API is still pre-1.0.
   coordinators), except over a launcher that is the operator's own shell function. An
   operator who starts lanes with the bare `claude` executable and has not selected or
   configured a permissive mode will see Claude Code ask in the lane's window.
-- An API-billing variable the launching shell exports is unset for Claude Code, and the lane
-  runs. One set in the lane's own credential file is not dropped quietly: the lane stops,
-  naming the variable, before Claude Code starts. A `--metered` Claude lane whose shell
-  exports such a variable is therefore refused rather than run on the subscription while
-  accounted as metered.
+- An API-billing variable that is only in the launching shell's environment is unset for
+  Claude Code, and the lane runs. A Claude lane whose credential file contains such a
+  variable is refused: it stops, naming the variable and never its value, before Claude Code
+  starts.
 - API-billing variables are unset for Claude Code and none is set. `claude-ollama` reaches the
   loopback Ollama server with `ANTHROPIC_AUTH_TOKEN`, not `ANTHROPIC_API_KEY`.
 - Messages to a Claude session are typed into its terminal, each with a typed mark. States

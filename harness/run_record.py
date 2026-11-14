@@ -613,7 +613,7 @@ def _start_locked(runs: Path, run: str) -> None:
         if native_stream:
             extra = ["--add-dir", str(root)]
             if os.environ.get("FACTORY_LANE_SANDBOX", "on") == "off":
-                # The operator's explicit selection of the permissive mode, as the native flag.
+                # FACTORY_LANE_SANDBOX=off selects the permissive mode, as the native flag.
                 extra.append("--dangerously-skip-permissions")
             # A flag after --add-dir terminates its variadic arguments in both CLIs.
             # A retained session id means this start is a retry: resume that conversation, or the
@@ -624,10 +624,10 @@ def _start_locked(runs: Path, run: str) -> None:
                 model=model, effort=effort, cwd=Path(doc['repository']), resume=resume,
                 extra=extra)
             argv = list(built.argv)
-            # Claude Code gets no permission mode from here: not "default" forced over the
-            # operator's own setting, and not a bypass. Only the operator's explicit
-            # FACTORY_LANE_SANDBOX=off adds its native permissive flag (above). Agy's entry
-            # carries that flag itself, so without the explicit selection it is taken out.
+            # Claude Code gets no permission mode from here: neither "default" forced over
+            # the configured one, nor a bypass. FACTORY_LANE_SANDBOX=off is the configuration
+            # that adds its native permissive flag (above). Agy's entry carries that flag
+            # itself, so it is taken out when that configuration is not set.
             if agent == "agy" and os.environ.get("FACTORY_LANE_SANDBOX", "on") != "off":
                 argv = [arg for arg in argv if arg != "--dangerously-skip-permissions"]
             prompt_file = directory / "initial-prompt.txt"
