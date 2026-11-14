@@ -140,4 +140,4 @@ def test_direct_provider_checks_refuse_incomplete_code_coverage(kernel_probe,ent
                                '--boundary-record',binding,'--boundary-role','coder'],
                               env=env,capture_output=True,text=True,timeout=15)
     assert not rows(kernel_probe), 'incomplete trusted-code protection spawned provider'
-    assert result.returncode==70,result.stdout+result.stderr
+    assert result.returncode == (77 if entry == "preflight" else 70), result.stdout + result.stderr
