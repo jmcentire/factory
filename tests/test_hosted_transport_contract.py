@@ -691,6 +691,18 @@ def test_public_author_custody_refuses_hosted_provider_before_spawn(native_case,
         ],
         case["env"],
     )
+    (tmp_path / "protected-launch-result.json").write_text(
+        json.dumps(
+            {
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "returncode": result.returncode,
+                "environment_names": sorted(case["env"]),
+                "repository": repo,
+            },
+            indent=2,
+        )
+    )
     assert result.returncode == 77, result.stdout + result.stderr
     assert not (case["bin_dir"] / "rpc.jsonl").exists()
 
