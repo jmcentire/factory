@@ -1,6 +1,6 @@
 """Independent Slice 1 public transport contract; fake RPC providers, never models.
 
-Oracle: /tmp/factory-hosted-contract.md, approved hosted-only scope. These tests
+Oracle: tests/contracts/hosted_transport.md, approved hosted-only scope. These tests
 intentionally cannot qualify Signet enforcement; required security must refuse.
 """
 
@@ -19,7 +19,7 @@ pytest_plugins = ["tests.test_native_claude_contract"]
 
 SID = "12345678-1234-4234-8234-123456789abc"
 FAKE = r"""
-import json, os, pathlib, sys, time
+import json, os, pathlib, sys, time, threading
 
 folder = pathlib.Path(__file__).parent
 agent = pathlib.Path(sys.argv[0]).name
@@ -31,12 +31,6 @@ def log(**r):
         f.write(json.dumps(r) + "\n")
 
 
-if "--help" in args:
-    print("serve acp --stdio --model --mode --sandbox --provider --config")
-    sys.exit()
-if "--version" in args:
-    print("1.5.9-synthetic")
-    sys.exit()
 log(
     spawn=True,
     argv=args,
@@ -47,6 +41,12 @@ log(
         if os.environ.get(k)
     ],
 )
+if "--help" in args:
+    print("serve acp --stdio --model --mode --sandbox --provider --config")
+    sys.exit()
+if "--version" in args:
+    print("1.5.9-synthetic")
+    sys.exit()
 assert not {"-p", "--print", "--prompt", "exec"}.intersection(args)
 assert args and args[0] == ("acp" if agent == "agy" else "serve"), args
 sid = "12345678-1234-4234-8234-123456789abc"
@@ -64,12 +64,19 @@ def notify(method, params):
     emit(dict(method=method, params=params))
 
 
+prompt_count = 0
+active = False
+
 for line in sys.stdin:
     r = json.loads(line)
     m = r.get("method")
     p = r.get("params", {})
     log(request=r)
     if "id" not in r:
+        assert m in {'initialized','notifications/initialized','session/cancel'}, m
+        continue
+    if m is None:
+        assert r['id']=='permission-1' and ('result' in r or 'error' in r),r
         continue
     if m == "initialize":
         answer(
@@ -83,6 +90,12 @@ for line in sys.stdin:
             ),
         )
     elif m in ["session/new", "session/start"]:
+        assert m==('session/new' if agent=='agy' else 'session/start')
+        if agent=='agy':
+            assert isinstance(p['cwd'],str) and isinstance(p['mcpServers'],list)
+        else:
+            import uuid
+            assert uuid.UUID(p['commandId']).version==7
         sid = p.get("sessionId", sid)
         answer(
             r,
@@ -130,10 +143,68 @@ for line in sys.stdin:
             },
         )
     elif m in ["session/prompt", "turn/start"]:
-        log(prompt=p)
+        assert m==('session/prompt' if agent=='agy' else 'turn/start')
+        assert p['sessionId']==sid
+        content=p['prompt' if agent=='agy' else 'input']
+        assert isinstance(content,list) and content
+        assert all(x.get('type')=='text' and isinstance(x.get('text'),str) for x in content)
+        if agent=='muse':
+            import uuid
+            assert uuid.UUID(p['commandId']).version==7 and p['ifBusy']=='queue'
+        prompt_count += 1
+        snapshots = {
+            str(q.relative_to(folder.parent)): q.read_text() for q in folder.parent.rglob("*.json")
+        }
+        log(prompt=p, durable_before_write=snapshots)
+        if (folder / "permission").exists():
+            params = {
+                "sessionId": sid,
+                "toolCall": {"toolCallId": "unknown-tool", "title": "unknown arbitrary effect"},
+                "options": [
+                    {"optionId": "always", "name": "Always", "kind": "allow_always"},
+                    {"optionId": "once", "name": "Once", "kind": "allow_once"},
+                    {"optionId": "reject", "name": "Reject", "kind": "reject_once"},
+                ],
+            }
+            if agent == "muse":
+                params = {
+                    "sessionId": sid,
+                    "approvalId": "approval-1",
+                    "toolName": "unknown-tool",
+                    "rawArgs": "{}",
+                    "subject": {"kind": "future-effect"},
+                    "availableChoices": [
+                        {"choiceId": "always", "label": "Always", "scope": "localPersistent"},
+                        {"choiceId": "reject", "label": "Reject"},
+                    ],
+                    "currentRequirementId": {"approvalId": "approval-1", "sourceIndex": 0},
+                    "turnId": "turn-1",
+                    "itemId": "tool-1",
+                    "taskId": "task-1",
+                    "toolCallId": "call-1",
+                    "judgeEscalated": False,
+                    "protectedWrite": False,
+                    "sourceRange": {},
+                    "viewCursor": "",
+                }
+            emit(
+                {
+                    "id": "permission-1",
+                    "method": "session/request_permission"
+                    if agent == "agy"
+                    else "approval/request",
+                    "params": params,
+                }
+            )
+            continue
+
         if (folder / "crash-before-ack").exists():
             sys.exit(19)
         if agent == "agy":
+            if (folder / "hold-turn").exists() and prompt_count == 1:
+                log(active=True)
+                while not (folder / "release-turn").exists():
+                    time.sleep(0.02)
             notify(
                 "session/update",
                 {
@@ -153,8 +224,8 @@ for line in sys.stdin:
                     "sessionId": sid,
                     "turnId": tid,
                     "accepted": True,
-                    "disposition": "started",
-                    "startedNewTurn": True,
+                    "disposition": "queued" if active else "started",
+                    "startedNewTurn": not active,
                 },
             )
             notify("turn/started", {"sessionId": sid, "turnId": tid})
@@ -166,13 +237,36 @@ for line in sys.stdin:
                     "item": {"id": tid + "-text", "type": "agentMessage", "text": "__LANE_DONE__"},
                 },
             )
-            notify("turn/completed", {"sessionId": sid, "turnId": tid, "terminal": "completed"})
+            if (folder / "hold-turn").exists() and prompt_count == 1:
+                active = True
+                log(active=True)
+
+                def finish(turn):
+                    global active
+                    while not (folder / "release-turn").exists():
+                        time.sleep(0.02)
+                    notify(
+                        "turn/completed",
+                        {"sessionId": sid, "turnId": turn, "terminal": "completed"},
+                    )
+                    active = False
+
+                threading.Thread(target=finish, args=(tid,), daemon=True).start()
+            else:
+                notify("turn/completed", {"sessionId": sid, "turnId": tid, "terminal": "completed"})
         if (folder / "exit-after-completion").exists():
             sys.exit(0)
     elif m == "session/load":
         raise AssertionError("forbidden fallback")
+    elif m=='session/set_mode':
+        assert agent=='agy' and p['sessionId']==sid and isinstance(p['modeId'],str)
+        answer(r,{})
+    elif m=='session/set_config_option':
+        assert agent=='agy' and p['sessionId']==sid and isinstance(p['configId'],str)
+        assert 'value' in p
+        answer(r,{'configOptions':[]})
     else:
-        answer(r, {})
+        raise AssertionError('unsupported synthetic protocol request: '+json.dumps(r))
 """
 
 
@@ -455,3 +549,80 @@ def test_public_author_custody_refuses_hosted_provider_before_spawn(native_case,
     )
     assert result.returncode == 77, result.stdout + result.stderr
     assert not (case["bin_dir"] / "rpc.jsonl").exists()
+
+
+def test_pending_unknown_permission_is_visible_and_never_autoapproved(hosted):
+    lane = hosted
+    (lane.folder / "permission").touch()
+    p = lane.start()
+    until(lambda: lane.state().get("phase") == "asking-operator", p, lane.root / "wrapper-0.log")
+    mid = lane.plan("must not pass unanswered operator boundary")
+    result = lane.send(mid)
+    assert result.get("state") != "observed"
+    time.sleep(0.15)
+    messages = [r["request"] for r in lane.rows() if "request" in r]
+    assert len([r for r in lane.rows() if "prompt" in r]) == 1
+    assert not any(r.get("method") == "approval/decide" for r in messages)
+    for r in messages:
+        if r.get("id") == "permission-1" and "result" in r:
+            assert not any(
+                x in json.dumps(r["result"])
+                for x in ["allow_once", "allow_always", "localPersistent", '"always"', '"once"']
+            )
+
+
+def test_active_turn_respects_native_queue_or_acp_busy_boundary(hosted):
+    lane = hosted
+    (lane.folder / "hold-turn").touch()
+    p = lane.start()
+    until(lambda: any(r.get("active") for r in lane.rows()), p, lane.root / "wrapper-0.log")
+    mid = lane.plan("followup while prior turn remains active")
+    result = lane.send(mid)
+    time.sleep(0.1)
+    prompts = [r["prompt"] for r in lane.rows() if "prompt" in r]
+    if lane.agent == "agy":
+        assert len(prompts) == 1, "ACP must not send second prompt before first response"
+        assert result.get("state") != "observed"
+    else:
+        until(
+            lambda: len([r for r in lane.rows() if "prompt" in r]) == 2,
+            p,
+            lane.root / "wrapper-0.log",
+        )
+        queued = [r["prompt"] for r in lane.rows() if "prompt" in r][-1]
+        assert queued["ifBusy"] == "queue"
+    (lane.folder / "release-turn").touch()
+    until(lambda: lane.send(mid).get("state") == "observed", p, lane.root / "wrapper-0.log")
+    assert len([r for r in lane.rows() if "prompt" in r]) == 2
+
+
+def test_followup_uncertain_write_is_durable_and_not_replayed(hosted):
+    lane = hosted
+    p = lane.start()
+    until(
+        lambda: lane.state().get("deliveries", {}).get("initial", {}).get("state") == "observed",
+        p,
+        lane.root / "wrapper-0.log",
+    )
+    until(
+        lambda: "__LANE_DONE__" in (lane.root / "wrapper-0.log").read_text(),
+        p,
+        lane.root / "wrapper-0.log",
+    )
+    first = next(r for r in lane.rows() if "prompt" in r)
+    assert "tmux-lanes/coder-launch-intent.json" in first["durable_before_write"]
+    (lane.folder / "crash-before-ack").touch()
+    mid = lane.plan("uncertain followup cannot be silently replayed")
+    lane.send(mid)
+    until(
+        lambda: len([r for r in lane.rows() if "prompt" in r]) == 2,
+        diagnostic=lane.root / "wrapper-0.log",
+    )
+    p.wait(timeout=10)
+    follow = next(r for r in reversed(lane.rows()) if "prompt" in r)
+    assert mid in json.dumps(follow["durable_before_write"])
+    (lane.folder / "crash-before-ack").unlink()
+    # Public delivery retry may refuse or report unknown; neither may resubmit.
+    result = lane.send(mid)
+    assert result.get("state") != "observed"
+    assert len([r for r in lane.rows() if "prompt" in r]) == 2
