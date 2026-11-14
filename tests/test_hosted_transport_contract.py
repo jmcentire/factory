@@ -323,12 +323,22 @@ while True:
             )
             continue
 
+        if agent == "muse" and (folder / "reject-old-command").exists():
+            notify(
+                "turn/started",
+                {"sessionId": sid, "turnId": "old-turn", "commandId": old_command},
+            )
+            emit({"id": r["id"], "error": {"code": -32603, "message": "new prompt rejected"}})
+            log(rejected=True)
+            continue
+        if agent == "muse":
+            old_command = p["commandId"]
         if agent == "agy" and (folder / "reject-update").exists():
             mode = (folder / "reject-update").read_text()
             update = {"sessionUpdate": "current_mode_update", "currentModeId": "default"}
             if mode == "config":
                 update = {"sessionUpdate": "config_option_update", "configOptions": []}
-            if mode == "foreign":
+            if mode in {"foreign", "prior-turn"}:
                 update = {
                     "sessionUpdate": "agent_message_chunk",
                     "content": {"type": "text", "text": "old answer"},
@@ -442,7 +452,7 @@ def hosted(tmp_path, monkeypatch, request):
     executable.write_text(f"#!{sys.executable}\n" + FAKE)
     executable.chmod(0o755)
     prompt = root / "prompt"
-    prompt.write_text("-literal initial\nno shell $(false)")
+    prompt.write_text(f"-literal initial\nno shell $(touch {tmp_path / 'must-not-execute'})")
     env = {k: v for k, v in os.environ.items() if k in {"PATH", "SHELL", "TMPDIR", "TERM", "LANG"}}
     env.update(HOME=str(home), FACTORY_PYTHON=sys.executable)
     env["PATH"] = str(folder) + os.pathsep + env["PATH"]
@@ -525,6 +535,7 @@ def hosted(tmp_path, monkeypatch, request):
     lane.root = root
     lane.project = project
     lane.home = home
+    lane.shell_marker = tmp_path / "must-not-execute"
     lane.command = command
     lane.env = env
     yield lane
@@ -581,6 +592,7 @@ def test_hosted_initial_and_live_followup_bind_exact_identity_without_pollution(
 
         assert uuid.UUID(prompts[-1]["commandId"]).version == 7
         assert prompts[-1]["ifBusy"] == "queue"
+    assert not lane.shell_marker.exists()
     assert not (lane.project / ".muse").exists()
     assert not (lane.project / ".agents/plugins/lane").exists()
     assert not any(x.get("request", {}).get("method") == "session/load" for x in lane.rows())
@@ -809,7 +821,9 @@ def test_followup_uncertain_write_is_durable_and_not_replayed(hosted):
     assert len([r for r in lane.rows() if "prompt" in r]) == 2
 
 
-@pytest.mark.parametrize("mode", ["config", "mode", "foreign", "missing", "nonstring"])
+@pytest.mark.parametrize(
+    "mode", ["config", "mode", "foreign", "missing", "nonstring", "prior-turn"]
+)
 def test_acp_unrelated_update_then_rejection_is_not_prompt_receipt(hosted, mode):
     lane = hosted
     if lane.agent != "agy":
@@ -948,7 +962,10 @@ def test_hosted_lost_reply_and_damaged_process_custody_never_replay(hosted, dama
             + b"\n"
         )
         client.shutdown(socket.SHUT_WR)
-    until(lambda: lane.state().get("deliveries", {}).get(mid, {}).get("state") == "observed", p)
+    until(
+        lambda mid=mid: lane.state().get("deliveries", {}).get(mid, {}).get("state") == "observed",
+        p,
+    )
     before = len([r for r in lane.rows() if "prompt" in r])
     receipt_path = lane.folder / "coder-process.json"
     original = receipt_path.read_bytes()
@@ -979,3 +996,47 @@ def test_completed_hosted_child_cannot_replay_initial_on_restart(hosted):
     second = lane.start()
     assert second.wait(timeout=10) != 0
     assert len([r for r in lane.rows() if "prompt" in r]) == 1
+
+
+def test_identical_hosted_bodies_remain_distinct_deliveries(hosted):
+    lane = hosted
+    p = lane.start()
+    until(
+        lambda: lane.state().get("deliveries", {}).get("initial", {}).get("state") == "observed", p
+    )
+    ids = []
+    for _ in range(2):
+        mid = lane.plan("identical body intentionally submitted twice")
+        ids.append(mid)
+        lane.send(mid)
+        until(
+            lambda mid=mid: (
+                lane.state().get("deliveries", {}).get(mid, {}).get("state") == "observed"
+            ),
+            p,
+        )
+    assert ids[0] != ids[1]
+    prompts = [r["prompt"] for r in lane.rows() if "prompt" in r]
+    assert len(prompts) == 3
+    assert prompts[1] != prompts[2], (
+        "each intended identical-body submission needs its own identity"
+    )
+    if lane.agent == "muse":
+        assert prompts[1]["commandId"] != prompts[2]["commandId"]
+    for mid in ids:
+        assert lane.send(mid)["state"] == "observed"
+    assert len([r for r in lane.rows() if "prompt" in r]) == 3
+
+
+def test_muse_old_command_event_cannot_settle_rejected_new_message(hosted):
+    lane = hosted
+    if lane.agent != "muse":
+        pytest.skip("MSP-specific command receipt")
+    p = lane.start()
+    until(lambda: lane.state().get("deliveries", {}).get("initial", {}).get("response_stop"), p)
+    (lane.folder / "reject-old-command").touch()
+    mid = lane.plan("new message must not inherit an old command receipt")
+    lane.send(mid)
+    until(lambda: any(r.get("rejected") for r in lane.rows()), p)
+    time.sleep(0.15)
+    assert lane.state().get("deliveries", {}).get(mid, {}).get("state") != "observed"

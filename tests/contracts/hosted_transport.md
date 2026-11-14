@@ -34,3 +34,31 @@ Requested model/effort must be selected in returned config options before prompt
 Corrupt or unreadable retained Muse command ledger cannot create fresh command IDs
 or silently replay. Public restart requires provider resume argv as well as retained
 session file and launch message ID (Muse resume UUID, AGY --conversation UUID).
+
+## Historical terminal-end-to-end migration (hosted default authorized)
+
+The old terminal path has been retired for AGY/Muse. Its eleven end-to-end cases
+remain explicitly historical/skipped, not silently green. Callable hook/parser
+unit contracts elsewhere are retained unchanged. No protected security rule is
+relaxed: explicit required custody still refuses before any provider spawn.
+
+| Historical case | Current executable hosted replacement |
+| --- | --- |
+| AGY native launch observation/dedup | `test_hosted_initial_and_live_followup_bind_exact_identity_without_pollution` (literal shell text, exact identity, retry dedup, untouched HOME/project) and `test_followup_uncertain_write_is_durable_and_not_replayed` (pre-write intent) |
+| AGY Stop cannot release held followup | The old manual-entry-only policy is intentionally replaced by hosted delivery. `test_active_turn_respects_native_queue_or_acp_busy_boundary` preserves outstanding-turn ordering; `test_pending_unknown_permission_is_visible_and_never_autoapproved` preserves genuine permission holds. Stop is not a delivery receipt. |
+| AGY lost reply, stale/missing/wrong-slot receipt (3 cases) | `test_hosted_lost_reply_and_damaged_process_custody_never_replay` (both providers x3), plus wrong-session rejection in live-followup test |
+| AGY exited child, observed initial | `test_completed_hosted_child_cannot_replay_initial_on_restart` and strict ended-session resume success/missing/mismatch tests |
+| AGY exited child, uncertain initial | `test_uncertain_initial_handover_never_replays`; fresh retry cannot resend initial |
+| Manual exact held receipt (both providers) | Automatic host receipts replace manual hooks; live-followup exact identity plus pending-permission hold test. No autoapproval is introduced. |
+| Old receipt vs new identical body (both providers) | `test_identical_hosted_bodies_remain_distinct_deliveries` (unique intent/command ID), `test_acp_unrelated_update_then_rejection_is_not_prompt_receipt` including same-session prior-turn content/config/mode and missing/foreign/nonstring identity. Existing Muse exact command-ID binding is checked by durable wire hash linkage. |
+
+Synthetic tests prove adapter protocol behavior, not provider honesty or Signet
+all-tool enforcement. Installed Muse echo and one authorized AGY text-only
+subscription canary additionally exercise real provider transport; neither
+qualifies protected read isolation. Unknown subscription allowance is not a
+claim of free or unlimited capacity.
+
+`test_muse_old_command_event_cannot_settle_rejected_new_message` additionally
+injects a prior command's same-session turn-start while the new turn is rejected;
+it must not settle the new message. This explicitly replaces old manual-hook
+stale-event protection for MSP rather than relying on identical-body coverage.

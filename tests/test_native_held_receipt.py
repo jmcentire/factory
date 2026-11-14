@@ -14,6 +14,14 @@ import pytest
 
 from tests.test_persistent_lane import eventually
 
+# Historical terminal transport, retired when hosted ACP/MSP became the default.
+# Replacement invariant-by-invariant evidence: tests/contracts/hosted_transport.md.
+# Keep these old end-to-end specifications for archaeology, not a false default gate.
+pytestmark = pytest.mark.skip(
+    reason="retired TUI transport; replacements mapped in tests/contracts/hosted_transport.md"
+)
+
+
 NATIVE = r"""
 import json, os, pathlib, select, subprocess, sys, tty
 folder = pathlib.Path(__file__).parent
@@ -170,7 +178,6 @@ def held_native(tmp_path, monkeypatch, request):
         output.close()
 
 
-
 def test_exact_manual_receipt_releases_only_same_session_held_message(held_native):
     lane = held_native
     initial = lane.raw()
@@ -185,12 +192,17 @@ def test_exact_manual_receipt_releases_only_same_session_held_message(held_nativ
     eventually(lambda: lane.raw().get("foreign_inputs", 0) > initial.get("foreign_inputs", 0))
     assert lane.send(message)["state"] == "queued"
     before_wrong = lane.raw().get("foreign_inputs", 0)
-    lane.reports({"event": "PreInvocation", "lastUserInput": "wrong " + marked,
-                  "executionNum": 10})
+    lane.reports({"event": "PreInvocation", "lastUserInput": "wrong " + marked, "executionNum": 10})
     eventually(lambda: lane.raw().get("foreign_inputs", 0) > before_wrong)
     assert lane.send(message)["state"] == "queued"
-    lane.reports({"event": "PreInvocation", "lastUserInput": marked,
-                  "executionNum": 11, "target_session": "99999999-9999-4999-8999-999999999999"})
+    lane.reports(
+        {
+            "event": "PreInvocation",
+            "lastUserInput": marked,
+            "executionNum": 11,
+            "target_session": "99999999-9999-4999-8999-999999999999",
+        }
+    )
     eventually(lambda: lane.raw().get("unbound_events", 0) > initial.get("unbound_events", 0))
     assert lane.send(message)["state"] == "queued"
     lane.reports({"event": "PreInvocation", "lastUserInput": marked, "executionNum": 12})
@@ -200,9 +212,16 @@ def test_exact_manual_receipt_releases_only_same_session_held_message(held_nativ
     next_held = lane.send(second)
     assert next_held["state"] == "queued" and next_held.get("held")
     stops = lane.raw()["stop_reports"]
-    lane.reports({"event": "PreInvocation", "lastUserInput": marked, "executionNum": 13},
-                 {"event": "Stop", "fullyIdle": True, "continuationActive": False,
-                  "terminationReason": "NO_TOOL_CALL", "executionNum": 13})
+    lane.reports(
+        {"event": "PreInvocation", "lastUserInput": marked, "executionNum": 13},
+        {
+            "event": "Stop",
+            "fullyIdle": True,
+            "continuationActive": False,
+            "terminationReason": "NO_TOOL_CALL",
+            "executionNum": 13,
+        },
+    )
     eventually(lambda stops=stops: lane.raw()["stop_reports"] > stops)
     assert lane.send(second)["state"] == "queued"
     assert lane.raw()["session_id"] == initial["session_id"]
@@ -229,10 +248,16 @@ def test_old_receipt_cannot_settle_new_identical_body_message(held_native):
     # cannot settle the new retained item, even though the underlying words match.
     for execution in (20, 21):
         stops = lane.raw()["stop_reports"]
-        lane.reports({"event": "PreInvocation", "lastUserInput": entry_a,
-                      "executionNum": execution},
-                     {"event": "Stop", "fullyIdle": True, "continuationActive": False,
-                      "terminationReason": "NO_TOOL_CALL", "executionNum": execution})
+        lane.reports(
+            {"event": "PreInvocation", "lastUserInput": entry_a, "executionNum": execution},
+            {
+                "event": "Stop",
+                "fullyIdle": True,
+                "continuationActive": False,
+                "terminationReason": "NO_TOOL_CALL",
+                "executionNum": execution,
+            },
+        )
         eventually(lambda stops=stops: lane.raw()["stop_reports"] > stops)
         assert lane.send(second)["state"] == "queued"
     lane.reports({"event": "PreInvocation", "lastUserInput": entry_b, "executionNum": 22})
