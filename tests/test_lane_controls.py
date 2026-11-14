@@ -37,7 +37,7 @@ from tests.test_harness_scripts import (
 REPO = HARNESS.parent
 CODEX_HELP = (
     "--ignore-user-config --ignore-rules --strict-config --json --thread --no-alt-screen "
-    "--no-daemon --add-dir --model"
+    "--no-daemon --add-dir --model --message"
 )
 
 
@@ -490,7 +490,9 @@ def test_interactive_codex_runs_the_tui_without_its_daemon(tmp_path: Path) -> No
     launched = lanes.lane("coder", "--agent", "codex-interactive")
     assert launched.returncode == 0, launched.stdout + launched.stderr
     [call] = lanes.windows("coder")
-    assert "--terminal --prompt-arg" in call
+    assert "--prompt-arg" in call
+    assert "--session-agent codex-interactive" in call
+    assert "--persistent" in call
     assert "-- codex --no-daemon --no-alt-screen --ask-for-approval never" in call
     assert "never exec" not in call and "codex_lane_session" not in call
     assert "--disable apps" not in call
@@ -599,15 +601,11 @@ def test_an_auth_check_that_waits_for_input_is_a_login_screen() -> None:
     def signed_in(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess([], 0, "Logged in", "")
 
-    # The msg-r2 Coder's TUI could not bind its socket under a long CODEX_HOME and fell back to
-    # its login screen: an interactive lane is refused before that can happen.
-    long_home = "/" + "x" * 100
-    with pytest.raises(lane_agent.PreflightRefused, match="login screen") as refused:
-        lane_agent.preflight("codex-interactive", environ={"CODEX_HOME": long_home},
-                             runner=signed_in)
-    assert "--agent codex" in refused.value.remediation
-    assert lane_agent.preflight("codex-interactive", environ={"CODEX_HOME": "/h"},
-                                runner=signed_in) == "codex-login-status"
+    # Native --no-daemon lanes do not bind a daemon socket inside CODEX_HOME.
+    # Preserve both short and long operator homes without fabricating login failure.
+    for home in ("/" + "x" * 100, "/h"):
+        assert lane_agent.preflight("codex-interactive", environ={"CODEX_HOME": home},
+                                    runner=signed_in) == "codex-login-status"
 
 
 # -- 3. spend caps for metered agents -------------------------------------------------------
