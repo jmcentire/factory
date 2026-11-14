@@ -15,6 +15,14 @@ import pytest
 
 from tests.test_persistent_lane import eventually
 
+# Historical terminal transport, retired when hosted ACP/MSP became the default.
+# Replacement invariant-by-invariant evidence: tests/contracts/hosted_transport.md.
+# Keep these old end-to-end specifications for archaeology, not a false default gate.
+pytestmark = pytest.mark.skip(
+    reason="retired TUI transport; replacements mapped in tests/contracts/hosted_transport.md"
+)
+
+
 AGY = r"""
 import json, os, pathlib, select, subprocess, sys, tty
 folder = pathlib.Path(__file__).parent

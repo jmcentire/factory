@@ -141,7 +141,7 @@ started through the operator's launcher on a terminal the lane wrapper owns
   delivered only on the session's own prompt report. If the session does not report
   starting within 90s (it may be asking its folder-trust question) the command exits 75
   with the message still planned; if the program ends first it exits 70. A lane whose
-  program the registry reports as neither resumable nor restartable (Muse, Antigravity)
+  program the registry reports as neither resumable nor restartable
   is refused with exit 70 and the message stays planned: the operator
   continues it with the program's own resume, or starts a new session with
   `--replace-session`. A lane launched before the `native` entry was recorded is refused
@@ -337,7 +337,154 @@ candidate guard were exercised on temporary repositories, not through a live lan
   That is why the files exist only while the session runs, why a freeze removes any that a
   killed session left before it copies anything, and why it stops if one of them changed.
 
-### Muse lanes are Muse Code's own interactive session
+### Muse and Antigravity lanes are hosted through the provider's own session server
+
+A `muse` or `agy` author lane no longer drives the provider's terminal UI. The lane wrapper
+runs `harness/protocol_host.py` in the lane's window, and that program starts the
+provider's own stdio server (`muse serve`; `agy acp --stdio`) on the operator's HOME,
+sign-in and settings, and speaks the provider's published protocol to it (Muse's session
+protocol; the Agent Client Protocol). `META_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY` and
+`AGY_LLM_GATEWAY_API_KEY` are always removed from the server's environment, however the
+host was started and whatever it was told. No print mode, no
+`muse exec`, no settings edited, and nothing written into the lane's clone: there is no
+`.muse/hooks.json` and no `.agents/plugins/lane/` for a hosted lane. The two sections after
+this one describe the earlier terminal route and its evidence; lanes no longer use it.
+
+**Where this stands.** The owner approved this hosted route as acceptable for now, in
+place of driving each provider's terminal UI, which could not deliver a later message
+unattended (Muse, Antigravity) or hold a restarted session to its conversation
+(Antigravity). What it gives today is narrow and should be read as that:
+
+- It works for an unprotected lane: one that requires no Signet guard, no author custody
+  and no kernel boundary. That is the positive capability, and the only one.
+- A protected lane is refused, as set out next. Nothing here is a step toward a guard.
+- On a real subscription model, one bounded thing has been run for each provider, by the
+  independent tester: a single text-only turn. No tool call and no approval request
+  occurred in either. What has been run is listed at the end of this section; everything
+  beyond that list is unproven, including that a real model's tool call or approval
+  request behaves as the stand-ins do.
+
+**This is transport, not a guard.** It is groundwork. A protected launch, or a message
+that would restart an ended session under protection, is refused with exit 77 before the
+provider's program is run at all (its sign-in check included) and before any prompt is
+delivered. A refusal does leave its own records: the launcher's refusal event; for
+`lane_agent.py run`, a line in the lane log and an exit row carrying 77; for a message,
+the planned message, which stays planned and undelivered. In the cases tried it left no
+launch journal and no launch hand-over record. Protected means any of: `FACTORY_REQUIRE_SIGNET`,
+`FACTORY_REQUIRE_AUTHOR_CUSTODY` or `FACTORY_REQUIRE_BOUNDARY` set to anything but empty or
+`0`; a Signet contract or digest, an author-custody config or digest, or a boundary
+contract or digest named (by variable or by the launcher's own options); or a boundary
+record handed to the lane wrapper. The kernel boundary is in that list because it has not
+been qualified around a host program and the provider's server under it. The refusal is made by `protocol_host` itself, which every hosted
+start goes through, so the direct entries refuse as the launcher does: `lane_agent.py run`
+(exit 77, the provider not started and no hand-over recorded), `lane_agent.py preflight` (exit 77, the provider's account
+command is not run) and `protocol_host.py run`. The reason is specific: neither provider asks about every action
+(what an existing grant, rule or permissive mode already allows is never presented), both
+skip a hook that fails or times out, and Muse 1.4.20 lists a per-connection hook method in
+its exported experimental schema that its servers do not serve (`hook/declare` answers
+"method not found"). So no gate on every tool action and no read isolation is established
+for either, and none is claimed.
+
+- **Identity.** A new session is the provider's `session/new` (Antigravity) or
+  `session/start` with an id the host mints (Muse). An ended session is re-entered only
+  with `session/resume` and the kept id, and the answer must name that id. An error
+  (Antigravity `-32603`, Muse `-32020`), another id, no id, a timeout or the server ending
+  sends no prompt, makes no other session, and ends the host with exit 70; the message
+  command then exits 70 and says why. `session/load` is never sent: Antigravity accepts an
+  unknown id through it, and its own resume error suggests it.
+- **Messages.** The first message, and the message that restarts an ended session, is
+  given when the host starts; the wrapper records that hand-over first
+  (`<slot>-launch-intent[-<message id>].json`) and never gives a message twice. A later
+  message to a running lane goes from the wrapper to the host over the host's own socket
+  (the host is checked by PID and start time, and by session id), and the host gives it to
+  the server: Muse as `turn/start` with `ifBusy: "queue"` under a command id that is the
+  message's own and is on disk before it is sent (a record of those ids that is there
+  and damaged is refused, never replaced); Antigravity as `session/prompt`, one at
+  a time, only after the previous prompt's answer. One message of the wrapper's may be
+  unaccounted for at a time; another is answered `busy`.
+- **What is recorded.** `observed` only on a report that is that submission's own. Muse:
+  `turn/started` for that command id (or the turn id Muse's acknowledgement named). For
+  Antigravity an update names no prompt, so none is a receipt by arriving (a late frame of
+  the turn before, a mode or option notice): the receipt is the session's echo of the
+  message carrying its mark, or else the answer to that very `session/prompt` request, so
+  in practice a message to Antigravity is `submitted` while its turn runs and `observed`
+  when it ends. A prompt the server refuses is not received, and the host ends (exit 70).
+  A frame counts for the lane only if it names the lane's session id exactly; one naming
+  another, or none, settles nothing. The turn's end is a separate
+  report carrying the provider's own word (`completed`, `failed`, `cancelled`; a stop
+  reason), kept on the message as `response_stop`, and the reply's text goes to the lane
+  log, so a lane's done line is seen. A failed or cancelled turn is not called done.
+- **Questions to the operator.** A permission or approval request the session does raise
+  is shown in the lane's window and held, and the lane reports `asking-operator`. A person
+  presses `a` to allow that one action or `d` to deny it. Only once-only choices are ever
+  sent; nothing is decided because nobody answered. `FACTORY_LANE_SANDBOX=off` remains the
+  one explicit selection of the provider's own permissive mode (Muse `allowAll`,
+  Antigravity `--dangerously-skip-permissions`), as before.
+- **Model and effort.** Muse: `--model` is its server's own option; effort is given on
+  each turn. Antigravity: the lane's model and effort are put in force through the
+  session's own options, and after the last change the server's own account of its
+  options must show both in force together (a later change can undo an earlier one). A
+  model the session does not offer, or a final answer that does not show what was asked
+  for, is refused before any prompt rather than run under another's name.
+- **Not resumable by the watcher.** The registry reports both as `restartable`: a message
+  restarts an ended session, and nothing stops a live one for a pause or wrap-up. So
+  `--review-every-minutes` is refused, and so is `--wrap-up-minutes` on a lane with a wall
+  cap, which is the only case in which that option does anything. A slot an earlier Factory
+  started as the provider's terminal UI is not restarted as a hosted one (exit 70; start a
+  hosted session with `--replace-session`).
+- **After the host ends,** `muse resume <id>` or `agy --conversation <id>` reopens the
+  same session in the provider's own UI.
+- **What was run.** Two kinds of evidence, and they are not the same thing.
+  *Stand-in servers that call no model,* both providers, through `tmux_lane.sh` and
+  `tmux_lane_message.sh`: launch, a later message, the done line, a restart on the same
+  session, an unknown and a wrong session refused with no prompt and no `session/load`,
+  stray and unnamed frames settling nothing, a damaged command-id record refused, model and
+  effort confirmed or refused, and the protected starts that were tried refused with no
+  run of the provider's program. Those were: a launch under each of the three
+  `FACTORY_REQUIRE_*` flags, under a boundary contract and digest named by variable, and
+  under each of the launcher's three option pairs and all three together; a message
+  restart under the Signet flag; and the direct entries under a flag or a named binding.
+  Other combinations were not tried.
+  *Muse Code 1.4.20's own server on its echo provider* (no model, no sign-in used, a
+  throwaway HOME), on an unmanaged lane started with `lane_agent.py run`: start, a later
+  message to the running lane, a second one answered `busy`, host stop, restart on the
+  same session id, each message sent to Muse exactly once and recorded by Muse once, each
+  reply in the lane log, and an unknown session refused on Muse's own error. The adapter's
+  author ran this, and the independent tester ran the same lifecycle separately and it
+  passed.
+  *One real text-only turn on each provider, on the operator's saved sign-in,* by the
+  independent tester only (2026-11-14), on the source this section describes. These are
+  model turns, one each, and are a different kind of evidence from the echo lifecycle
+  above: they show a text turn through the transport, and no lifecycle (no later message,
+  no restart) was run on a real model.
+  - Antigravity: the provider's own account check passed, the API-routing variables were
+    absent from the server, the reply was exactly the text asked for, the turn ended with
+    the stop reason `end_turn`, and the host was then stopped.
+  - Muse: the provider's own account command reported a subscription sign-in but no
+    allowance figure (the server sent no usage), the model provider was selected for that
+    run only, the API-routing variables were absent from the server, the reply was the
+    text asked for followed by the message's own mark (so not that text alone), the turn
+    ended `completed`, and the host was then stopped.
+  - In neither turn was a tool called or a permission or approval requested.
+- **Not run, and so not claimed.** Any tool call, and any permission or approval request
+  answered in the window against a real server, on either provider. Anything about a
+  Signet guard, custody or read isolation. Anything about billing: that these turns were
+  charged to the subscription and not otherwise is taken from the sign-in in use and the
+  absent API variables, not from a ledger, and Muse reported no usage at all. On a real
+  model, more than one turn: a later message to a running lane, a restart of an ended
+  session, a message arriving while a turn runs. For Antigravity, what its server sends
+  before a prompt's answer in a turn that uses tools, and whether the model name the
+  public launcher records matches a session option. The lane's Kindex reaching a real
+  session. A hosted lane inside the kernel boundary.
+
+### Earlier terminal route for Muse lanes (history; lanes no longer use it)
+
+This section records how a Muse lane ran before it was hosted through Muse's session
+server, and the evidence gathered then. It does not describe a lane today: no hook file is
+written into the clone, later messages are not held for a person, and an ended session is
+restarted by a message. It is kept because its observations of Muse's own behaviour (a
+project hook file's trust, what a stop report does and does not mean, a hook that fails
+being skipped) still hold and still explain why a hook is not the guard.
 
 A Muse lane runs `muse --workspace <clone>` on the same terminal host, with the operator's
 HOME, sign-in, settings, hooks and MCP servers intact: no `muse exec`, no replaced
@@ -441,7 +588,16 @@ author and independently by the tester on 2026-11-13. It is converted, not accep
   asking the operator a question. Muse refreshes its own sign-in file when it starts; that
   is Muse's doing.
 
-### Antigravity lanes are Antigravity's own interactive session
+### Earlier terminal route for Antigravity lanes (history; lanes no longer use it)
+
+This section records how an Antigravity lane ran before it was hosted through
+Antigravity's session server, and the evidence gathered then, including why an ended
+terminal session was never restarted. It does not describe a lane today: no plugin is
+written into the clone, later messages are not held for a person, and an ended session is
+restarted by a message through `session/resume`. Two things in it still hold: the
+coordinator-seat paragraph (a seat is still Antigravity's own terminal UI, worked by a
+person), and the observations that a failed hook is skipped, which is why a hook is not the
+guard.
 
 An `agy` lane runs `agy` in its clone on the same terminal host, with the operator's HOME,
 sign-in, settings, hooks, plugins and MCP servers intact: no `--print`, no private HOME, no
@@ -686,9 +842,10 @@ start in print mode with a private configuration. Each launch records and prints
 agent's own name: it is empty only for `claude` and `claude-ollama`,
 and `python harness/agents.py describe --agent <lane agent>` prints it. For `cursor-agent`,
 `muse`, `agy` and `codex-interactive` it says what was run and what is still open. The
-registry reports `cursor-agent`, `muse` and `agy` as not resumable by the Factory (a Cursor
-session that has ended is restarted by a lane message, which is a different thing), so wrap-up
-and progress-review pauses, which continue a session, are not offered for them. The rest:
+registry reports `cursor-agent`, `muse` and `agy` as not resumable by the Factory (a Cursor,
+Muse or Antigravity session that has ended is restarted by a lane message, which is a
+different thing), so wrap-up and progress-review pauses, which continue a session, are not
+offered for them. The rest:
 
 | Provider | Established, and from where | Not established |
 |---|---|---|

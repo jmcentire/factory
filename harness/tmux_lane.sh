@@ -302,6 +302,27 @@ if [ "$ACTION" != "freeze" ]; then
     echo "tmux-lane: prompt must be a regular non-symlink file" >&2
     exit 70
   }
+  # Muse and Antigravity are hosted through their own session servers. Neither asks about
+  # every action (existing grants and permissive modes are not asked about) and both skip a
+  # hook that fails, so no gate on every tool action and no read isolation is established
+  # for them, and the kernel boundary has not been qualified around a host and its server.
+  # A protected launch (one that requires a Signet guard, author custody or a boundary, by
+  # flag or by a named binding) is refused here: before the provider's sign-in check or any
+  # other run of the provider's program, before any record and before any process.
+  case "$AGENT" in muse|agy)
+    PROTECTED=""
+    for NAME in FACTORY_REQUIRE_SIGNET FACTORY_REQUIRE_AUTHOR_CUSTODY FACTORY_REQUIRE_BOUNDARY; do
+      case "${!NAME:-}" in ""|0) ;; *) PROTECTED="$PROTECTED $NAME" ;; esac
+    done
+    for NAME in FACTORY_SIGNET_CONTRACT FACTORY_SIGNET_DIGEST FACTORY_AUTHOR_CUSTODY_CONFIG \
+        FACTORY_AUTHOR_CUSTODY_DIGEST FACTORY_BOUNDARY_CONTRACT FACTORY_BOUNDARY_DIGEST; do
+      [ -z "${!NAME:-}" ] || PROTECTED="$PROTECTED $NAME"
+    done
+    [ -z "$PROTECTED" ] || \
+      refuse 77 "a Signet guard, author custody or a boundary is required ($(printf '%s' "$PROTECTED" | cut -c2-)), and none is qualified for a hosted $AGENT session: no gate on every tool action and no read isolation is established for it" \
+        "choose an agent with a qualified guard for this lane (harness/agents.py describe); nothing was started"
+    ;;
+  esac
   [ ! -s "$EVENTS" ] || refuse 64 "slot $SLOT was already launched in this run" \
     "send new work into its session: harness/tmux_lane_message.sh $RUN validator $LANE review|answer ..."
 
@@ -542,16 +563,8 @@ PY
         refuse 70 "the lane's repository has a Codex project hook file of its own, which is not edited or replaced: $OCCUPIED" \
           "an interactive Codex lane's hooks can be added beside the operator's only through that path, so it cannot run in this repository; choose another agent for this lane"
     fi
-    if [ "$AGENT" = agy ]; then
-      OCCUPIED=$("$FACTORY_PYTHON" "$D/native_session.py" check-project --agent agy --workspace "$REPOSITORY" 2>&1) || \
-        refuse 70 "the lane's repository has an Antigravity plugin of its own at .agents/plugins/lane, which is not edited or added to: $OCCUPIED" \
-          "an Antigravity lane's hooks and Kindex reach it only as a plugin in that directory, so it cannot run in this repository; choose another agent for this lane"
-    fi
-    if [ "$AGENT" = muse ]; then
-      OCCUPIED=$("$FACTORY_PYTHON" "$D/native_session.py" check-project --agent muse --workspace "$REPOSITORY" 2>&1) || \
-        refuse 70 "the lane's repository has a Muse project hook file of its own, which is not edited or replaced: $OCCUPIED" \
-          "a Muse lane's hooks can be added beside the operator's only through that path, so it cannot run in this repository; choose another agent for this lane"
-    fi
+    # A hosted Muse or Antigravity session writes nothing into the clone, so a project's own
+    # .muse/hooks.json or .agents/plugins/lane is no obstacle and is not looked for.
   fi
   if [ "$ACTION" = launch ]; then
     PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" "$D/role_inputs.py" verify \

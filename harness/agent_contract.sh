@@ -70,20 +70,20 @@ case "$AGENT" in
     needs "$HELP" claude "$VERSION" --session-id --resume --settings --mcp-config --name
     CONTRACT="claude-native-terminal-v1" ;;
   muse)
-    # Muse Code's own interactive session, hosted on a terminal (native_session.py). Only
-    # what that session uses is required; its headless subcommand is not, because it is
-    # never used.
+    # Muse Code, hosted through its own session server (protocol_host.py). Only what that
+    # server start uses is required; its headless subcommand is not, because it is never
+    # used, and neither is its terminal UI's option set.
     VERSION=$(muse --version 2>/dev/null | head -1) || fail "muse CLI is not runnable ($(at muse))"
-    HELP=$(muse --help 2>/dev/null) || HELP=""
-    needs "$HELP" muse "$VERSION" --workspace --config --model --reasoning-effort resume
-    CONTRACT="muse-native-terminal-v1" ;;
+    HELP=$(muse serve --help 2>/dev/null) || HELP=""
+    needs "$HELP" "muse serve" "$VERSION" --provider --model --config
+    CONTRACT="muse-session-server-v1" ;;
   agy)
-    # Antigravity's own interactive session, hosted on a terminal (native_session.py). Only
-    # what that session uses is required; its print mode is not, because it is never used.
+    # Antigravity, hosted through its own session server (protocol_host.py). Only what that
+    # server start uses is required; its print mode is not, because it is never used.
     VERSION=$(agy --version 2>/dev/null | head -1) || fail "agy CLI is not runnable ($(at agy))"
-    HELP=$(agy --help 2>&1) || HELP=""
-    needs "$HELP" agy "$VERSION" --prompt-interactive --conversation --model --effort
-    CONTRACT="agy-native-terminal-v1" ;;
+    HELP=$(agy acp --help 2>&1) || HELP=""
+    needs "$HELP" "agy acp" "$VERSION" --stdio
+    CONTRACT="agy-session-server-v1" ;;
   prime-agent)
     # A registry harness (harness/agents.py): the registry builds its headless turn.
     if [ -z "$EXECUTABLE" ]; then
