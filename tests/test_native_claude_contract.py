@@ -129,6 +129,36 @@ else:
     # A direct claude invocation is a different launcher and must be observable.
     (bin_dir / 'claude').write_text(recorder)
     (bin_dir / 'claude').chmod(0o755)
+    # The recorder never invokes Kindex. Supply only the executable-discovery
+    # dependency so this launch-boundary test needs no real MCP installation.
+    kindex = bin_dir / 'kindex-lite'
+    kindex.write_text(f'#!{sys.executable}\n' + """
+import json, sys, os
+for line in sys.stdin:
+    request = json.loads(line)
+    if 'id' not in request:
+        continue
+    method = request.get('method')
+    if method == 'initialize':
+        result = {'protocolVersion': '2024-11-05', 'capabilities': {'tools': {}},
+                  'serverInfo': {'name': 'boundary-fixture', 'version': '0.48.1'}}
+    elif method == 'tools/list':
+        result = {'tools': [{'name': name, 'inputSchema': {'type': 'object'}}
+                            for name in ['kinbase_sync', 'kinbase_explain',
+                                         'search', 'add', 'scope_info']]}
+    elif method == 'tools/call' and request.get('params', {}).get('name') == 'scope_info':
+        result = {'structuredContent': {'ok': True, 'kinbase_submissions_allowed': False,
+                                       'repo': os.getcwd(),
+                                       'data_dir': os.path.join(os.getcwd(), '.kin/local')}}
+    else:
+        raise SystemExit('Boundary fixture unsupported request: ' + json.dumps(request))
+    print(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': result}), flush=True)
+""")
+    kindex.chmod(0o755)
+    kin = bin_dir / 'kin'
+    kin.write_text('#!/bin/sh\ncase \"$1\" in --version) echo \"kin 0.48.1\";; esac\nexit 0\n')
+    kin.chmod(0o755)
+    env['FACTORY_KINDEX_LITE_BIN'] = str(kindex)
     env['PATH'] = str(bin_dir) + os.pathsep + env['PATH']
     runs = tmp_path / 'runs'
     base = [sys.executable, str(FACTORY / 'harness' / 'run_record.py')]
@@ -149,7 +179,7 @@ else:
     # Stop only test-owned process IDs if they remain; no machine-wide tmux kill.
     if log.exists():
         for pid in {item['pid'] for item in read_events(log) if 'pid' in item}:
-            command = subprocess.run(['ps', '-p', str(pid), '-o', 'command='],
+            command = subprocess.run(['ps', '-ww', '-p', str(pid), '-o', 'command='],
                                      capture_output=True, text=True).stdout
             if not any(str(bin_dir / name) in command
                        for name in ('cl', 'native-recorder')):
@@ -201,7 +231,8 @@ def test_coordinator_uses_selected_interactive_native_launcher(native_case, laun
         assert not event['api_key_present'], event
         assert event['home'] == str(native_case['home'])
         assert event['profile'] == str(native_case['profile'])
-        forbidden = {'-p', '--print', '--strict-mcp-config', '--setting-sources'}
+        forbidden = {'-p', '--print', '--strict-mcp-config', '--setting-sources',
+                     '--permission-mode', '--dangerously-skip-permissions'}
         assert not (forbidden & set(event['argv'])), event
 
 
@@ -250,7 +281,7 @@ def test_native_conversation_and_restart_keep_identity(native_case, tmp_path):
     assert len(prior_ids) == 1
     message_id = prior_ids.pop()
     # Terminate only the verified fixture process, then use Factory's public restart.
-    command = subprocess.run(['ps', '-p', str(pid), '-o', 'command='],
+    command = subprocess.run(['ps', '-ww', '-p', str(pid), '-o', 'command='],
                              capture_output=True, text=True).stdout
     assert str(native_case['bin_dir'] / 'cl') in command
     os.kill(pid, 15)
@@ -364,7 +395,8 @@ def test_author_launch_respects_native_launcher(native_case, tmp_path):
         assert not event['api_key_present']
         assert event['home'] == str(native_case['home'])
         assert event['profile'] == str(native_case['profile'])
-        forbidden = {'-p', '--print', '--strict-mcp-config', '--setting-sources'}
+        forbidden = {'-p', '--print', '--strict-mcp-config', '--setting-sources',
+                     '--permission-mode', '--dangerously-skip-permissions'}
         assert not forbidden & set(event['argv'])
     # A preflight must examine the same selected launcher/account as execution.
     probes = [e for e in read_events(native_case['log'])[before:] if 'argv' in e
@@ -419,3 +451,60 @@ def test_corrupt_saved_state_refuses_restart_without_retyping(native_case, corru
     assert checked.returncode != 0, checked.stdout
     assert result.returncode != 0 or checked.returncode != 0
     assert len([e for e in read_events(native_case['log']) if 'argv' in e]) == launches_before
+
+
+def test_user_launcher_permission_choice_is_preserved(native_case):
+    executable = native_case['bin_dir'] / 'cl'
+    recorder = native_case['bin_dir'] / 'native-recorder'
+    executable.rename(recorder)
+    (native_case['home'] / '.bash_profile').write_text(
+        'cl() { exec ' + shlex.quote(str(recorder))
+        + ' --dangerously-skip-permissions "$@"; }\n')
+    native_case['env']['SHELL'] = '/bin/bash'
+    for event in launch(native_case):
+        assert event['launcher'] == 'native-recorder'
+        assert event['argv'].count('--dangerously-skip-permissions') == 1
+        assert '--permission-mode' not in event['argv']
+        assert not event['api_key_present']
+
+
+def test_explicit_sandbox_off_selects_native_permission_flag(native_case):
+    native_case['env']['FACTORY_LANE_SANDBOX'] = 'off'
+    for event in launch(native_case):
+        assert event['argv'].count('--dangerously-skip-permissions') == 1
+        assert '--permission-mode' not in event['argv']
+
+
+def test_explicit_api_key_env_file_refuses_native_session(native_case, tmp_path):
+    launch(native_case)
+    running = wait_for(lambda: (s if (s := status(native_case)).get('stop_reports') else None))
+    run = json.loads(execute(native_case['base'] + ['status'] + native_case['common'],
+                             native_case['env']).stdout)
+    execute(['tmux', '-L', run['tmux_socket'], 'kill-server'], native_case['env'])
+    for identity in ('worker', 'wrapper'):
+        pid = running[identity]['pid']
+        wait_for(lambda pid=pid: subprocess.run(['ps', '-p', str(pid), '-o', 'pid='],
+                                               capture_output=True).returncode != 0)
+    prior_launches = len([e for e in read_events(native_case['log']) if 'argv' in e])
+    env_file = tmp_path / 'explicit.env'
+    env_file.write_text('ANTHROPIC_API_KEY=synthetic-explicit-forbidden-key\n')
+    env_file.chmod(0o600)
+    prompt = tmp_path / 'explicit-prompt.txt'
+    prompt.write_text('Synthetic harmless prompt')
+    env = dict(native_case['env'])
+    env.pop('ANTHROPIC_API_KEY', None)
+    result = execute([sys.executable, str(FACTORY / 'harness' / 'lane_agent.py'), 'run',
+                      '--slot', 'validator', '--log', str(tmp_path / 'lane.log'),
+                      '--exits', str(tmp_path / 'exits.jsonl'), '--env-file', str(env_file),
+                      '--session-agent', 'claude', '--session-file',
+                      str(native_case['runs'] / 'native-acceptance' / 'validator-session-id'),
+                      '--prompt-arg', str(prompt),
+                      '--plan-only', '--persistent', '--run-root',
+                      str(native_case['runs'] / 'native-acceptance'), '--',
+                      str(native_case['bin_dir'] / 'cl'), '--resume', running['session_id']], env)
+    assert result.returncode != 0, result.stdout + result.stderr
+    log = tmp_path / 'lane.log'
+    diagnostic = result.stderr + (log.read_text() if log.exists() else '')
+    assert 'ANTHROPIC_API_KEY' in diagnostic, diagnostic
+    assert len([e for e in read_events(native_case['log']) if 'argv' in e]) == prior_launches
+    assert 'synthetic-explicit-forbidden-key' not in result.stdout + result.stderr
