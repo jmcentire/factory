@@ -580,9 +580,12 @@ class Terminal:
     def drain(self, output: Callable[[bytes], None] | None = None,
               read_s: float = 1.0, flush_s: float = 1.0) -> None:
         """Read what the program left on its terminal as it ended, then give the relay time
-        to deliver it. Both steps are bounded, in time and in bytes: a process the program
+        to deliver it. Both loops are bounded, in time and in bytes: a process the program
         left behind may hold the terminal open and write to it for ever, and a reader may
-        never read. Ending costs at most ``read_s + flush_s`` whatever either of them does.
+        never read. ``read_s`` and ``flush_s`` are the budgets these loops schedule
+        themselves by, not a wall-clock promise: one write to an output that is shared or
+        stalls (see ``_flush_relay``), or the ``output`` callback's own work, such as
+        writing the lane log, adds whatever it takes on top.
         """
 
         deadline = time.monotonic() + read_s
