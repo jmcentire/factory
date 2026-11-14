@@ -396,6 +396,12 @@ while True:
     elif m == "session/set_config_option":
         assert agent == "agy" and p["sessionId"] == sid and isinstance(p["configId"], str)
         assert "value" in p
+        if (folder / "config-revert").exists():
+            for opt in identity.get("configOptions", []):
+                if opt["id"] == p["configId"]:
+                    opt["currentValue"] = p["value"]
+                if p["configId"] == "thought_level" and opt["id"] == "model":
+                    opt["currentValue"] = "old-model"
         answer(r, {"configOptions": identity.get("configOptions", [])})
     else:
         raise AssertionError("unsupported synthetic protocol request: " + json.dumps(r))
@@ -857,3 +863,51 @@ def test_muse_damaged_retained_command_ledger_never_allocates_fresh_command(host
         if ledger.is_dir():
             ledger.rmdir()
         ledger.write_bytes(original)
+
+
+def test_acp_later_effort_selection_cannot_revert_requested_model(hosted):
+    lane = hosted
+    if lane.agent != "agy":
+        pytest.skip("ACP configuration transaction")
+    (lane.folder / "config-mismatch").touch()
+    (lane.folder / "config-revert").touch()
+    lane.command.extend(["--model", "wanted-model", "--effort", "high"])
+    p = lane.start()
+    assert p.wait(timeout=10) != 0
+    requests = [r["request"] for r in lane.rows() if "request" in r]
+    configs = [
+        r["params"]["configId"] for r in requests if r.get("method") == "session/set_config_option"
+    ]
+    assert configs == ["model", "thought_level"]
+    assert not any("prompt" in r for r in lane.rows())
+
+
+def test_direct_protocol_host_strips_api_routing_without_caller_unset(hosted):
+    lane = hosted
+    (lane.folder / "exit-after-completion").touch()
+    executable = lane.folder / lane.agent
+    command = [
+        sys.executable,
+        str(H / "protocol_host.py"),
+        "run",
+        "--protocol",
+        "acp" if lane.agent == "agy" else "msp",
+        "--journal",
+        str(lane.root / "direct-journal.jsonl"),
+        "--record",
+        str(lane.root / "direct-host.json"),
+        "--workspace",
+        str(lane.project),
+        "--message",
+        "synthetic direct entry",
+        "--",
+        str(executable),
+        "acp" if lane.agent == "agy" else "serve",
+    ]
+    # This deliberately omits --unset: each public entry must enforce subscription routing.
+    result = subprocess.run(
+        command, cwd=lane.project, env=lane.env, capture_output=True, text=True, timeout=10
+    )
+    spawns = [r for r in lane.rows() if r.get("spawn")]
+    assert spawns, result.stdout + result.stderr
+    assert all(not r["keys"] for r in spawns)
