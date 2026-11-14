@@ -19,7 +19,7 @@ pytest_plugins = ["tests.test_native_claude_contract"]
 
 SID = "12345678-1234-4234-8234-123456789abc"
 FAKE = r"""
-import json, os, pathlib, sys, time, threading
+import json, os, pathlib, sys, time, threading, queue
 
 folder = pathlib.Path(__file__).parent
 agent = pathlib.Path(sys.argv[0]).name
@@ -53,7 +53,8 @@ sid = "12345678-1234-4234-8234-123456789abc"
 
 
 def emit(r):
-    print(json.dumps(dict(jsonrpc="2.0", **r)), flush=True)
+    with output_lock:
+        print(json.dumps(dict(jsonrpc="2.0", **r)), flush=True)
 
 
 def answer(r, result):
@@ -66,17 +67,57 @@ def notify(method, params):
 
 prompt_count = 0
 active = False
+incoming = queue.Queue()
+turns = queue.Queue()
+output_lock = threading.Lock()
 
-for line in sys.stdin:
-    r = json.loads(line)
+
+def read_wire():
+    for line in sys.stdin:
+        frame = json.loads(line)
+        log(wire_received=frame)
+        incoming.put(frame)
+    incoming.put(None)
+
+
+def run_turns():
+    global active
+    while True:
+        tid, session, hold = turns.get()
+        notify("turn/started", {"sessionId": session, "turnId": tid})
+        log(turn_started=tid)
+        if hold:
+            log(active=True)
+            while not (folder / "release-turn").exists():
+                time.sleep(0.02)
+        notify(
+            "item/updated",
+            {
+                "sessionId": session,
+                "turnId": tid,
+                "item": {"id": tid + "-text", "type": "agentMessage", "text": "__LANE_DONE__"},
+            },
+        )
+        notify("turn/completed", {"sessionId": session, "turnId": tid, "terminal": "completed"})
+        log(turn_completed=tid)
+        turns.task_done()
+        active = turns.unfinished_tasks > 0
+
+
+threading.Thread(target=read_wire, daemon=True).start()
+threading.Thread(target=run_turns, daemon=True).start()
+while True:
+    r = incoming.get()
+    if r is None:
+        break
     m = r.get("method")
     p = r.get("params", {})
     log(request=r)
     if "id" not in r:
-        assert m in {'initialized','notifications/initialized','session/cancel'}, m
+        assert m in {"initialized", "notifications/initialized", "session/cancel"}, m
         continue
     if m is None:
-        assert r['id']=='permission-1' and ('result' in r or 'error' in r),r
+        assert r["id"] == "permission-1" and ("result" in r or "error" in r), r
         continue
     if m == "initialize":
         answer(
@@ -90,12 +131,13 @@ for line in sys.stdin:
             ),
         )
     elif m in ["session/new", "session/start"]:
-        assert m==('session/new' if agent=='agy' else 'session/start')
-        if agent=='agy':
-            assert isinstance(p['cwd'],str) and isinstance(p['mcpServers'],list)
+        assert m == ("session/new" if agent == "agy" else "session/start")
+        if agent == "agy":
+            assert isinstance(p["cwd"], str) and isinstance(p["mcpServers"], list)
         else:
             import uuid
-            assert uuid.UUID(p['commandId']).version==7
+
+            assert uuid.UUID(p["commandId"]).version == 7
         sid = p.get("sessionId", sid)
         answer(
             r,
@@ -143,14 +185,15 @@ for line in sys.stdin:
             },
         )
     elif m in ["session/prompt", "turn/start"]:
-        assert m==('session/prompt' if agent=='agy' else 'turn/start')
-        assert p['sessionId']==sid
-        content=p['prompt' if agent=='agy' else 'input']
-        assert isinstance(content,list) and content
-        assert all(x.get('type')=='text' and isinstance(x.get('text'),str) for x in content)
-        if agent=='muse':
+        assert m == ("session/prompt" if agent == "agy" else "turn/start")
+        assert p["sessionId"] == sid
+        content = p["prompt" if agent == "agy" else "input"]
+        assert isinstance(content, list) and content
+        assert all(x.get("type") == "text" and isinstance(x.get("text"), str) for x in content)
+        if agent == "muse":
             import uuid
-            assert uuid.UUID(p['commandId']).version==7 and p['ifBusy']=='queue'
+
+            assert uuid.UUID(p["commandId"]).version == 7 and p["ifBusy"] == "queue"
         prompt_count += 1
         snapshots = {
             str(q.relative_to(folder.parent)): q.read_text() for q in folder.parent.rglob("*.json")
@@ -228,45 +271,23 @@ for line in sys.stdin:
                     "startedNewTurn": not active,
                 },
             )
-            notify("turn/started", {"sessionId": sid, "turnId": tid})
-            notify(
-                "item/updated",
-                {
-                    "sessionId": sid,
-                    "turnId": tid,
-                    "item": {"id": tid + "-text", "type": "agentMessage", "text": "__LANE_DONE__"},
-                },
-            )
-            if (folder / "hold-turn").exists() and prompt_count == 1:
-                active = True
-                log(active=True)
-
-                def finish(turn):
-                    global active
-                    while not (folder / "release-turn").exists():
-                        time.sleep(0.02)
-                    notify(
-                        "turn/completed",
-                        {"sessionId": sid, "turnId": turn, "terminal": "completed"},
-                    )
-                    active = False
-
-                threading.Thread(target=finish, args=(tid,), daemon=True).start()
-            else:
-                notify("turn/completed", {"sessionId": sid, "turnId": tid, "terminal": "completed"})
+            active = True
+            turns.put((tid, sid, (folder / "hold-turn").exists() and prompt_count == 1))
         if (folder / "exit-after-completion").exists():
+            if agent == "muse":
+                turns.join()
             sys.exit(0)
     elif m == "session/load":
         raise AssertionError("forbidden fallback")
-    elif m=='session/set_mode':
-        assert agent=='agy' and p['sessionId']==sid and isinstance(p['modeId'],str)
-        answer(r,{})
-    elif m=='session/set_config_option':
-        assert agent=='agy' and p['sessionId']==sid and isinstance(p['configId'],str)
-        assert 'value' in p
-        answer(r,{'configOptions':[]})
+    elif m == "session/set_mode":
+        assert agent == "agy" and p["sessionId"] == sid and isinstance(p["modeId"], str)
+        answer(r, {})
+    elif m == "session/set_config_option":
+        assert agent == "agy" and p["sessionId"] == sid and isinstance(p["configId"], str)
+        assert "value" in p
+        answer(r, {"configOptions": []})
     else:
-        raise AssertionError('unsupported synthetic protocol request: '+json.dumps(r))
+        raise AssertionError("unsupported synthetic protocol request: " + json.dumps(r))
 """
 
 
@@ -582,6 +603,10 @@ def test_active_turn_respects_native_queue_or_acp_busy_boundary(hosted):
     prompts = [r["prompt"] for r in lane.rows() if "prompt" in r]
     if lane.agent == "agy":
         assert len(prompts) == 1, "ACP must not send second prompt before first response"
+        wire_prompts = [
+            x for x in lane.rows() if x.get("wire_received", {}).get("method") == "session/prompt"
+        ]
+        assert len(wire_prompts) == 1, "second ACP write was buffered during unresolved first turn"
         assert result.get("state") != "observed"
     else:
         until(
@@ -591,6 +616,8 @@ def test_active_turn_respects_native_queue_or_acp_busy_boundary(hosted):
         )
         queued = [r["prompt"] for r in lane.rows() if "prompt" in r][-1]
         assert queued["ifBusy"] == "queue"
+        assert len([x for x in lane.rows() if "turn_started" in x]) == 1
+        assert not any("turn_completed" in x for x in lane.rows())
     (lane.folder / "release-turn").touch()
     until(lambda: lane.send(mid).get("state") == "observed", p, lane.root / "wrapper-0.log")
     assert len([r for r in lane.rows() if "prompt" in r]) == 2
@@ -620,7 +647,13 @@ def test_followup_uncertain_write_is_durable_and_not_replayed(hosted):
     )
     p.wait(timeout=10)
     follow = next(r for r in reversed(lane.rows()) if "prompt" in r)
-    assert mid in json.dumps(follow["durable_before_write"])
+    snapshot = json.loads(follow["durable_before_write"]["tmux-lanes/coder-persistent.json"])
+    handover = snapshot["deliveries"][mid]
+    assert handover["state"] in {"submitted", "unknown"}
+    assert snapshot["session_id"] == follow["prompt"]["sessionId"]
+    # A dialogue plan alone does not establish that this exact delivery was handed over.
+    if lane.agent == "muse":
+        assert handover["command_id"] == follow["prompt"]["commandId"]
     (lane.folder / "crash-before-ack").unlink()
     # Public delivery retry may refuse or report unknown; neither may resubmit.
     result = lane.send(mid)
