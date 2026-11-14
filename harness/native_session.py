@@ -453,6 +453,7 @@ class Terminal:
         # when the output is ready for it, and holds at most RELAY_LIMIT bytes meanwhile.
         self._relay = bytearray()
         self.relay_dropped = 0
+        self._drained = 0  # bytes read from the program's terminal so far
         self.master, slave = pty.openpty()
         self._resize(slave)
         try:
@@ -507,8 +508,15 @@ class Terminal:
             self.relay_dropped += over
 
     def _flush_relay(self) -> None:
-        """Write what the output will take now, and no more. A write of at most PIPE_BUF
-        bytes to a descriptor that select reports writable does not block."""
+        """Write what the output will take now, and no more.
+
+        The guarantee is exactly this wide: for a pipe that only this wrapper writes (a
+        lane's own output, a test's capture), a write of at most PIPE_BUF bytes after select
+        reports room does not block. A descriptor shared with another writer, or a terminal
+        whose driver stalls between the two calls, can still make one such write wait. The
+        descriptor is not switched to non-blocking to close that gap, because that flag
+        belongs to every holder of the descriptor and would outlive a wrapper that is killed.
+        """
 
         budget = 64 * 1024
         while self._relay and self.outbound >= 0 and budget > 0:
@@ -545,6 +553,7 @@ class Terminal:
             if data == b"":
                 self._open = False
             elif data:
+                self._drained += len(data)
                 self._queue_relay(data)
                 if output is not None:
                     output(data)
@@ -569,15 +578,25 @@ class Terminal:
             self._pending = self._pending[sent:]
 
     def drain(self, output: Callable[[bytes], None] | None = None,
-              flush_s: float = 1.0) -> None:
-        """Read what the program wrote before it closed its terminal, then give the relay a
-        bounded time to deliver it. A reader that is not reading costs at most ``flush_s``."""
+              read_s: float = 1.0, flush_s: float = 1.0) -> None:
+        """Read what the program left on its terminal as it ended, then give the relay time
+        to deliver it. Both steps are bounded, in time and in bytes: a process the program
+        left behind may hold the terminal open and write to it for ever, and a reader may
+        never read. Ending costs at most ``read_s + flush_s`` whatever either of them does.
+        """
 
-        while self._open:
-            ready = select.select([self.master], [], [], 0.2)[0]
-            if not ready:
+        deadline = time.monotonic() + read_s
+        budget = DRAIN_LIMIT
+        while self._open and budget > 0:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 break
+            ready = select.select([self.master], [], [], min(0.2, remaining))[0]
+            if not ready:
+                break  # quiet: everything it wrote before ending has been read
+            before = self._drained
             self.service(ready, [], output)
+            budget -= self._drained - before
         deadline = time.monotonic() + flush_s
         while self._relay and self.outbound >= 0:
             remaining = deadline - time.monotonic()
@@ -637,6 +656,8 @@ def typed_text(text: str, directory: pathlib.Path, slot: str) -> str:
 
 #: How much relayed output may wait for a slow reader before the oldest is dropped.
 RELAY_LIMIT = 1024 * 1024
+#: How much is read from the terminal of a program that has ended, at most.
+DRAIN_LIMIT = 4 * 1024 * 1024
 #: How much of a program's output before its session starts is remembered, from its
 #: beginning, so that if it ends without starting, what it said first can be kept. It is the
 #: program's raw terminal output and may hold whatever the program chose to show there (an
