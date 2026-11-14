@@ -231,6 +231,12 @@ log(invocation_guarded=guarded_invocation, invocation_args=args)
     resumed = message()
     if tamper.endswith("injection"):
         assert not marker.exists(), "untrusted Python startup code executed outside provider boundary"
+    if tamper == "cwd-injection" and resumed.returncode == 70:
+        # An unprotected changed startup directory may be refused safely.
+        assert len([r for r in rows() if r.get("spawn")]) == before
+        assert len([r for r in rows() if "prompt" in r]) == 2
+        assert "not restarted" in resumed.stderr or "Nothing was started" in resumed.stderr
+        return
     if tamper != "none" and not tamper.endswith("injection"):
         assert len([r for r in rows() if r.get("spawn")]) == before
         assert resumed.returncode == 70, resumed.stdout + resumed.stderr
