@@ -178,11 +178,16 @@ def test_exact_manual_receipt_releases_only_same_session_held_message(held_nativ
     message = lane.plan(text)
     held = lane.send(message)
     assert held["state"] == "queued" and held.get("held")
-    marked = text
-    # The operator enters the retained text; exact text and session must bind.
+    marked = Path(held["enter_file"]).read_text()
+    assert text in marked and marked != text
+    # Raw words are ambiguous; only this retained item's marked entry binds.
+    lane.reports({"event": "PreInvocation", "lastUserInput": text, "executionNum": 9})
+    eventually(lambda: lane.raw().get("foreign_inputs", 0) > initial.get("foreign_inputs", 0))
+    assert lane.send(message)["state"] == "queued"
+    before_wrong = lane.raw().get("foreign_inputs", 0)
     lane.reports({"event": "PreInvocation", "lastUserInput": "wrong " + marked,
                   "executionNum": 10})
-    eventually(lambda: lane.raw().get("foreign_inputs", 0) > initial.get("foreign_inputs", 0))
+    eventually(lambda: lane.raw().get("foreign_inputs", 0) > before_wrong)
     assert lane.send(message)["state"] == "queued"
     lane.reports({"event": "PreInvocation", "lastUserInput": marked,
                   "executionNum": 11, "target_session": "99999999-9999-4999-8999-999999999999"})
@@ -198,8 +203,39 @@ def test_exact_manual_receipt_releases_only_same_session_held_message(held_nativ
     lane.reports({"event": "PreInvocation", "lastUserInput": marked, "executionNum": 13},
                  {"event": "Stop", "fullyIdle": True, "continuationActive": False,
                   "terminationReason": "NO_TOOL_CALL", "executionNum": 13})
-    eventually(lambda: lane.raw()["stop_reports"] > stops)
+    eventually(lambda stops=stops: lane.raw()["stop_reports"] > stops)
     assert lane.send(second)["state"] == "queued"
     assert lane.raw()["session_id"] == initial["session_id"]
     assert lane.raw()["worker"] == initial["worker"]
+    assert not (lane.folder / "typed.bin").exists()
+
+
+def test_old_receipt_cannot_settle_new_identical_body_message(held_native):
+    lane = held_native
+    text = "identical body in distinct retained messages"
+    first = lane.plan(text)
+    first_held = lane.send(first)
+    assert first_held["state"] == "queued"
+    entry_a = Path(first_held["enter_file"]).read_text()
+    lane.reports({"event": "PreInvocation", "lastUserInput": entry_a, "executionNum": 20})
+    eventually(lambda: lane.send(first)["state"] == "observed")
+    second = lane.plan(text, "progress-review")
+    assert second != first
+    second_held = lane.send(second)
+    assert second_held["state"] == "queued"
+    entry_b = Path(second_held["enter_file"]).read_text()
+    assert entry_b != entry_a and text in entry_b
+    # Duplicate native event and a later invocation carrying old marked text
+    # cannot settle the new retained item, even though the underlying words match.
+    for execution in (20, 21):
+        stops = lane.raw()["stop_reports"]
+        lane.reports({"event": "PreInvocation", "lastUserInput": entry_a,
+                      "executionNum": execution},
+                     {"event": "Stop", "fullyIdle": True, "continuationActive": False,
+                      "terminationReason": "NO_TOOL_CALL", "executionNum": execution})
+        eventually(lambda stops=stops: lane.raw()["stop_reports"] > stops)
+        assert lane.send(second)["state"] == "queued"
+    lane.reports({"event": "PreInvocation", "lastUserInput": entry_b, "executionNum": 22})
+    eventually(lambda: lane.send(second)["state"] == "observed")
+    assert lane.send(first)["state"] == "observed"
     assert not (lane.folder / "typed.bin").exists()
