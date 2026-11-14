@@ -528,7 +528,7 @@ and they are not the same thing:
   the tester: normal permissions (no `--dangerously-skip-permissions`), no print mode, no
   API key, a trusted throwaway workspace, a probe plugin at `.agents/plugins/lane/`. Every
   `PreInvocation` list ended in a handler returning `terminationBehavior: "terminate"`.
-  Seven sessions gave seven stop reports with `terminationReason: TERMINAL_CUSTOM_HOOK` and
+  Seven invocations gave seven stop reports with `terminationReason: TERMINAL_CUSTOM_HOOK` and
   `executionNum: 0`, and no `PostInvocation` report. By Antigravity's own hook reports,
   then, each turn was ended before the model was invoked. That is what the reports show;
   it is not an independent account of usage or billing. None of this is evidence about a
