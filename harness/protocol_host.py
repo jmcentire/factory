@@ -59,7 +59,10 @@ if __name__ == "__main__":
     # absolute import-path entries are kept: a relative one (the empty entry, or the
     # placeholder an editable install leaves) is read against the working directory, where
     # a lane can write. (Imported, the importing program's path is its own business.)
-    sys.path[:] = [entry for entry in sys.path if os.path.isabs(entry)]
+    # It is started isolated (``-I -S``: no site start-up, its own directory not implied),
+    # so its own directory is named here.
+    sys.path[:] = [os.path.dirname(os.path.abspath(__file__)),
+                   *(entry for entry in sys.path if os.path.isabs(entry))]
 
 import native_session  # noqa: E402
 import validator_boundary  # noqa: E402
@@ -185,6 +188,19 @@ def trust_roots(launch_dir: pathlib.Path | None = None) -> list[pathlib.Path]:
     return sorted(roots)
 
 
+#: Python flags for a trusted program started in a lane's clone: isolated mode and no site.
+ISOLATED = ("-I", "-S")
+
+
+def _isolated(command: list[str]) -> list[str]:
+    """The boundary program's own command, started isolated. It is trusted code that runs
+    outside the boundary, in the lane's clone, until it becomes the confined command."""
+
+    if command[:1] == [sys.executable] and command[1:2] != ["-I"]:
+        return [command[0], *ISOLATED, *command[1:]]
+    return command
+
+
 def _within(path: pathlib.Path, roots: Sequence[pathlib.Path]) -> bool:
     return any(path == root or path.is_relative_to(root) for root in roots)
 
@@ -306,7 +322,7 @@ def confined_argv(argv: Sequence[str], record: object, role: str,
 
     confinement(record, role, workspace, control)
     try:
-        return validator_boundary.model_command(list(argv), record, role, workspace)
+        return _isolated(validator_boundary.model_command(list(argv), record, role, workspace))
     except (validator_boundary.BoundaryError, OSError, ValueError, TypeError,
             KeyError) as error:
         raise BoundaryUnusable(f"the kernel boundary cannot be used: {error}") from None
@@ -502,7 +518,11 @@ def plan(arguments: Sequence[str], *, dialect: str, executable: str,
                 "body_sha256": native_session.text_digest(prompt),
                 **({"message_id": message_id} if message_id else {})}
     protocol = PROTOCOL[dialect]
-    command = [python, str(pathlib.Path(__file__).resolve()), "run",
+    # The host is a trusted program started in the lane's clone. It is started isolated:
+    # no site start-up (so no ``.pth`` entry and no ``sitecustomize`` looked for), no
+    # variable honoured, nothing imported by way of the clone. It needs the standard
+    # library and this directory, nothing else.
+    command = [python, *ISOLATED, str(pathlib.Path(__file__).resolve()), "run",
                "--protocol", protocol, "--journal", str(journal),
                "--record", str(record_path(directory, slot)),
                "--workspace", str(pathlib.Path(settings["workspace"] or workspace).resolve())]
@@ -534,8 +554,8 @@ def plan(arguments: Sequence[str], *, dialect: str, executable: str,
 def queue(python: str, record: pathlib.Path, session: str, text: str) -> list[str]:
     """The command that gives a later message to the running host; nothing is typed."""
 
-    return [python, str(pathlib.Path(__file__).resolve()), "send", "--record", str(record),
-            "--session", session, "--message", text]
+    return [python, *ISOLATED, str(pathlib.Path(__file__).resolve()), "send",
+            "--record", str(record), "--session", session, "--message", text]
 
 
 def _store(path: pathlib.Path, value: Mapping[str, Any]) -> None:
@@ -621,7 +641,7 @@ def confined_command(provider: Sequence[str], checked: dict, role: str,
     for kind in ("read", "write", "connect"):
         inner += [str(len(spec[kind])), *spec[kind]]
     inner += ["--", *provider]
-    return validator_boundary.model_command(inner, checked, role, workspace), spec
+    return _isolated(validator_boundary.model_command(inner, checked, role, workspace)), spec
 
 
 class Host:

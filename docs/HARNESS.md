@@ -518,9 +518,13 @@ stay in the run's own control tree and never go into the clone.
   with the harness's own directories, and set `PYTHONSAFEPATH`, so the working directory
   is on no helper's import path; `harness/trusted_startup` then runs first in every
   helper and drops any other relative entry (an editable install leaves one, which Python
-  reads against the working directory). The lane wrapper and the host, which run in the
-  lane's clone, do the same for themselves. A module planted in the clone is not imported
-  by any of them.
+  reads against the working directory). The same isolation is carried into every trusted
+  Python program started after that, and into none of the provider's: the rebuilt
+  environments the lane wrapper and its watcher start from name the same two variables;
+  the wrapper removes them from what it hands the provider's program; the host, its
+  message command and the boundary program, which start in the lane's clone, are started
+  with Python's isolated, no-site flags instead, so the provider's environment is not
+  touched at all. A module planted in the clone is not imported by any of them.
 - **The socket is not random.** Under a boundary it is `<slot>-hosted.sock` in the lane's
   control directory, which the contract already keeps from the provider.
 - **The child attests before the provider exists.** The process the boundary starts first
@@ -562,7 +566,11 @@ stay in the run's own control tree and never go into the clone.
   gone, with a host record of another schema, of another session, or with its confinement
   removed; a `sitecustomize.py` on a `PYTHONPATH` given to the restart did not run; a
   restart run from the lane's clone, with a `json.py` and a directory named like the
-  editable install's placeholder planted there, ran neither and succeeded; the direct
+  editable install's placeholder planted there, ran neither and succeeded; a trusted
+  script importing a module the interpreter lacks, started from that clone, loaded the
+  planted one with a bare rebuilt environment and not with the environment the launchers
+  now build nor with the isolated flags; no run of the provider's program saw either
+  variable; the direct
   entries refused a contract that validates but leaves out the code or the named control
   directory, with no run of the provider's program. Antigravity's real server: `initialize`
   answered under the profile.

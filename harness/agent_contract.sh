@@ -14,6 +14,12 @@ EXECUTABLE="${2:-}"
 PERSISTENT="${3:-0}"
 D=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
+# The launcher starts its own Python helpers isolated (PYTHONSAFEPATH, PYTHONPATH). Those
+# two variables are for the Factory's helpers and no one else: the agents' own programs
+# run below get neither, and the one helper this script runs is given them back.
+unset PYTHONSAFEPATH PYTHONPATH
+TRUSTED_PYTHON=(env PYTHONSAFEPATH=1 PYTHONPATH="$D/trusted_startup:$D" "${FACTORY_PYTHON:-python3}")
+
 fail() { echo "$1" >&2; exit 70; }
 at() { command -v "$1" 2>/dev/null || printf '%s (not on PATH)' "$1"; }
 needs() {  # needs <help text> <cli name> <version> <flag>...
@@ -84,7 +90,7 @@ case "$AGENT" in
     # of Antigravity go inside it like every other: its start-up is the provider's code.
     RUN_AGY=(agy)
     if [ -n "${FACTORY_CONTRACT_BOUNDARY_RECORD:-}" ] && [ "$FACTORY_CONTRACT_BOUNDARY_RECORD" != null ]; then
-      RUN_AGY=("${FACTORY_PYTHON:-python3}" "$D/protocol_host.py" confined-run
+      RUN_AGY=("${TRUSTED_PYTHON[@]}" "$D/protocol_host.py" confined-run
                --boundary-record "$FACTORY_CONTRACT_BOUNDARY_RECORD"
                --boundary-role "${FACTORY_CONTRACT_BOUNDARY_ROLE:-}"
                --workspace "${FACTORY_CONTRACT_WORKSPACE:-$PWD}")
@@ -105,7 +111,7 @@ case "$AGENT" in
       # The Factory's own interpreter (exits 69 with the fix when there is none), never PATH's.
       # shellcheck source=harness/factory_python.sh
       source "$D/factory_python.sh"
-      EXECUTABLE=$("$FACTORY_PYTHON" "$D/lane_agent.py" describe --agent "$AGENT" \
+      EXECUTABLE=$("${TRUSTED_PYTHON[@]}" "$D/lane_agent.py" describe --agent "$AGENT" \
         | { IFS= read -r -d '' first; printf '%s' "$first"; }) || EXECUTABLE=""
       [ -n "$EXECUTABLE" ] || fail "$AGENT: lane_agent.py describe named no executable"
     fi

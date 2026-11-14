@@ -747,6 +747,7 @@ if [ -f "$TURN_RECORD" ] && [ ! -L "$TURN_RECORD" ] && [ "$AGENT" = codex-intera
   # accept arbitrary extra arguments as a way around resume's fixed permission profile.
   GUARD_RESUME=$(env -i HOME="$SAFE_HOME" USER="$SAFE_USER" PATH="$SAFE_PATH" \
     TMPDIR="$SAFE_TMPDIR" CODEX_HOME="$SAFE_CODEX_HOME" \
+    PYTHONSAFEPATH=1 PYTHONPATH="$D/trusted_startup:$D" \
     "$FACTORY_PYTHON" "$D/signet_hooks.py" --resume-record "$TURN_RECORD" \
     --check-codex-cwd "$REPOSITORY") || {
     echo "lane-message: retained Signet configuration or exact Codex hook trust unavailable" >&2
@@ -807,6 +808,11 @@ elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
   printf -v ENV_PREFIX 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q FACTORY_RUNS_DIR=%q HARNESS_RUN_ROOT=%q' \
     "$SAFE_HOME" "$SAFE_USER" "$LANE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
     "$FACTORY_RUNS_ROOT" "$ROOT"
+  # The restarted wrapper and its watcher are trusted Python programs started from this
+  # rebuilt environment, the wrapper in the lane's clone: they start isolated, as every
+  # helper of this script does, and the wrapper keeps both variables from the provider.
+  printf -v STARTUP_ENV ' PYTHONSAFEPATH=1 PYTHONPATH=%q' "$D/trusted_startup:$D"
+  ENV_PREFIX+="$STARTUP_ENV"
   ENV_PREFIX+="${LANE_ENV_ASSIGN:+ $LANE_ENV_ASSIGN}"
   if [ "$HOSTED_RESUME" = 1 ]; then
     # As at launch: the run's tmux server, and the command the operator starts Claude Code

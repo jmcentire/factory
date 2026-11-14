@@ -690,8 +690,12 @@ PY
   SAFE_SHELL="${SHELL:-/bin/bash}"
   SAFE_LANG="${LANG:-en_US.UTF-8}"
   SAFE_CODEX_HOME="${CODEX_HOME:-$SAFE_HOME/.codex}"
+  # A rebuilt environment starts a trusted Python helper too, so it carries the same
+  # start-up isolation as the helpers above (see the top of this script). The helper keeps
+  # it to itself: lane_agent.py passes neither variable on to a provider's program.
   LANE_ENV=(env -i HOME="$SAFE_HOME" USER="$SAFE_USER" PATH="$SAFE_PATH" TMPDIR="$SAFE_TMPDIR"
     TERM="$SAFE_TERM" SHELL="$SAFE_SHELL" LANG="$SAFE_LANG" CODEX_HOME="$SAFE_CODEX_HOME"
+    PYTHONSAFEPATH=1 PYTHONPATH="$D/trusted_startup:$D"
     ${CLAUDE_CONFIG_DIR:+CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR"})
 
   # A codex lane runs with the operator's own Codex configuration: nothing of it is ignored
@@ -1212,6 +1216,13 @@ PY
   printf -v ENV_PREFIX 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q FACTORY_RUNS_DIR=%q HARNESS_RUN_ROOT=%q' \
     "$SAFE_HOME" "$SAFE_USER" "$LANE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
     "$FACTORY_RUNS_ROOT" "$ROOT"
+  # The lane wrapper and the watcher are trusted Python programs started from this rebuilt
+  # environment, the wrapper in the lane's clone. They start isolated like every helper of
+  # this script: the working directory is on neither's import path and
+  # harness/trusted_startup runs first in each. The wrapper removes both variables from
+  # what it hands the provider's program, so the lane's own environment is unchanged.
+  printf -v STARTUP_ENV ' PYTHONSAFEPATH=1 PYTHONPATH=%q' "$D/trusted_startup:$D"
+  ENV_PREFIX+="$STARTUP_ENV"
   # Agents without a shell policy (cursor-agent) read the cache variables from their own env.
   ENV_PREFIX+="${LANE_ENV_ASSIGN:+ $LANE_ENV_ASSIGN}"
   printf -v SOCKET_ENV " FACTORY_TMUX_SOCKET=%q" "$FACTORY_TMUX_SOCKET"

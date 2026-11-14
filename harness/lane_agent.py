@@ -58,6 +58,23 @@ from typing import Any
 _HARNESS_ROOT = str(pathlib.Path(__file__).resolve().parent)
 if _HARNESS_ROOT not in sys.path:
     sys.path.insert(0, _HARNESS_ROOT)
+#: How the launchers start this program and every other trusted Python helper: with the
+#: working directory off the import path and ``harness/trusted_startup`` run first. The two
+#: variables are for the Factory's own programs. A provider's program is never given them.
+TRUSTED_STARTUP = {"PYTHONSAFEPATH": "1",
+                   "PYTHONPATH": f"{_HARNESS_ROOT}/trusted_startup:{_HARNESS_ROOT}"}
+
+
+def provider_environment(environ: Mapping[str, str]) -> dict[str, str]:
+    """``environ`` without the start-up isolation this program was itself started with.
+
+    Only the launcher's own values are removed: a ``PYTHONPATH`` the lane's own environment
+    file sets for the provider is some other value and is left alone."""
+
+    return {name: value for name, value in environ.items()
+            if TRUSTED_STARTUP.get(name) != value}
+
+
 if __name__ == "__main__":
     # As a program the wrapper is trusted and runs outside any lane's boundary, in the lane's
     # clone. Only absolute import-path entries are kept: a relative one (the empty entry, or
@@ -421,7 +438,11 @@ def _status(argv: Sequence[str], *, timeout: float, runner: Runner, remediation:
     # ``env``: the environment the check is about. Without it the runner uses this process's
     # own, which is the lane's when a launcher runs this under the lane's environment.
     # ``cwd``: where the check runs, when it must be somewhere in particular.
-    extra: dict[str, Any] = {} if env is None else {"env": dict(env)}
+    extra: dict[str, Any] = {} if env is None else {"env": provider_environment(env)}
+    if env is None and any(os.environ.get(name) == value
+                           for name, value in TRUSTED_STARTUP.items()):
+        # The provider's own command is not given this helper's start-up isolation.
+        extra["env"] = provider_environment(os.environ)
     if cwd is not None:
         extra["cwd"] = str(cwd)
     try:
@@ -903,7 +924,8 @@ def run_lane(
                          "session, or a hosted Muse or Antigravity session, only")
     if prompt is not None and not persistent:
         argv.append(argv_prompt(prompt, pathlib.Path.cwd()))
-    child_env = dict(os.environ)
+    # What the provider's program is given. Never this wrapper's own start-up isolation.
+    child_env = provider_environment(os.environ)
     if session_agent == "claude":
         # The operator's launcher on their subscription ("unset ANTHROPIC_API_KEY && cl"): no
         # API-billing variable the launching shell happened to export reaches Claude Code,
@@ -1057,8 +1079,14 @@ def run_lane(
         # here would put its records and its socket within the provider's reach.
         pass
     else:
-        argv = validator_boundary.model_command(
+        bounded = validator_boundary.model_command(
             argv, boundary_record, boundary_role, pathlib.Path.cwd())
+        if bounded is not argv and bounded[:1] == [sys.executable]:
+            # The boundary program is trusted code that runs here, outside the boundary and
+            # in the lane's clone, until it becomes the confined command. It is started
+            # isolated: no site start-up, nothing imported by way of the clone.
+            bounded[1:1] = ["-I", "-S"]
+        argv = bounded
     stopped = False
     refused_billing = ""
     session_seen = False
