@@ -736,10 +736,11 @@ def run_terminal(
 ) -> int:
     """Own one native terminal session until its actual exit.
 
-    ``diagnostic`` receives what the program writes to its terminal until its session
-    reports starting: a program that refuses to start, or stops to ask something, says so
-    there and nowhere else, and that text belongs in the lane's log. After the start
-    report its terminal is the session's own screen and is not logged.
+    ``diagnostic`` receives, once, the first of what the program wrote to its terminal
+    (bounded) if it ends without its session ever reporting a start: a program that refuses to start
+    says why there and nowhere else. A session that does start has nothing of its screen
+    kept. The text is the program's raw output and is not assumed free of anything the
+    program chose to show (an account name, a sign-in prompt).
 
     ``terminal`` is the ``native_session.Terminal`` holding the program. ``note`` receives
     log lines (never the pane). Typed input waits for the session's own start report; a
@@ -860,6 +861,14 @@ def run_terminal(
 
     def save():
         store(path, state)
+
+    startup = bytearray()  # the first of the program's output before any start report
+
+    def remember(raw):
+        # The beginning is what explains a refusal; a flood after it is not kept.
+        room = native_session.STARTUP_KEEP - len(startup)
+        if room > 0:
+            startup.extend(raw[:room])
 
     def outstanding():
         return [key for key, record in deliveries.items() if record.get("state") in OUTSTANDING]
@@ -1093,7 +1102,7 @@ def run_terminal(
                     readable, writable, _ = select.select(
                         [server.fileno(), *terminal.readers()], terminal.writers(), [], 0.2)
                     terminal.service(
-                        readable, writable, None if state["session_started"] else diagnostic)
+                        readable, writable, None if state["session_started"] else remember)
                     before = json.dumps(state, sort_keys=True, default=str)
                     for row in events.read():
                         observe(row)
@@ -1122,11 +1131,16 @@ def run_terminal(
                                 except OSError:
                                     pass
                 # What it wrote last, as it ended: its reason, if it never started.
-                terminal.drain(None if state["session_started"] else diagnostic)
+                terminal.drain(None if state["session_started"] else remember)
                 for row in events.read():
                     observe(row)
                 return child.wait()
             finally:
+                if not state["session_started"] and diagnostic is not None and startup:
+                    try:
+                        diagnostic(bytes(startup))
+                    except OSError:
+                        pass
                 state["phase"] = "exited"
                 save()
 

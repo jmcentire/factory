@@ -36,6 +36,7 @@ import struct
 import subprocess
 import sys
 import termios
+import time
 import tty
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -444,6 +445,14 @@ class Terminal:
         # its terminal, and that must not be lost because nobody was attached.
         self.outbound = 1
         self.sized_by = 1 if os.isatty(1) else -1
+        try:
+            os.fstat(self.outbound)
+        except OSError:
+            self.outbound = -1  # the wrapper has no output to relay to
+        # Output waiting to be relayed. The relay never blocks this wrapper: it writes only
+        # when the output is ready for it, and holds at most RELAY_LIMIT bytes meanwhile.
+        self._relay = bytearray()
+        self.relay_dropped = 0
         self.master, slave = pty.openpty()
         self._resize(slave)
         try:
@@ -481,7 +490,40 @@ class Terminal:
         return [fd for fd in (self.master if self._open else -1, self.inbound) if fd >= 0]
 
     def writers(self) -> list[int]:
-        return [self.master] if self._pending and self._open else []
+        waiting = [self.master] if self._pending and self._open else []
+        if self._relay and self.outbound >= 0:
+            waiting.append(self.outbound)
+        return waiting
+
+    def _queue_relay(self, data: bytes) -> None:
+        if self.outbound < 0:
+            return
+        self._relay += data
+        over = len(self._relay) - RELAY_LIMIT
+        if over > 0:
+            # A reader that has fallen this far behind loses the oldest output. The program,
+            # its hooks and this wrapper's control channel are never made to wait for it.
+            del self._relay[:over]
+            self.relay_dropped += over
+
+    def _flush_relay(self) -> None:
+        """Write what the output will take now, and no more. A write of at most PIPE_BUF
+        bytes to a descriptor that select reports writable does not block."""
+
+        budget = 64 * 1024
+        while self._relay and self.outbound >= 0 and budget > 0:
+            if not select.select([], [self.outbound], [], 0)[1]:
+                return
+            try:
+                sent = os.write(self.outbound, bytes(self._relay[:select.PIPE_BUF]))
+            except BlockingIOError:
+                return
+            except OSError:
+                self.outbound = -1  # the wrapper's output is gone; keep the program
+                self._relay.clear()
+                return
+            del self._relay[:sent]
+            budget -= sent
 
     def type(self, data: bytes) -> None:
         """Queue bytes for the program's terminal input; ``service`` writes them."""
@@ -503,10 +545,11 @@ class Terminal:
             if data == b"":
                 self._open = False
             elif data:
-                if self.outbound >= 0 and not _write_all(self.outbound, data):
-                    self.outbound = -1  # the wrapper's output is gone; keep the program
+                self._queue_relay(data)
                 if output is not None:
                     output(data)
+        if self.outbound >= 0 and self.outbound in writable:
+            self._flush_relay()
         if self.inbound >= 0 and self.inbound in readable:
             try:
                 keys = os.read(self.inbound, 4096)
@@ -525,14 +568,22 @@ class Terminal:
                 self._open, sent = False, 0
             self._pending = self._pending[sent:]
 
-    def drain(self, output: Callable[[bytes], None] | None = None) -> None:
-        """Relay what the program wrote before it closed its terminal."""
+    def drain(self, output: Callable[[bytes], None] | None = None,
+              flush_s: float = 1.0) -> None:
+        """Read what the program wrote before it closed its terminal, then give the relay a
+        bounded time to deliver it. A reader that is not reading costs at most ``flush_s``."""
 
         while self._open:
             ready = select.select([self.master], [], [], 0.2)[0]
             if not ready:
                 break
             self.service(ready, [], output)
+        deadline = time.monotonic() + flush_s
+        while self._relay and self.outbound >= 0:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not select.select([], [self.outbound], [], remaining)[1]:
+                break
+            self._flush_relay()
 
     def close(self) -> None:
         signal.signal(signal.SIGWINCH, self._previous_winch)
@@ -545,19 +596,6 @@ class Terminal:
             os.close(self.master)
         except OSError:
             pass
-
-
-def _write_all(descriptor: int, data: bytes) -> bool:
-    """Write all of ``data``; False when the descriptor can no longer be written."""
-
-    while data:
-        try:
-            data = data[os.write(descriptor, data):]
-        except BlockingIOError:
-            select.select([], [descriptor], [], 0.2)
-        except OSError:
-            return False
-    return True
 
 
 def paste(text: str) -> bytes:
@@ -597,6 +635,14 @@ def typed_text(text: str, directory: pathlib.Path, slot: str) -> str:
             "governs this lane exactly as if it had been given here. Do not edit or delete it.")
 
 
+#: How much relayed output may wait for a slow reader before the oldest is dropped.
+RELAY_LIMIT = 1024 * 1024
+#: How much of a program's output before its session starts is remembered, from its
+#: beginning, so that if it ends without starting, what it said first can be kept. It is the
+#: program's raw terminal output and may hold whatever the program chose to show there (an
+#: account name, a sign-in prompt), so it is written nowhere unless the program ended
+#: without a session, and then only to the lane's owner-only log.
+STARTUP_KEEP = 256 * 1024
 SUBMIT = b"\r"
 #: After the program reports its session started, before the first typing; and between the end
 #: of a paste and the Enter that submits it. Both are time for the program's own input handling.

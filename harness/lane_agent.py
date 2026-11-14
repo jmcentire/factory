@@ -52,6 +52,7 @@ import tomllib
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 _HARNESS_ROOT = str(pathlib.Path(__file__).resolve().parent)
 if _HARNESS_ROOT not in sys.path:
@@ -396,7 +397,11 @@ Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 
 def _status(argv: Sequence[str], *, timeout: float, runner: Runner, remediation: str,
-            label: str) -> subprocess.CompletedProcess[str]:
+            label: str, env: Mapping[str, str] | None = None,
+            ) -> subprocess.CompletedProcess[str]:
+    # ``env``: the environment the check is about. Without it the runner uses this process's
+    # own, which is the lane's when a launcher runs this under the lane's environment.
+    extra: dict[str, Any] = {} if env is None else {"env": dict(env)}
     try:
         return runner(
             list(argv),
@@ -405,6 +410,7 @@ def _status(argv: Sequence[str], *, timeout: float, runner: Runner, remediation:
             text=True,
             timeout=timeout,
             check=False,
+            **extra,
         )
     except subprocess.TimeoutExpired:
         raise PreflightRefused(
@@ -496,8 +502,9 @@ def preflight(
                 raise PreflightRefused(
                     str(error), f"set {native_session.LAUNCHER_ENV} to the command you start "
                     "Claude Code with, or put claude on PATH") from None
-            # No launcher and no `claude` found in this environment: ask the CLI by name
-            # through the runner, which reports a program that cannot be run with its fix.
+            # No launcher and no `claude` found in this environment. The check below still
+            # asks by name, in this same environment, so a program that really is missing
+            # is refused there with its fix, and never answered for from another PATH.
             launcher = None
         program = launcher.path if launcher is not None else chosen.executable
         if launcher is not None and launcher.via == "login-shell":
@@ -507,8 +514,11 @@ def preflight(
             # session shows its own sign-in state; until it reports started it is "starting".
             return f"claude-launcher:{launcher.name}:sign-in-not-checked"
         remediation = "claude auth login   (once, as this user, with the Claude subscription)"
+        # In the environment the lane will run in, not whatever this process inherited:
+        # another PATH or profile could answer for a different program or account.
         result = _status([program, "auth", "status", "--json"], timeout=timeout,
-                         runner=runner, remediation=remediation, label="Claude Code")
+                         runner=runner, remediation=remediation, label="Claude Code",
+                         env=environ)
         try:
             document = json.loads(result.stdout)
         except json.JSONDecodeError:
@@ -1009,8 +1019,9 @@ def run_lane(
     startup_logged = 0
 
     def startup_output(raw: bytes) -> None:
-        # What a native terminal program writes before its session reports starting, into
-        # the lane log, bounded: a refusal's own words, or the question it stopped to ask.
+        # What a native terminal program said first, when it ended without starting a
+        # session, into the lane's owner-only log, bounded. Raw program output: it is not
+        # assumed free of anything the program chose to show.
         nonlocal startup_logged
         room = STARTUP_LOG_LIMIT - startup_logged
         if room > 0:
