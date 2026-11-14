@@ -6,6 +6,7 @@ No implementation inspection, no actual providers, no native sandbox override.
 
 import json
 import sys
+import subprocess
 import time
 from pathlib import Path
 
@@ -63,11 +64,15 @@ def test_kernel_only_hosted_launch_live_message_and_retained_restart(
     record.write_text("original")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    planned = subprocess.run([sys.executable, str(H / "protocol_host.py"), "trust-roots",
+                              "--control", str(run.resolve() / "tmux-lanes")],
+                             capture_output=True, text=True, check=True)
+    roots = json.loads(planned.stdout)
     boundary = Boundary.parse(
         {
             "schema": "factory-seat-boundary/1",
             "role": "coder",
-            "denied_reads": [str(denied.resolve())],
+            "denied_reads": list(dict.fromkeys([str(denied.resolve()), *roots["deny_read"], *roots["deny_write"]])),
             "protected_writes": [str(control.resolve()), str(run.resolve())],
             "allowed_sockets": [],
         }
@@ -108,7 +113,7 @@ if args and args[0] == 'usage':
         "        log(prompt=p, durable_before_write=snapshots)",
         probe + "\n        log(prompt=p, durable_before_write=snapshots)",
     )
-    provider.write_text(f"#!{sys.executable}\n" + body)
+    provider.write_text("#!/usr/bin/python3\n" + body)
     provider.chmod(0o755)
     prompt = tmp_path / "brief"
     prompt.write_text("synthetic initial kernel-only hosted message")
