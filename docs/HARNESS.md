@@ -187,6 +187,12 @@ a stub shaped by that evidence.
   `busy` with that reason. An operator typing a prompt in its window would make it report,
   but that is a person's intervention, not unattended operation: unattended resume of a
   Cursor session is not supported yet.
+  "Not resumable" is the Factory's own limit and is recorded in one place, the registry
+  (`agents.py describe --agent cursor-agent` prints `single`); the watchdog's list of lanes
+  it may continue agrees with it. Cursor's own resume is not refused or dropped:
+  `agents.py turn --agent cursor-agent --resume <id>` builds `--resume=<id>`, the same
+  conversation. A message to a Cursor lane goes to its running session or is not delivered;
+  it never starts a new session in its place.
 - **Not established.** That Cursor's terminal takes a bracketed paste followed by typed text
   and Enter the way Claude Code does. If it does not, messages stay `submitted`.
 - **A forced commit is refused at validation.** `.git/info/exclude` keeps the lane's project

@@ -97,6 +97,9 @@ class Harness:
     name: str
     executable: str
     credential_env: tuple[str, ...]  # non-billing variables a cleared environment admits
+    # The Factory can continue this lane's session after its turn ended, by a lane message
+    # (which is what a wrap-up or a review pause does). It says what the Factory does, not
+    # whether the program has a resume flag: `turn(resume=...)` builds that flag regardless.
     resumable: bool
     api_env: tuple[str, ...] = ()  # variables that switch the harness to per-use API billing
     plan: bool = True  # the harness has a signed-in plan path
@@ -747,8 +750,10 @@ HARNESSES: Mapping[str, Harness] = {
     "prime-agent": PrimeAgent("prime-agent", "prime-agent", (), True,
                               api_env=("OPENROUTER_API_KEY",), plan=False,
                               native_blocker=_BLOCKERS["prime-agent"]),
-    # Not resumable from here yet: no lane command restarts a Cursor session with
-    # --resume=<id>, and a resumed session reported nothing until it was given a prompt.
+    # Not resumable by the Factory yet: no lane command restarts an ended Cursor session, and
+    # a resumed session reported nothing until it was given a prompt. Cursor's own resume is
+    # untouched: `turn(resume=<id>)` builds `--resume=<id>`, the same conversation and never a
+    # new one, and a lane message to a running session is typed into that session.
     "cursor-agent": CursorAgent(
         "cursor-agent", "agent", (), False, api_env=("CURSOR_API_KEY",),
         memory="beside-operator", dialect="cursor", native_blocker=_BLOCKERS["cursor-agent"],
