@@ -80,9 +80,10 @@ def owned_codex(native_case):
                 pass
 
 
+@pytest.mark.parametrize("agent", ["codex", "codex-interactive"])
 @pytest.mark.parametrize("uncertain", [False, True])
 def test_ended_native_codex_resumes_marked_followup_without_replaying_initial(
-    owned_codex, tmp_path, uncertain
+    owned_codex, tmp_path, uncertain, agent
 ):
     case = owned_codex
     allowed = {
@@ -140,9 +141,11 @@ def test_ended_native_codex_resumes_marked_followup_without_replaying_initial(
             "--prompt",
             str(brief),
             "--agent",
-            "codex-interactive",
+            agent,
             "--model",
             "synthetic-model",
+            "--effort",
+            "high",
         ],
         env,
     )
@@ -179,6 +182,9 @@ def test_ended_native_codex_resumes_marked_followup_without_replaying_initial(
         lambda: next((e for e in read_events(log) if e.get("argv", [None])[0] == "resume"), None)
     )
     assert resumed["tty"] and resumed["home"] == initial["home"]
+    assert any(
+        "model_reasoning_effort" in option and "high" in option for option in resumed["argv"]
+    )
     assert session in resumed["argv"] and "exec" not in resumed["argv"]
     model_flag = "--model" if "--model" in resumed["argv"] else "-m"
     assert resumed["argv"][resumed["argv"].index(model_flag) + 1] == "synthetic-model"
@@ -243,3 +249,38 @@ def test_ended_native_codex_resumes_marked_followup_without_replaying_initial(
     assert "[factory-message:" in argv[argv.index("--message") + 1]
     assert len([e for e in read_events(log) if e.get("argv", [None])[0] == "resume"]) == 1
     assert sum(e.get("prompt") == initial_prompt for e in read_events(log)) == 1
+
+
+def test_old_exec_codex_lane_is_not_silently_converted_or_resumed(tmp_path):
+    from tests.test_codex_tui_resume import SESSION, fixture
+    from tests.test_harness_scripts import HARNESS, ordinary_message_fixture, run
+
+    operator, root, env, tmux_log = ordinary_message_fixture(tmp_path)
+    repository = tmp_path / "coder"
+    repository.mkdir()
+    launch_file, _, thread, _, _ = fixture(root, repository)
+    launch = json.loads(launch_file.read_text())
+    launch["agent"] = "codex"
+    launch_file.write_text(json.dumps(launch) + "\n")
+    thread.write_text(SESSION + "\n")
+    before = launch_file.read_bytes()
+    result = run(
+        [
+            "bash",
+            str(HARNESS / "tmux_lane_message.sh"),
+            "r1",
+            "validator",
+            "coder",
+            "status",
+            "--runs",
+            str(root.parent),
+        ],
+        operator,
+        env,
+    )
+    commands = tmux_log.read_text() if tmux_log.exists() else ""
+    assert result.returncode != 0 and result.stderr.strip()
+    assert not any(command in commands for command in ("new-window", "respawn-pane", "send-keys"))
+    assert "codex exec" not in commands
+    assert thread.read_text().strip() == SESSION
+    assert launch_file.read_bytes() == before
