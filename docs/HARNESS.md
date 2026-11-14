@@ -522,6 +522,43 @@ and they are not the same thing:
   them for one session, and how a hook's approval combines with them, is not established.
 - **Resume.** `--conversation <id>` is built whenever an id is given. No lane command
   restarts an ended session; the registry reports `agy` as not resumable by the Factory.
+  That is deliberate, on the qualification below.
+- **Restart qualification (agy 1.5.9, 2026-11-14): not enough to restart an ended
+  session.** Lifecycle probes by the adapter's author, their reports read independently by
+  the tester: normal permissions (no `--dangerously-skip-permissions`), no print mode, no
+  API key, a trusted throwaway workspace, a probe plugin at `.agents/plugins/lane/`. Every
+  `PreInvocation` list ended in a handler returning `terminationBehavior: "terminate"`.
+  Seven invocations gave seven stop reports with `terminationReason: TERMINAL_CUSTOM_HOOK` and
+  `executionNum: 0`, and no `PostInvocation` report. By Antigravity's own hook reports,
+  then, each turn was ended before the model was invoked. That is what the reports show;
+  it is not an independent account of usage or billing. None of this is evidence about a
+  model turn.
+  - *When the hook runs, it sees the conversation first.* `--conversation <id>
+    --prompt-interactive <message>` on an existing conversation sent no `SessionStart`;
+    its `PreInvocation` named the same conversation (`initialNumSteps` above 1) and carried
+    the message exactly, a leading dash and a second line included. The hook's `terminate`
+    was followed by a stop report naming the hook as the reason.
+  - *An unknown conversation is not refused.* Antigravity warned on stderr, made a new
+    conversation, reported `SessionStart` and `PreInvocation` under the new id with the
+    message submitted to it, and later exited 0.
+  - *A failed hook is skipped.* A `PreInvocation` handler that exited 1, printed text that
+    is not JSON, ran past its `timeout` (and was killed), or named a command that does not
+    exist was logged as failed by Antigravity, and the next handler in the list ran.
+    Antigravity's hook documentation says nothing about a failed handler; its changelog
+    describes failing hook commands as "silently skipped".
+  - *Inferred, not observed.* That a turn whose only `PreInvocation` handler fails goes on
+    to call the model. Seeing it takes a model call, and these probes were built so that
+    the hook reports show none. What was seen is that the failure did not stop the turn
+    and that the handler after it did.
+  - *What follows.* A lane's hook can stop a turn in the wrong conversation only when it
+    starts, answers in time and Antigravity has loaded the plugin. With the kept
+    conversation gone and the hook not answering, the lane's message could proceed in a new
+    conversation without a trustworthy binding report; these probes do not establish
+    whether a model call follows. That hook is also the lane's only report. The Factory
+    therefore cannot hold a restarted session to its conversation, and restarting an
+    ended Antigravity session is not built. Unchanged: a later message is held for a
+    person to enter and settles by its mark; a launch that requires a Signet guard is
+    refused; `--review-every-minutes` and `--wrap-up-minutes` are refused for `agy`.
 - **Coordinator seats.** An Antigravity seat is allowed. It is not refused, and it is not
   put on print mode: it starts as Antigravity's own interactive session in its window, by
   the same seat command as before (`agy --add-dir <run> ... --prompt-interactive <prompt>`),
@@ -531,7 +568,8 @@ and they are not the same thing:
   reported `unsupported` and stays in the inbox. So an Antigravity seat works attended and
   does not work unattended.
 - **Not observed.** The name Antigravity gives the lane's server (`lane_kindex`, by its
-  changelog), a model calling it, any tool-use hook, and `--conversation` reporting.
+  changelog), a model calling it, any tool-use hook, and a model turn in a continued
+  conversation.
 
 ### Interactive Codex lanes are Codex's own session, hosted
 
