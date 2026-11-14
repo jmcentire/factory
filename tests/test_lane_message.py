@@ -352,7 +352,8 @@ def test_a_progress_review_is_leak_guarded_and_only_the_validator_sends_it(
     assert to_tester.returncode == (70 if agent == "codex-interactive" else 0), (
         to_tester.stdout + to_tester.stderr)
     if agent == "codex-interactive":
-        assert "NOT delivered" in to_tester.stderr
+        assert "NOT recorded as delivered" in to_tester.stderr
+        assert "never handed over again" in to_tester.stderr
         assert not any(row["record_type"] == "message-delivered"
                        for row in read_chain(root / "dialogue/journal.jsonl"))
     [planned] = [row for row in read_chain(root / "dialogue" / "journal.jsonl")
@@ -372,7 +373,8 @@ def test_only_the_watchdog_sends_the_generated_wrap_up(tmp_path: Path, agent: st
     assert delivered.returncode == (70 if agent == "codex-interactive" else 0), (
         delivered.stdout + delivered.stderr)
     if agent == "codex-interactive":
-        assert "NOT delivered" in delivered.stderr
+        assert "NOT recorded as delivered" in delivered.stderr
+        assert "never handed over again" in delivered.stderr
         assert not any(row["record_type"] == "message-delivered"
                        for row in read_chain(root / "dialogue/journal.jsonl"))
     planned = read_chain(root / "dialogue" / "journal.jsonl")[0]
