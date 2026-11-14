@@ -8,6 +8,7 @@ import hashlib
 import importlib
 import json
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -926,3 +927,55 @@ def test_direct_protocol_host_strips_api_routing_without_caller_unset(hosted):
     spawns = [r for r in lane.rows() if r.get("spawn")]
     assert spawns, result.stdout + result.stderr
     assert all(not r["keys"] for r in spawns)
+
+
+@pytest.mark.parametrize("damage", ["missing", "wrong-slot", "stale"])
+def test_hosted_lost_reply_and_damaged_process_custody_never_replay(hosted, damage):
+    lane = hosted
+    p = lane.start()
+    until(
+        lambda: lane.state().get("deliveries", {}).get("initial", {}).get("state") == "observed", p
+    )
+    mid = lane.plan("retained native message despite lost IPC response")
+    state = lane.state()
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.connect(state["socket"])
+        client.shutdown(socket.SHUT_RD)
+        client.sendall(
+            json.dumps(
+                dict(token=state["token"], thread=state["session_id"], message_id=mid)
+            ).encode()
+            + b"\n"
+        )
+        client.shutdown(socket.SHUT_WR)
+    until(lambda: lane.state().get("deliveries", {}).get(mid, {}).get("state") == "observed", p)
+    before = len([r for r in lane.rows() if "prompt" in r])
+    receipt_path = lane.folder / "coder-process.json"
+    original = receipt_path.read_bytes()
+    receipt = json.loads(original)
+    if damage == "missing":
+        receipt_path.unlink()
+    elif damage == "wrong-slot":
+        receipt_path.write_text(json.dumps({**receipt, "slot": "tester"}))
+    else:
+        receipt_path.write_text(
+            json.dumps({**receipt, "worker": {**receipt["worker"], "started": "stale"}})
+        )
+    try:
+        with pytest.raises((ValueError, FileNotFoundError)):
+            lane.send(mid)
+    finally:
+        receipt_path.write_bytes(original)
+    assert lane.send(mid)["state"] == "observed"
+    assert len([r for r in lane.rows() if "prompt" in r]) == before == 2
+
+
+def test_completed_hosted_child_cannot_replay_initial_on_restart(hosted):
+    lane = hosted
+    (lane.folder / "exit-after-completion").touch()
+    p = lane.start()
+    p.wait(timeout=10)
+    assert lane.state().get("deliveries", {}).get("initial", {}).get("state") == "observed"
+    second = lane.start()
+    assert second.wait(timeout=10) != 0
+    assert len([r for r in lane.rows() if "prompt" in r]) == 1
