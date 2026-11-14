@@ -29,7 +29,7 @@ def eventually(check):
 
 
 @pytest.mark.parametrize("agent", ["agy"])
-@pytest.mark.parametrize("tamper", [False, True])
+@pytest.mark.parametrize("tamper", ["none", "changed", "missing"])
 def test_kernel_only_hosted_launch_live_message_and_retained_restart(
     native_case, tmp_path, agent, tamper
 ):
@@ -174,12 +174,14 @@ if args and args[0] == 'usage':
         )
     )
     before = len([r for r in rows() if r.get("spawn")])
-    if tamper:
+    if tamper == "changed":
         changed = json.loads(contract.read_text())
         changed["protected_writes"].append(str((tmp_path / "new-protected-root").resolve()))
         contract.write_text(json.dumps(changed))
+    elif tamper == "missing":
+        contract.unlink()
     resumed = message()
-    if tamper:
+    if tamper != "none":
         assert resumed.returncode == 70, resumed.stdout + resumed.stderr
         assert len([r for r in rows() if r.get("spawn")]) == before
     else:
@@ -188,6 +190,6 @@ if args and args[0] == 'usage':
         assert state()["session_id"] == sid
         assert any(r.get("request", {}).get("method") == "session/resume" for r in rows())
     probes = [r["kernel_probe"] for r in rows() if "kernel_probe" in r]
-    assert len(probes) == (2 if tamper else 3)
+    assert len(probes) == (2 if tamper != "none" else 3)
     assert all(all(p.values()) for p in probes), probes
     assert record.read_text() == "original"
