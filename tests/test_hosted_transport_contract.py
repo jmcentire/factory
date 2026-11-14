@@ -16,52 +16,162 @@ import pytest
 
 H = Path(__file__).resolve().parents[1] / "harness"
 SID = "12345678-1234-4234-8234-123456789abc"
-FAKE = r"""
-import json,os,pathlib,sys,time
-folder=pathlib.Path(__file__).parent
-agent=pathlib.Path(sys.argv[0]).name
-args=sys.argv[1:]
+FAKE = r'''
+import json, os, pathlib, sys, time
+
+folder = pathlib.Path(__file__).parent
+agent = pathlib.Path(sys.argv[0]).name
+args = sys.argv[1:]
+
+
 def log(**r):
- with (folder/'rpc.jsonl').open('a') as f:f.write(json.dumps(r)+'\n')
-if '--help' in args:
- print('serve acp --stdio --model --mode --sandbox --provider --config');sys.exit()
-if '--version' in args:print('1.5.9-synthetic');sys.exit()
-log(spawn=True,argv=args,home=os.environ.get('HOME'),
- keys=[k for k in ['META_API_KEY','GEMINI_API_KEY','GOOGLE_API_KEY','AGY_LLM_GATEWAY_API_KEY'] if os.environ.get(k)])
-assert not {'-p','--print','--prompt','exec'}.intersection(args)
-assert args and args[0]==('acp' if agent=='agy' else 'serve'),args
-sid='12345678-1234-4234-8234-123456789abc'
-def emit(r):print(json.dumps(dict(jsonrpc='2.0',**r)),flush=True)
-def answer(r,result):emit(dict(id=r['id'],result=result))
-def notify(method,params):emit(dict(method=method,params=params))
+    with (folder / "rpc.jsonl").open("a") as f:
+        f.write(json.dumps(r) + "\n")
+
+
+if "--help" in args:
+    print("serve acp --stdio --model --mode --sandbox --provider --config")
+    sys.exit()
+if "--version" in args:
+    print("1.5.9-synthetic")
+    sys.exit()
+log(
+    spawn=True,
+    argv=args,
+    home=os.environ.get("HOME"),
+    keys=[
+        k
+        for k in ["META_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "AGY_LLM_GATEWAY_API_KEY"]
+        if os.environ.get(k)
+    ],
+)
+assert not {"-p", "--print", "--prompt", "exec"}.intersection(args)
+assert args and args[0] == ("acp" if agent == "agy" else "serve"), args
+sid = "12345678-1234-4234-8234-123456789abc"
+
+
+def emit(r):
+    print(json.dumps(dict(jsonrpc="2.0", **r)), flush=True)
+
+
+def answer(r, result):
+    emit(dict(id=r["id"], result=result))
+
+
+def notify(method, params):
+    emit(dict(method=method, params=params))
+
+
 for line in sys.stdin:
- r=json.loads(line);m=r.get('method');p=r.get('params',{});log(request=r)
- if 'id' not in r:continue
- if m=='initialize':
-  answer(r,dict(protocolVersion=1,agentInfo={'name':'synthetic','version':'1'},agentCapabilities={'loadSession':True,'sessionCapabilities':{'resume':{}}},serverInfo={'name':'synthetic','version':'1'},capabilities={}))
- elif m in ['session/new','session/start']:
-  sid=p.get('sessionId',sid)
-  answer(r,{'sessionId':sid} if agent=='agy' else {'session':{'sessionId':sid,'status':'idle','providerId':'echo','turnCount':0},'viewCursor':''})
- elif m=='session/resume':
-  sid=p['sessionId'];mode=(folder/'resume-mode').read_text() if (folder/'resume-mode').exists() else 'ok'
-  if mode=='missing':emit(dict(id=r['id'],error={'code':-32603 if agent=='agy' else -32020,'message':'missing session; try session/load'}));continue
-  if mode=='mismatch':sid='99999999-9999-4999-8999-999999999999'
-  answer(r,{'sessionId':sid} if agent=='agy' else {'session':{'sessionId':sid,'status':'idle','providerId':'echo','turnCount':1},'viewCursor':'','items':[]})
- elif m in ['session/prompt','turn/start']:
-  log(prompt=p)
-  if (folder/'crash-before-ack').exists():sys.exit(19)
-  if agent=='agy':
-   notify('session/update',{'sessionId':sid,'update':{'sessionUpdate':'agent_message_chunk','content':{'type':'text','text':'__LANE_DONE__'}}})
-   answer(r,{'stopReason':'end_turn'})
-  else:
-   tid='turn-'+str(r['id']);answer(r,{'sessionId':sid,'turnId':tid,'accepted':True,'disposition':'started','startedNewTurn':True})
-   notify('turn/started',{'sessionId':sid,'turnId':tid})
-   notify('item/updated',{'sessionId':sid,'turnId':tid,'item':{'id':tid+'-text','type':'agentMessage','text':'__LANE_DONE__'}})
-   notify('turn/completed',{'sessionId':sid,'turnId':tid,'terminal':'completed'})
-  if (folder/'exit-after-completion').exists():sys.exit(0)
- elif m=='session/load':raise AssertionError('forbidden fallback')
- else:answer(r,{})
-"""
+    r = json.loads(line)
+    m = r.get("method")
+    p = r.get("params", {})
+    log(request=r)
+    if "id" not in r:
+        continue
+    if m == "initialize":
+        answer(
+            r,
+            dict(
+                protocolVersion=1,
+                agentInfo={"name": "synthetic", "version": "1"},
+                agentCapabilities={"loadSession": True, "sessionCapabilities": {"resume": {}}},
+                serverInfo={"name": "synthetic", "version": "1"},
+                capabilities={},
+            ),
+        )
+    elif m in ["session/new", "session/start"]:
+        sid = p.get("sessionId", sid)
+        answer(
+            r,
+            {"sessionId": sid}
+            if agent == "agy"
+            else {
+                "session": {
+                    "sessionId": sid,
+                    "status": "idle",
+                    "providerId": "echo",
+                    "turnCount": 0,
+                },
+                "viewCursor": "",
+            },
+        )
+    elif m == "session/resume":
+        sid = p["sessionId"]
+        mode = (folder / "resume-mode").read_text() if (folder / "resume-mode").exists() else "ok"
+        if mode == "missing":
+            emit(
+                dict(
+                    id=r["id"],
+                    error={
+                        "code": -32603 if agent == "agy" else -32020,
+                        "message": "missing session; try session/load",
+                    },
+                )
+            )
+            continue
+        if mode == "mismatch":
+            sid = "99999999-9999-4999-8999-999999999999"
+        answer(
+            r,
+            {"sessionId": sid}
+            if agent == "agy"
+            else {
+                "session": {
+                    "sessionId": sid,
+                    "status": "idle",
+                    "providerId": "echo",
+                    "turnCount": 1,
+                },
+                "viewCursor": "",
+                "items": [],
+            },
+        )
+    elif m in ["session/prompt", "turn/start"]:
+        log(prompt=p)
+        if (folder / "crash-before-ack").exists():
+            sys.exit(19)
+        if agent == "agy":
+            notify(
+                "session/update",
+                {
+                    "sessionId": sid,
+                    "update": {
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": {"type": "text", "text": "__LANE_DONE__"},
+                    },
+                },
+            )
+            answer(r, {"stopReason": "end_turn"})
+        else:
+            tid = "turn-" + str(r["id"])
+            answer(
+                r,
+                {
+                    "sessionId": sid,
+                    "turnId": tid,
+                    "accepted": True,
+                    "disposition": "started",
+                    "startedNewTurn": True,
+                },
+            )
+            notify("turn/started", {"sessionId": sid, "turnId": tid})
+            notify(
+                "item/updated",
+                {
+                    "sessionId": sid,
+                    "turnId": tid,
+                    "item": {"id": tid + "-text", "type": "agentMessage", "text": "__LANE_DONE__"},
+                },
+            )
+            notify("turn/completed", {"sessionId": sid, "turnId": tid, "terminal": "completed"})
+        if (folder / "exit-after-completion").exists():
+            sys.exit(0)
+    elif m == "session/load":
+        raise AssertionError("forbidden fallback")
+    else:
+        answer(r, {})
+'''
 
 
 def until(predicate, child=None, diagnostic=None):
