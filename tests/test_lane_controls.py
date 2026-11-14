@@ -1677,7 +1677,8 @@ def test_a_lanes_commands_get_the_cache_and_runtime_on_launch_and_resume(tmp_pat
     # This command-recording tmux stub does not run a native process or emit
     # its receipt. Inspect preserved launch inputs without pretending delivery.
     assert resumed.returncode == 70, resumed.stdout + resumed.stderr
-    assert "NOT delivered" in resumed.stderr
+    assert "NOT recorded as delivered" in resumed.stderr
+    assert "never handed over again" in resumed.stderr
     respawn = next(line for line in lanes.tmux_log.read_text().splitlines()
                    if "respawn-pane" in line)
     assert _policy(respawn) == expected
