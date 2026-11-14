@@ -305,6 +305,34 @@ if [ "$ACTION" != "freeze" ]; then
   [ ! -s "$EVENTS" ] || refuse 64 "slot $SLOT was already launched in this run" \
     "send new work into its session: harness/tmux_lane_message.sh $RUN validator $LANE review|answer ..."
 
+  # An earlier round of this lane may still be stopping although its window is gone (a window
+  # that was closed, a tmux server that ended): its wrapper waits for its program and cleans
+  # up last. A new round started in that time would run a second program in the lane's clone
+  # beside the first, and this launcher would clear the earlier round's project files and
+  # empty its cleanup manifest while that round's program is still using them. So "a new
+  # round replaces a finished one, never a running one" is decided by the earlier rounds' own
+  # processes, not only by their window: each earlier slot of this lane is waited for, by the
+  # exact wrapper and program its receipt names (PID and start time) and for a bounded time,
+  # before anything of theirs is cleaned, anything is recorded or anything is started.
+  # Nothing is signalled. A lane whose window is still live is left to the refusal further
+  # down, which names it as running. A lane that has never run has no receipt and is not
+  # made to wait or to read the process table.
+  if ! tmux list-windows -t "$RUN" -F '#{window_name} #{pane_dead}' 2>/dev/null | grep -qx "$LANE 0"; then
+    for EARLIER in "$TMUX_ROOT/$LANE"-process.json "$TMUX_ROOT/$LANE".*-process.json; do
+      [ -e "$EARLIER" ] || [ -L "$EARLIER" ] || continue
+      EARLIER_SLOT=$(basename "$EARLIER" -process.json)
+      OWNER_RC=0
+      OWNER_SAID=$("$FACTORY_PYTHON" "$D/lane_watchdog.py" previous-owner --receipt "$EARLIER" 2>&1) || OWNER_RC=$?
+      case "$OWNER_RC" in
+        0) ;;
+        75) refuse 75 "the lane's earlier round $EARLIER_SLOT is still stopping (${OWNER_SAID#lane-watchdog: still running: }); nothing was started or cleaned, and it was not signalled" \
+              "launch again once it has ended" ;;
+        *) refuse 70 "cannot tell whether the lane's earlier round $EARLIER_SLOT has stopped (its process receipt or the process table could not be read); nothing was started or cleaned" \
+              "check $EARLIER, then launch again" ;;
+      esac
+    done
+  fi
+
   "$FACTORY_PYTHON" "$D/lane_admission.py" --root "$ROOT" --run "$RUN" --role "$ROLE" \
     --lane "$LANE" --action "$ACTION" --repository "$REPOSITORY" || \
     refuse 70 "qualification/productive admission evidence is not ready"
