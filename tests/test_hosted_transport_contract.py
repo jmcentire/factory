@@ -673,6 +673,9 @@ def test_public_author_custody_refuses_hosted_provider_before_spawn(native_case,
     repo = json.loads(prepared.stdout)["repository"]
     prompt = tmp_path / "hosted-brief"
     prompt.write_text("synthetic protected author")
+    # Preparing isolated inputs does not itself request runtime custody.
+    # docs/HARNESS.md defines this explicit requirement as protected admission.
+    case["env"]["FACTORY_REQUIRE_AUTHOR_CUSTODY"] = "1"
     result = execute(
         [
             "bash",
