@@ -98,7 +98,9 @@ public API is still pre-1.0.
   ones are typed; lane hooks are the clone's `.muse/hooks.json` (same custody as Cursor's
   project files, including the launch and candidate refusals); the lane's Kindex is the
   per-run server `lane-kindex`; the sign-in check is `muse usage` and no longer opens the
-  sign-in file. Observed end to end on Muse Code 1.4.20 with its echo provider only: not
+  sign-in file. The hand-over of the first message is recorded durably before Muse is
+  spawned and never repeated for a slot, and a later message is typed only after Muse
+  reports a turn ended. Observed end to end on Muse Code 1.4.20 with its echo provider only: not
   accepted, and nothing about a signed-in model run is established (`docs/HARNESS.md`).
   Narrower than before, deliberately: a Muse lane is no longer resumable by the Factory, so
   wrap-up and progress-review pauses are not offered for it and a lane message does not

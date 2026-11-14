@@ -654,8 +654,66 @@ def run(
 #:              became of it cannot be observed any more. Never typed again.
 #: There is no "acknowledged" or "completed" here, because the session reports neither.
 OUTSTANDING = frozenset({"queued", "submitted"})
+#: The phases in which a session has itself reported that no turn is running.
+BETWEEN_TURNS = frozenset({"stop-reported", "waiting-for-input"})
 #: What a caller may treat as the message having reached the session.
 RECEIVED = frozenset({"observed", "acknowledged"})  # "acknowledged": Agy's stream transport
+
+
+INTENT_SCHEMA = "factory-launch-intent/1"
+
+
+def intent_path(root: pathlib.Path, slot: str) -> pathlib.Path:
+    return state_path(root, slot).with_name(f"{slot}-launch-intent.json")
+
+
+def record_launch_intent(root: pathlib.Path, slot: str, launched: dict) -> None:
+    """Record, durably and before the program exists, that this start hands it its first
+    message as a launch argument.
+
+    A message given that way reaches the program the instant it is spawned, before any
+    session state can be written. So the fact that it is about to be given is written first,
+    and it is written once: if a record already exists for this slot, an earlier start
+    handed the first message over (or was about to), and what became of it may never have
+    been observed. That is an unknown outcome, and an unknown outcome is not permission to
+    hand the message over again, so this start is refused. Nothing here ever clears the
+    record: a different lane (another slot) is the way to start over, or a person removes
+    the file knowing what the earlier session did.
+    """
+
+    path = intent_path(root, slot)
+    if path.is_symlink():
+        raise ValueError(f"launch record {path.name} is a symlink; refusing to start")
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        try:
+            when = read(path).get("at")
+        except (OSError, ValueError):
+            when = None
+        stamp = (datetime.datetime.fromtimestamp(when, datetime.UTC).isoformat(timespec="seconds")
+                 if isinstance(when, (int, float)) else "an unreadable time")
+        raise ValueError(
+            f"an earlier start of this lane handed its first message to the program as its "
+            f"launch argument (recorded {stamp}), and a first message is never handed over "
+            f"twice. What that start's session did with it may not have been observed. "
+            f"Continue that session if it reported one, start a replacement lane, or remove "
+            f"{path} deliberately once you know the message was not taken") from None
+    with os.fdopen(descriptor, "w") as stream:
+        json.dump({"schema": INTENT_SCHEMA, "slot": slot, "token": launched["token"],
+                   "typed_sha256": launched["typed_sha256"], "at": time.time(),
+                   "wrapper_pid": os.getpid(),
+                   "meaning": "written before the program was spawned; by itself it does not "
+                              "say the program took the message, only that it may have"},
+                  stream, sort_keys=True)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def retained(root: pathlib.Path, slot: str, session_id: str) -> dict:
@@ -672,7 +730,8 @@ def retained(root: pathlib.Path, slot: str, session_id: str) -> dict:
       it and reports it), so it is the same conversation as nothing;
     * another conversation that never existed (no session id was ever bound) or never
       started (a terminal record with nothing but untyped ``queued`` entries): nothing was
-      typed, so this start may supersede it;
+      typed, so this start may supersede it. A record whose first message was handed over
+      as a launch argument is not one of these, bound or not: the program may have taken it;
     * anything else is a conversation that received input. Starting a different one in its
       place would repeat its first message, so it is refused: resume it, or remove the
       record deliberately.
@@ -707,7 +766,9 @@ def retained(root: pathlib.Path, slot: str, session_id: str) -> dict:
                 f"retained delivery record {path.name} for this conversation has no record "
                 f"of its first message; {refusal}")
         return prior
-    never_bound = earlier == ""
+    handed = any(record.get("via") == "launch-argument" and record["state"] != "queued"
+                 for record in deliveries.values())
+    never_bound = earlier == "" and not handed
     never_typed = (
         prior.get("transport") == TERMINAL
         and prior.get("session_started") is not True
@@ -715,6 +776,12 @@ def retained(root: pathlib.Path, slot: str, session_id: str) -> dict:
     )
     if never_bound or never_typed:
         return {}
+    if earlier == "":
+        raise ValueError(
+            f"retained delivery record {path.name} shows a first message handed to the "
+            "program at launch by a start whose session never reported; starting again "
+            "would hand it over a second time. Remove the record deliberately once you "
+            "know the message was not taken")
     raise ValueError(
         f"retained delivery record {path.name} belongs to conversation {earlier}, which "
         "received input; starting a different conversation in its place would repeat its "
@@ -736,6 +803,7 @@ def run_terminal(
     note,
     diagnostic=None,
     launched=None,
+    between_turns=False,
 ) -> int:
     """Own one native terminal session until its actual exit.
 
@@ -770,6 +838,16 @@ def run_terminal(
 
     Delivery records survive this wrapper: a restart that resumes the same conversation
     keeps them, types nothing that was ever typed, and marks an unfinished one ``unknown``.
+
+    ``between_turns`` is set for a program that was not observed to report when it is
+    asking the operator something (Muse Code). A start report does not show that whatever is
+    on screen later is the chat input: during a turn it can be a permission or question
+    dialog, and keys typed then would answer it. So for such a program a later message is
+    typed only while the session's last report is a stop report (or its own
+    waiting-for-input report): between turns, by the session's own word. A message asked for
+    during a turn is accepted and held, and typed when that turn's stop is reported. This
+    narrows the exposure and does not close it: a dialog the program raises outside any
+    turn it reported would not be seen.
 
     ``launched`` is given when the first message was handed to the program as its launch
     argument rather than typed (Muse Code, which reports a session's start only with its
@@ -1077,6 +1155,10 @@ def run_terminal(
         reopen(row)
         waiting[identifier] = row["text"]
         result = {"state": "queued", "message_id": identifier}
+        if between_turns and state["phase"] not in BETWEEN_TURNS:
+            result["held"] = ("until the session reports its turn ended: this program does "
+                              "not report when it is asking the operator something, so "
+                              "nothing is typed while a turn is running")
         deliveries[identifier] = result
         save()  # durable before any byte is typed
         return result
@@ -1087,6 +1169,7 @@ def run_terminal(
             state["session_started"]
             and state["phase"] != "asking-operator"
             and not state.get("observed_session_id")
+            and (not between_turns or state["phase"] in BETWEEN_TURNS)
         )
 
     def advance():

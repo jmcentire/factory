@@ -923,6 +923,10 @@ def run_lane(
             import persistent_lane
 
             persistent_lane.retained(run_root, slot, native_plan.session_id)
+            if native_plan.launched is not None:
+                # The first message reaches the program the moment it is spawned. That it
+                # is about to be handed over is on disk first, and never twice for a slot.
+                persistent_lane.record_launch_intent(run_root, slot, dict(native_plan.launched))
         except (OSError, ValueError) as error:
             if native_plan is not None and native_plan.manifest is not None:
                 # A start refused after its project files were written leaves none behind.
@@ -1101,7 +1105,8 @@ def run_lane(
                     session_id=native_plan.session_id, journal=native_plan.journal,
                     journal_offset=native_plan.journal_offset,
                     launcher=native_plan.launcher.record(), note=note,
-                    diagnostic=startup_output, launched=native_plan.launched)
+                    diagnostic=startup_output, launched=native_plan.launched,
+                    between_turns=chosen is not None and chosen.type_between_turns)
         elif terminal:
             process = subprocess.Popen(argv, env=child_env)
             register()

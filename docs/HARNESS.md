@@ -257,7 +257,23 @@ author and independently by the tester on 2026-11-13. It is converted, not accep
 - **First message at launch.** Muse reports a session's start only when its first prompt is
   submitted, so the lane's first message is Muse's launch argument (after `--`), with its
   mark. Its delivery is `submitted` from the start (`via: launch-argument`) and `observed`
-  when Muse's prompt report carries the mark. Later messages are typed, as for Claude Code.
+  when Muse's prompt report carries the mark. Later messages are typed.
+- **Handed over once.** A launch argument reaches Muse the moment it is spawned, before any
+  session state can exist. So the wrapper first writes `<slot>-launch-intent.json`,
+  durably, and only then spawns Muse; the record is never cleared. If one already exists
+  for the slot, or the slot's delivery record shows a first message handed over to a
+  session that never reported, the start is refused before Muse runs: what the earlier
+  start's session did with the message is unknown, and unknown is not permission to give
+  it again. Start a replacement lane, or remove the record knowing the message was not
+  taken.
+- **Typed only between turns.** A start report does not show that what is on screen later
+  is the chat input: during a turn it can be a permission or question dialog, and typed
+  keys would answer it. Muse was not observed to report such a dialog. So a later message
+  is typed only while Muse's last report is a stop; one asked for during a turn is
+  accepted, shown as `queued` with `held`, and typed when that turn's stop arrives. The
+  Factory approves nothing and changes no approval setting to get past a dialog. This
+  narrows the exposure and does not close it: a dialog raised outside any turn Muse
+  reported would not be seen.
 - **Trust is the operator's.** For a clone Muse has not been told to trust, Muse asks in
   the lane's window before anything runs. The Factory does not answer and passes no
   `--trust-workspace`; until the session reports starting it is `starting` and nothing is
@@ -275,8 +291,8 @@ author and independently by the tester on 2026-11-13. It is converted, not accep
   refuses literal `env` values in that form.
 - **Reports.** `SessionStart`, `UserPromptSubmit`, `Stop` and `SessionEnd`, in Claude Code's
   names. A prompt's report and its turn's stop report share a turn id, so that stop is
-  recorded on the message as `response_stop`. A message typed while a turn runs waits in
-  Muse's own queue and is reported when the turn ends.
+  recorded on the message as `response_stop`. (Muse itself queues a message typed while a
+  turn runs and reports it when the turn ends; the wrapper does not rely on that.)
 - **Permissions.** Nothing is imposed: no `--yolo`, no `--disable-request-user-input`.
   `FACTORY_LANE_SANDBOX=off` is the one configuration that adds `--yolo`.
 - **Sign-in check.** `muse usage`, Muse's own account command. The sign-in file is not
