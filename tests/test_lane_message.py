@@ -1,14 +1,24 @@
-"""tmux_lane_message.sh: what a Validator delivery to a tmux Codex lane proves."""
+"""Message authority and delivery evidence across the two supported Codex transports.
+
+Exec-specific receipt tests explicitly use local codex-ollama. Safety refusals also
+exercise default codex, publicly launched as a hosted native session with real
+synthetic lifecycle reports. The tmux recorder cannot establish resumed delivery.
+"""
 
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 from harness.lane_dialogue import record_question
 from tests.test_harness_scripts import (
     HARNESS,
+    _ollama_stub,
     ordinary_message_fixture,
     read_chain,
     run,
@@ -18,11 +28,35 @@ THREAD = "12345678-1234-4234-8234-123456789abc"
 
 
 def lane_fixture(
-    tmp_path: Path, lane: str = "tester", *, pane_dead: str = "1"
+    tmp_path: Path, lane: str = "tester", *, pane_dead: str = "1", agent: str = "codex-ollama"
 ) -> tuple[Path, Path, dict[str, str], Path]:
-    """A launched Codex lane with a retained thread; tmux reports the lane pane as given."""
+    """Local exec transport or a native lane with hook-backed clean exit evidence."""
+
+    if agent == "codex-interactive":
+        assert pane_dead == "1", "native fixture establishes a cleanly exited session"
+        from tests.test_codex_ended_native_recovery import PROVIDER
+        from tests.test_lane_controls import Lanes
+
+        fixture = Lanes(tmp_path)
+        provider = fixture.stub / "codex"
+        provider.write_text(f"#!{sys.executable}\n" + PROVIDER)
+        launched = fixture.lane(lane)
+        assert launched.returncode == 0, launched.stdout + launched.stderr
+        record = read_chain(fixture.root / f"tmux-lanes/{lane}-launch.jsonl")[-1]
+        assert record["agent"] == "codex-interactive" and record["persistent"]
+        command = next(line for line in fixture.tmux_log.read_text().splitlines()
+                       if f"-n {lane} " in line)
+        argv = shlex.split(command.split(" && ", 1)[1].removeprefix("exec "))
+        ended = subprocess.run(argv, cwd=fixture.clone(lane), text=True,
+                               capture_output=True, timeout=30)
+        assert ended.returncode == 0, ended.stdout + ended.stderr
+        state = json.loads((fixture.root / f"tmux-lanes/{lane}-persistent.json").read_text())
+        assert state["phase"] == "exited" and state["session_id"] == THREAD
+        assert state["deliveries"]["initial"]["state"] == "observed"
+        return fixture.operator, fixture.root, fixture.env, fixture.tmux_log
 
     operator, root, env, tmux_log = ordinary_message_fixture(tmp_path)
+    _ollama_stub(tmp_path / "factory-bin", available=True)
     tmux = tmp_path / "factory-bin" / "tmux"
     tmux.write_text(
         tmux.read_text(encoding="utf-8").replace(
@@ -41,7 +75,8 @@ def lane_fixture(
                 "mode": "launch",
                 "run_id": "r1",
                 "role": lane,
-                "agent": "codex",
+                "agent": agent,
+                "model": "fixture-local",
                 "repository": str(repository),
             }
         )
@@ -72,8 +107,11 @@ def answer(
     )
 
 
-def test_unverified_stop_refuses_delivery_before_any_model_resume(tmp_path: Path) -> None:
-    operator, root, env, tmux_log = lane_fixture(tmp_path)
+@pytest.mark.parametrize("agent", ["codex-ollama", "codex-interactive"])
+def test_unverified_stop_refuses_delivery_before_any_model_resume(
+    tmp_path: Path, agent: str,
+) -> None:
+    operator, root, env, tmux_log = lane_fixture(tmp_path, agent=agent)
     (root / "tmux-lanes" / "tester-watch.json").write_text('{"status":"stopping"}')
     before = tmux_log.read_text() if tmux_log.exists() else ""
     refused = run(
@@ -86,8 +124,9 @@ def test_unverified_stop_refuses_delivery_before_any_model_resume(tmp_path: Path
     assert not (root / "dialogue" / "journal.jsonl").exists()
 
 
-def test_dangling_watcher_state_is_not_treated_as_no_stop_state(tmp_path: Path) -> None:
-    operator, root, env, tmux_log = lane_fixture(tmp_path)
+@pytest.mark.parametrize("agent", ["codex-ollama", "codex-interactive"])
+def test_dangling_watcher_state_is_not_treated_as_no_stop_state(tmp_path: Path, agent: str) -> None:
+    operator, root, env, tmux_log = lane_fixture(tmp_path, agent=agent)
     (root / "tmux-lanes" / "tester-watch.json").symlink_to(tmp_path / "missing-state")
     before = tmux_log.read_text() if tmux_log.exists() else ""
     refused = run(
@@ -127,10 +166,11 @@ def test_an_answer_past_the_inline_ceiling_is_delivered_as_a_digest_pinned_file(
     assert planned["text"].startswith("FACTORY_ANSWER question_id=")
 
 
-def test_a_large_coder_answer_is_leak_guarded_on_its_file_bytes(tmp_path: Path) -> None:
+@pytest.mark.parametrize("agent", ["codex-ollama", "codex-interactive"])
+def test_a_large_coder_answer_is_leak_guarded_on_its_file_bytes(tmp_path: Path, agent: str) -> None:
     """The oracle-leak guard judges the file's bytes; a refused file never reaches the lane."""
 
-    operator, root, env, _ = lane_fixture(tmp_path, "coder")
+    operator, root, env, _ = lane_fixture(tmp_path, "coder", agent=agent)
     question, _ = record_question(root, "coder", "Which error does checkout raise?")
     reply = tmp_path / "answer.txt"
     reply.write_text("Raise the typed error.\n" * 700 + "See test_checkout_raises.\n")
@@ -251,9 +291,9 @@ def message(
 
 
 def test_a_progress_review_resumes_the_coders_own_thread(tmp_path: Path) -> None:
-    """A finding reaches a codex-exec Coder only by resuming its thread: inject.sh types into a
-    pane that `codex exec` never reads, and a new --round starts a fresh context. The review is
-    framed, leak-guarded and receipted like an answer."""
+    """A local codex-ollama Coder continues only by resuming its own thread:
+    inject.sh types into a pane that `codex exec` never reads, and a new --round
+    starts a fresh context. The review is framed, leak-guarded and receipted like an answer."""
 
     operator, root, env, tmux_log = lane_fixture(tmp_path, "coder")
     review = tmp_path / "review.txt"
@@ -277,10 +317,11 @@ def test_a_progress_review_resumes_the_coders_own_thread(tmp_path: Path) -> None
     assert "exec --json resume" in tmux_log.read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("agent", ["codex-ollama", "codex-interactive"])
 def test_a_progress_review_is_leak_guarded_and_only_the_validator_sends_it(
-    tmp_path: Path,
+    tmp_path: Path, agent: str,
 ) -> None:
-    operator, root, env, _ = lane_fixture(tmp_path, "coder")
+    operator, root, env, _ = lane_fixture(tmp_path, "coder", agent=agent)
     review = tmp_path / "review.txt"
     review.write_text("test_checkout_empty_cart fails: see the assertion.\n", encoding="utf-8")
     leaked = message(operator, root, env, "validator", "coder", "review",
@@ -295,7 +336,7 @@ def test_a_progress_review_is_leak_guarded_and_only_the_validator_sends_it(
     assert no_verdict.returncode == 64
     tester = tmp_path / "tester"
     tester.mkdir()
-    operator, root, env, _ = lane_fixture(tester, "tester")
+    operator, root, env, _ = lane_fixture(tester, "tester", agent=agent)
     # The Tester is one long-lived session too: its review goes into that session, and the other
     # direction of independence holds (no implementation source or diff).
     leaky = tmp_path / "leaky-review.txt"
@@ -308,31 +349,43 @@ def test_a_progress_review_is_leak_guarded_and_only_the_validator_sends_it(
                      "tests/acceptance/w/oauth.test.ts misses it.\n", encoding="utf-8")
     to_tester = message(operator, root, env, "validator", "tester", "review",
                         "--verdict", "repair", "--review-file", str(clean), "--wait-idle", "2")
-    assert to_tester.returncode == 0, to_tester.stdout + to_tester.stderr
+    assert to_tester.returncode == (70 if agent == "codex-interactive" else 0), (
+        to_tester.stdout + to_tester.stderr)
+    if agent == "codex-interactive":
+        assert "NOT delivered" in to_tester.stderr
+        assert not any(row["record_type"] == "message-delivered"
+                       for row in read_chain(root / "dialogue/journal.jsonl"))
     [planned] = [row for row in read_chain(root / "dialogue" / "journal.jsonl")
                  if row.get("message_kind") == "progress-review"]
     assert "never the implementation" in planned["text"]
 
 
-def test_only_the_watchdog_sends_the_generated_wrap_up(tmp_path: Path) -> None:
-    operator, root, env, _ = lane_fixture(tmp_path, "coder")
+@pytest.mark.parametrize("agent", ["codex-ollama", "codex-interactive"])
+def test_only_the_watchdog_sends_the_generated_wrap_up(tmp_path: Path, agent: str) -> None:
+    operator, root, env, _ = lane_fixture(tmp_path, "coder", agent=agent)
     refused = message(operator, root, env, "validator", "coder", "wrapup", "--minutes", "5")
     assert refused.returncode == 77
     refused = message(operator, root, env, "watchdog", "coder", "status")
     assert refused.returncode == 77
     delivered = message(operator, root, env, "watchdog", "coder", "wrapup", "--minutes", "5",
                         "--wait-idle", "2")
-    assert delivered.returncode == 0, delivered.stdout + delivered.stderr
+    assert delivered.returncode == (70 if agent == "codex-interactive" else 0), (
+        delivered.stdout + delivered.stderr)
+    if agent == "codex-interactive":
+        assert "NOT delivered" in delivered.stderr
+        assert not any(row["record_type"] == "message-delivered"
+                       for row in read_chain(root / "dialogue/journal.jsonl"))
     planned = read_chain(root / "dialogue" / "journal.jsonl")[0]
     assert planned["sender"] == "watchdog" and planned["message_kind"] == "wrap-up"
     assert planned["text"].startswith("FACTORY_WRAP_UP: about 5 minutes of this lane's time")
     assert "Start nothing new" in planned["text"]
 
 
+@pytest.mark.parametrize("agent", ["codex-ollama", "codex-interactive"])
 def test_a_lane_at_its_cap_refuses_a_review_and_status_refuses_stray_arguments(
-    tmp_path: Path,
+    tmp_path: Path, agent: str,
 ) -> None:
-    operator, root, env, _ = lane_fixture(tmp_path, "coder")
+    operator, root, env, _ = lane_fixture(tmp_path, "coder", agent=agent)
     (root / "tmux-lanes" / "coder-watch.json").write_text('{"status": "capped"}\n')
     review = tmp_path / "review.txt"
     review.write_text("R-3: fix the refusal.\n", encoding="utf-8")
@@ -344,8 +397,9 @@ def test_a_lane_at_its_cap_refuses_a_review_and_status_refuses_stray_arguments(
     assert stray.returncode == 64
 
 
-def test_legacy_unverified_pause_cannot_resume(tmp_path: Path) -> None:
-    operator, root, env, tmux_log = lane_fixture(tmp_path)
+@pytest.mark.parametrize("agent", ["codex-ollama", "codex-interactive"])
+def test_legacy_unverified_pause_cannot_resume(tmp_path: Path, agent: str) -> None:
+    operator, root, env, tmux_log = lane_fixture(tmp_path, agent=agent)
     (root / 'tmux-lanes' / 'tester-watch.json').write_text('{"status":"paused"}')
     before = tmux_log.read_text() if tmux_log.exists() else ''
     refused = run(
