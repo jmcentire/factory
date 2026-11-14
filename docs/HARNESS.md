@@ -358,11 +358,11 @@ unattended (Muse, Antigravity) or hold a restarted session to its conversation
 - It works for an unprotected lane: one that requires no Signet guard, no author custody
   and no kernel boundary. That is the positive capability, and the only one.
 - A protected lane is refused, as set out next. Nothing here is a step toward a guard.
-- On a real subscription model, exactly one thing has been run: a single text-only turn
-  on Antigravity, by the independent tester. No real Muse turn, and no tool call or
-  approval request on either provider. What has been run is listed at the end of this
-  section; everything beyond that list is unproven, including that a real model's tool
-  call or approval request behaves as the stand-ins do.
+- On a real subscription model, one bounded thing has been run for each provider, by the
+  independent tester: a single text-only turn. No tool call and no approval request
+  occurred in either. What has been run is listed at the end of this section; everything
+  beyond that list is unproven, including that a real model's tool call or approval
+  request behaves as the stand-ins do.
 
 **This is transport, not a guard.** It is groundwork. A protected launch, or a message
 that would restart an ended session under protection, is refused with exit 77 before the
@@ -452,19 +452,30 @@ for either, and none is claimed.
   reply in the lane log, and an unknown session refused on Muse's own error. The adapter's
   author ran this, and the independent tester ran the same lifecycle separately and it
   passed.
-  *Antigravity's real server on the operator's subscription,* by the independent tester
-  only (2026-11-14): one text-only turn, whose reply was exactly the text asked for and
-  which ended with the stop reason `end_turn`. No tool was called and no approval was
-  requested in it, so it shows a text turn through the transport and nothing about tools
-  or a guard.
-- **Not run, and so not claimed.** Any turn on a real Muse model. Any tool call, and any
-  approval request answered in the window against a real server, on either provider. For
-  Antigravity, anything beyond that one text-only turn: what its server sends before a
-  prompt's answer in a turn that uses tools, and whether the model name the public
-  launcher records matches a session option, are taken from the protocol and from recorded
-  handshakes. A later message arriving while a real Muse turn is running (echo turns are
-  too short to overlap). The lane's Kindex reaching a real session. A hosted lane inside
-  the kernel boundary. Any proof about a Signet guard.
+  *One real text-only turn on each provider, on the operator's saved sign-in,* by the
+  independent tester only (2026-11-14), on the source this section describes. These are
+  model turns, one each, and are a different kind of evidence from the echo lifecycle
+  above: they show a text turn through the transport, and no lifecycle (no later message,
+  no restart) was run on a real model.
+  - Antigravity: the provider's own account check passed, the API-routing variables were
+    absent from the server, the reply was exactly the text asked for, the turn ended with
+    the stop reason `end_turn`, and the host was then stopped.
+  - Muse: the provider's own account command reported a subscription sign-in but no
+    allowance figure (the server sent no usage), the model provider was selected for that
+    run only, the API-routing variables were absent from the server, the reply was the
+    text asked for followed by the message's own mark (so not that text alone), the turn
+    ended `completed`, and the host was then stopped.
+  - In neither turn was a tool called or a permission or approval requested.
+- **Not run, and so not claimed.** Any tool call, and any permission or approval request
+  answered in the window against a real server, on either provider. Anything about a
+  Signet guard, custody or read isolation. Anything about billing: that these turns were
+  charged to the subscription and not otherwise is taken from the sign-in in use and the
+  absent API variables, not from a ledger, and Muse reported no usage at all. On a real
+  model, more than one turn: a later message to a running lane, a restart of an ended
+  session, a message arriving while a turn runs. For Antigravity, what its server sends
+  before a prompt's answer in a turn that uses tools, and whether the model name the
+  public launcher records matches a session option. The lane's Kindex reaching a real
+  session. A hosted lane inside the kernel boundary.
 
 ### Earlier terminal route for Muse lanes (history; lanes no longer use it)
 

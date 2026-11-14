@@ -162,9 +162,9 @@ public API is still pre-1.0.
   run at all, because neither provider offers a gate on every tool action and the
   boundary is not qualified around a hosted session. The owner approved the hosted route
   as acceptable for now. Run against stand-in servers and, for Muse, its own server on its
-  echo provider; on a real model, one text-only Antigravity turn by the independent
-  tester and nothing else (no tool call, no approval request, no real Muse turn;
-  `docs/HARNESS.md`). This replaces, for lanes, the terminal route the two entries above
+  echo provider; on a real model, one text-only turn on each provider by the independent
+  tester and nothing else (no tool call, no approval request, no lifecycle on a real
+  model, and no billing-ledger or Signet proof; `docs/HARNESS.md`). This replaces, for lanes, the terminal route the two entries above
   and the held-message entry below describe.
 - A new round of a lane is no longer started beside an earlier round that is still
   stopping. `tmux_lane.sh launch` decided "finished" by the lane's tmux window alone, and a
