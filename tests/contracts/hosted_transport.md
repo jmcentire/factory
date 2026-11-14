@@ -27,3 +27,10 @@ Real-provider evidence only qualifies lifecycle/transport so far. Echo or fake
 providers cannot prove all-tool Signet interception or pre-read role isolation.
 Muse hook/declare currently returns methodNotFound despite experimental schema.
 Native callback errors/timeouts may fail open: security refusal remains required.
+
+Adversarial additions: ACP config/current-mode updates cannot settle a rejected
+prompt; missing/non-string/foreign callback identity cannot settle it either.
+Requested model/effort must be selected in returned config options before prompt.
+Corrupt or unreadable retained Muse command ledger cannot create fresh command IDs
+or silently replay. Public restart requires provider resume argv as well as retained
+session file and launch message ID (Muse resume UUID, AGY --conversation UUID).

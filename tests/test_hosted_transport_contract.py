@@ -18,7 +18,7 @@ H = Path(__file__).resolve().parents[1] / "harness"
 pytest_plugins = ["tests.test_native_claude_contract"]
 
 SID = "12345678-1234-4234-8234-123456789abc"
-FAKE = r'''
+FAKE = r"""
 import json, os, pathlib, sys, time, threading, queue
 
 folder = pathlib.Path(__file__).parent
@@ -163,9 +163,37 @@ while True:
 
             assert uuid.UUID(p["commandId"]).version == 7
         sid = p.get("sessionId", sid)
+        identity = {"sessionId": sid}
+        if agent == "agy" and (folder / "identity-mode").exists():
+            mode = (folder / "identity-mode").read_text()
+            identity = (
+                {} if mode == "missing" else {"sessionId": 42 if mode == "nonstring" else "foreign"}
+            )
+        if agent == "agy" and (folder / "config-mismatch").exists():
+            identity["configOptions"] = [
+                {
+                    "id": "model",
+                    "name": "Model",
+                    "category": "model",
+                    "type": "select",
+                    "currentValue": "old-model",
+                    "options": [
+                        {"value": "old-model", "name": "Old"},
+                        {"value": "wanted-model", "name": "Wanted"},
+                    ],
+                },
+                {
+                    "id": "thought_level",
+                    "name": "Thought level",
+                    "category": "thought_level",
+                    "type": "select",
+                    "currentValue": "low",
+                    "options": [{"value": "low", "name": "Low"}, {"value": "high", "name": "High"}],
+                },
+            ]
         answer(
             r,
-            {"sessionId": sid}
+            identity
             if agent == "agy"
             else {
                 "session": {
@@ -193,9 +221,37 @@ while True:
             continue
         if mode == "mismatch":
             sid = "99999999-9999-4999-8999-999999999999"
+        identity = {"sessionId": sid}
+        if agent == "agy" and (folder / "identity-mode").exists():
+            mode = (folder / "identity-mode").read_text()
+            identity = (
+                {} if mode == "missing" else {"sessionId": 42 if mode == "nonstring" else "foreign"}
+            )
+        if agent == "agy" and (folder / "config-mismatch").exists():
+            identity["configOptions"] = [
+                {
+                    "id": "model",
+                    "name": "Model",
+                    "category": "model",
+                    "type": "select",
+                    "currentValue": "old-model",
+                    "options": [
+                        {"value": "old-model", "name": "Old"},
+                        {"value": "wanted-model", "name": "Wanted"},
+                    ],
+                },
+                {
+                    "id": "thought_level",
+                    "name": "Thought level",
+                    "category": "thought_level",
+                    "type": "select",
+                    "currentValue": "low",
+                    "options": [{"value": "low", "name": "Low"}, {"value": "high", "name": "High"}],
+                },
+            ]
         answer(
             r,
-            {"sessionId": sid}
+            identity
             if agent == "agy"
             else {
                 "session": {
@@ -265,6 +321,27 @@ while True:
             )
             continue
 
+        if agent == "agy" and (folder / "reject-update").exists():
+            mode = (folder / "reject-update").read_text()
+            update = {"sessionUpdate": "current_mode_update", "currentModeId": "default"}
+            if mode == "config":
+                update = {"sessionUpdate": "config_option_update", "configOptions": []}
+            if mode == "foreign":
+                update = {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "old answer"},
+                }
+            params = {"sessionId": sid, "update": update}
+            if mode == "foreign":
+                params["sessionId"] = "foreign"
+            if mode == "missing":
+                params.pop("sessionId")
+            if mode == "nonstring":
+                params["sessionId"] = 42
+            notify("session/update", params)
+            emit({"id": r["id"], "error": {"code": -32603, "message": "prompt rejected"}})
+            log(rejected=True)
+            continue
         if (folder / "crash-before-ack").exists():
             sys.exit(19)
         if agent == "agy":
@@ -318,10 +395,10 @@ while True:
     elif m == "session/set_config_option":
         assert agent == "agy" and p["sessionId"] == sid and isinstance(p["configId"], str)
         assert "value" in p
-        answer(r, {"configOptions": []})
+        answer(r, {"configOptions": identity.get("configOptions", [])})
     else:
         raise AssertionError("unsupported synthetic protocol request: " + json.dumps(r))
-'''
+"""
 
 
 def until(predicate, child=None, diagnostic=None):
@@ -401,6 +478,8 @@ def hosted(tmp_path, monkeypatch, request):
                 path.write_text(text)
                 cmd[cmd.index("--prompt-arg") + 1] = str(path)
                 cmd[cmd.index("--") : cmd.index("--")] = ["--launch-message-id", mid]
+                sid = (folder / "coder-thread-id").read_text().strip()
+                cmd.extend(["resume", sid] if self.agent == "muse" else ["--conversation", sid])
             p = subprocess.Popen(
                 cmd,
                 cwd=project,
@@ -699,3 +778,75 @@ def test_followup_uncertain_write_is_durable_and_not_replayed(hosted):
         result = {"state": "refused"}
     assert result.get("state") != "observed"
     assert len([r for r in lane.rows() if "prompt" in r]) == 2
+
+
+@pytest.mark.parametrize("mode", ["config", "mode", "foreign", "missing", "nonstring"])
+def test_acp_unrelated_update_then_rejection_is_not_prompt_receipt(hosted, mode):
+    lane = hosted
+    if lane.agent != "agy":
+        pytest.skip("ACP-specific event contract")
+    (lane.folder / "reject-update").write_text(mode)
+    p = lane.start()
+    until(lambda: any(r.get("rejected") for r in lane.rows()), p, lane.root / "wrapper-0.log")
+    time.sleep(0.15)
+    assert lane.state().get("deliveries", {}).get("initial", {}).get("state") != "observed"
+
+
+@pytest.mark.parametrize("mode", ["missing", "nonstring"])
+def test_acp_invalid_new_identity_refuses_before_prompt(hosted, mode):
+    lane = hosted
+    if lane.agent != "agy":
+        pytest.skip("ACP-specific result contract")
+    (lane.folder / "identity-mode").write_text(mode)
+    p = lane.start()
+    assert p.wait(timeout=10) != 0
+    assert not any("prompt" in r for r in lane.rows())
+
+
+@pytest.mark.parametrize("option,value", [("--model", "wanted-model"), ("--effort", "high")])
+def test_acp_unselected_requested_configuration_refuses_before_prompt(hosted, option, value):
+    lane = hosted
+    if lane.agent != "agy":
+        pytest.skip("ACP-specific configuration contract")
+    (lane.folder / "config-mismatch").touch()
+    # Native invocation settings are public provider args, not private config.
+    lane.command.extend([option, value])
+    p = lane.start()
+    assert p.wait(timeout=10) != 0
+    requests = [r["request"] for r in lane.rows() if "request" in r]
+    assert any(r.get("method") == "session/set_config_option" for r in requests)
+    assert not any("prompt" in r for r in lane.rows())
+
+
+@pytest.mark.parametrize("damage", ["corrupt", "unreadable"])
+def test_muse_damaged_retained_command_ledger_never_allocates_fresh_command(hosted, damage):
+    lane = hosted
+    if lane.agent != "muse":
+        pytest.skip("MSP-specific durable command contract")
+    p = lane.start()
+    until(
+        lambda: lane.state().get("deliveries", {}).get("initial", {}).get("state") == "observed", p
+    )
+    ledger = lane.folder / "coder-hosted-commands.json"
+    assert ledger.is_file(), "public retained command receipt missing"
+    original = ledger.read_bytes()
+    if damage == "corrupt":
+        ledger.write_text("{not-json")
+    else:
+        ledger.unlink()
+        ledger.mkdir()  # deterministically unreadable as a file, including privileged test runners
+    before = len([r for r in lane.rows() if "prompt" in r])
+    mid = lane.plan("cannot allocate replacement id after ledger damage")
+    try:
+        try:
+            result = lane.send(mid)
+        except (ValueError, OSError):
+            result = {"state": "refused"}
+        time.sleep(0.15)
+        assert result.get("state") != "observed"
+        assert len([r for r in lane.rows() if "prompt" in r]) == before
+        assert ledger.is_dir() if damage == "unreadable" else ledger.read_text() == "{not-json"
+    finally:
+        if ledger.is_dir():
+            ledger.rmdir()
+        ledger.write_bytes(original)
