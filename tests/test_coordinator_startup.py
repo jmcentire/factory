@@ -54,6 +54,9 @@ def launch(tmp_path, monkeypatch):
         calls = []
 
         def tmux_only(argv, **kwargs):
+            # No prior native processes exist in this command-recording fixture.
+            if argv == ["ps", "-A", "-o", "pid=,ppid=,lstart=,stat=,time="]:
+                return subprocess.CompletedProcess(argv, 0, "", "")
             if model_probe and argv[0] == "bash":
                 assert Path(argv[4]).name == "model_availability.sh"
                 return real_run(argv, **kwargs)
