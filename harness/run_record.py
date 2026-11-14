@@ -548,6 +548,27 @@ def _start_locked(runs: Path, run: str) -> None:
                         "--runs", str(root.parent), "--run", run])
     if subprocess.run([*tmux, "has-session", "-t", f"={run}"], capture_output=True).returncode == 0:
         raise ValueError("run session already exists; existing sessions are never replaced")
+    # A seat's earlier life may still be stopping although its tmux session is gone: a wrapper
+    # that was signalled waits for its program and writes its exit record last. Below, a seat
+    # is said to have stopped during startup when its exits journal grows, and that journal is
+    # one file for every life of the seat, its rows naming no process. So the earlier life is
+    # waited for first, by the exact processes its receipt names (PID and start time), and
+    # for a bounded time; if it is still stopping, nothing is started. It is never signalled.
+    lane_watchdog = (importlib.import_module("harness.lane_watchdog") if __package__
+                     else importlib.import_module("lane_watchdog"))
+    for role in ("validator", "orchestrator"):
+        receipt = root / f"{role}-process.json"
+        earlier = lane_watchdog.await_previous_owner(receipt)
+        if earlier is None:
+            raise ValueError(
+                f"cannot tell whether the previous {role} has stopped ({receipt.name} or the "
+                f"process table could not be read); nothing was started. Retry with: {retry}")
+        if earlier:
+            named = ", ".join(f"{row['role']} pid {row['pid']}" for row in earlier)
+            raise ValueError(
+                f"the previous {role} is still stopping ({named}) after "
+                f"{lane_watchdog.PREVIOUS_OWNER_WAIT_S:g}s; nothing was started and it was not "
+                f"signalled. Retry once it has ended, with: {retry}")
     billing = os.environ.get("FACTORY_SEAT_BILLING", "plan")
     if billing not in {"plan", "metered"}:
         raise ValueError("FACTORY_SEAT_BILLING must be plan or metered")

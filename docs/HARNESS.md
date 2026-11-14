@@ -39,6 +39,25 @@ with the command that retries the start on the same record:
 python harness/run_record.py start --runs <runs> --run <run>
 ```
 
+A start that follows an earlier life of the same run waits for that life to finish
+stopping. A seat's wrapper, once signalled, waits for its program and writes its exit
+record last, which can be seconds after its tmux session is gone; and a seat's exits
+journal is one file for every life of the seat, its rows naming no process. A new life
+started in that time would have the old life's exit record land beside its own start and
+be taken for it: the launcher would report "the <role> stopped during startup" and close
+a healthy new session. So before anything is started, the launcher looks at the exact
+processes the seat's process receipt names (`<role>-process.json`: the wrapper and its
+program, each by PID and start time) and waits up to 15 seconds for them to end. If one is
+still running then, the start is refused (exit 70) with its PID and the retry command;
+if the receipt or the process table cannot be read, it is refused the same way. The
+earlier life is never signalled, and no session is replaced. A lane message that restarts
+an ended lane session does the same for the lane's slot (exit 75 while its earlier
+process is still stopping, with the message left planned), so the lane's watcher never
+counts an earlier life's exit record against the new one.
+`python harness/lane_watchdog.py previous-owner --receipt <file>` is the same check on its
+own: exit 0 when the earlier owner has stopped or there is none, 75 while it runs, 70
+when it cannot be told.
+
 Start runs from a shell outside any sandbox. On macOS the run's tmux server and every
 seat inherit the launching shell's sandbox, and an agent there cannot save its state; the
 launcher warns when it detects one.

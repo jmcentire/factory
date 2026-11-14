@@ -844,6 +844,21 @@ PY
     printf -v RESUME_CMD '%q %q --config %q --digest %q --shell-command %q' \
       "$FACTORY_PYTHON" "$D/author_custody.py" "$AUTHOR_CONFIG" "$AUTHOR_DIGEST" "$RESUME_CMD"
   fi
+  # The lane's earlier process may still be stopping although its pane is gone (a window that
+  # was closed, a tmux server that ended): its wrapper waits for its program and writes its
+  # exit record last, into the one exits journal every life of the slot shares, whose rows
+  # name no process. A new life started now would have that record land beside its own start
+  # and be read as its own end. So the earlier owner is waited for, by the exact processes
+  # its receipt names and for a bounded time, and it is never signalled.
+  "$FACTORY_PYTHON" "$D/lane_watchdog.py" previous-owner --receipt "$TMUX_ROOT/$SLOT-process.json" || {
+    OWNER_RC=$?
+    if [ "$OWNER_RC" = 75 ]; then
+      echo "lane-message: the previous process of $RUN:$SLOT is still stopping (named above), so nothing was started and $MESSAGE_ID is planned and NOT delivered. It was not signalled. Run this command again once it has ended" >&2
+      exit 75
+    fi
+    echo "lane-message: cannot tell whether the previous process of $RUN:$SLOT has stopped (above), so nothing was started and $MESSAGE_ID is planned and NOT delivered" >&2
+    exit 70
+  }
   # The new life reads only what the resumed turn writes: the log's size now, before the turn
   # starts, so the earlier turn's done line is never reported again as this turn's.
   LOG_OFFSET=0
