@@ -350,6 +350,19 @@ host was started and whatever it was told. No print mode, no
 `.muse/hooks.json` and no `.agents/plugins/lane/` for a hosted lane. The two sections after
 this one describe the earlier terminal route and its evidence; lanes no longer use it.
 
+**Where this stands.** The owner approved this hosted route as acceptable for now, in
+place of driving each provider's terminal UI, which could not deliver a later message
+unattended (Muse, Antigravity) or hold a restarted session to its conversation
+(Antigravity). What it gives today is narrow and should be read as that:
+
+- It works for an unprotected lane: one that requires no Signet guard, no author custody
+  and no kernel boundary. That is the positive capability, and the only one.
+- A protected lane is refused, as set out next. Nothing here is a step toward a guard.
+- No turn on a real subscription model has been run through it for either provider. What
+  has been run is listed at the end of this section; everything beyond that list is
+  unproven, including that a real model's turn, tool call or approval request behaves as
+  the stand-ins do.
+
 **This is transport, not a guard.** It is groundwork. A protected launch, or a message
 that would restart an ended session under protection, is refused with exit 77 before the
 provider's program is run at all (its sign-in check included), before any record and
@@ -410,24 +423,43 @@ for either, and none is claimed.
   model the session does not offer, or a final answer that does not show what was asked
   for, is refused before any prompt rather than run under another's name.
 - **Not resumable by the watcher.** The registry reports both as `restartable`: a message
-  restarts an ended session, and nothing stops a live one for a pause or wrap-up, so
-  `--review-every-minutes` and `--wrap-up-minutes` stay refused. A slot an earlier Factory
+  restarts an ended session, and nothing stops a live one for a pause or wrap-up. So
+  `--review-every-minutes` is refused, and so is `--wrap-up-minutes` on a lane with a wall
+  cap, which is the only case in which that option does anything. A slot an earlier Factory
   started as the provider's terminal UI is not restarted as a hosted one (exit 70; start a
   hosted session with `--replace-session`).
 - **After the host ends,** `muse resume <id>` or `agy --conversation <id>` reopens the
   same session in the provider's own UI.
-- **What was run.** Both providers against stand-in servers that call no model, through
-  `tmux_lane.sh` and `tmux_lane_message.sh`: launch, a later message, the done line, a
-  restart on the same session, an unknown and a wrong session refused with no prompt and no
-  `session/load`, and the guard-required refusals. Muse also against Muse Code 1.4.20's own
-  server on its echo provider (no model, a throwaway HOME): launch, a later message, a
-  restart on the same session, and an unknown session refused. **Not run:** any model turn
-  or tool call on either provider; Antigravity's real server at all (its frames before a
-  prompt's answer, and its model option names, are taken from the protocol and from
-  recorded handshakes, not from a turn); an approval answered in the window against a real
-  server; the lane's Kindex reaching a real session.
+- **What was run.** Two kinds of evidence, and they are not the same thing.
+  *Stand-in servers that call no model,* both providers, through `tmux_lane.sh` and
+  `tmux_lane_message.sh`: launch, a later message, the done line, a restart on the same
+  session, an unknown and a wrong session refused with no prompt and no `session/load`,
+  stray and unnamed frames settling nothing, a damaged command-id record refused, model and
+  effort confirmed or refused, and every protected launch and restart refused with no run
+  of the provider's program.
+  *Muse Code 1.4.20's own server on its echo provider* (no model, no sign-in used, a
+  throwaway HOME), on an unmanaged lane started with `lane_agent.py run`: start, a later
+  message to the running lane, a second one answered `busy`, host stop, restart on the
+  same session id, each message sent to Muse exactly once and recorded by Muse once, each
+  reply in the lane log, and an unknown session refused on Muse's own error. The adapter's
+  author ran this, and the independent tester ran the same lifecycle separately and it
+  passed.
+- **Not run, and so not claimed.** Any turn on a real subscription model, on either
+  provider. Any tool call, and any approval request answered in the window against a real
+  server. Antigravity's real server with a prompt: what it sends before a prompt's answer,
+  and whether the model name the launcher records matches a session option, are taken from
+  the protocol and from recorded handshakes, not from a turn. A later message arriving
+  while a real Muse turn is running (echo turns are too short to overlap). The lane's
+  Kindex reaching a real session. A hosted lane inside the kernel boundary.
 
-### Muse lanes are Muse Code's own interactive session
+### Earlier terminal route for Muse lanes (history; lanes no longer use it)
+
+This section records how a Muse lane ran before it was hosted through Muse's session
+server, and the evidence gathered then. It does not describe a lane today: no hook file is
+written into the clone, later messages are not held for a person, and an ended session is
+restarted by a message. It is kept because its observations of Muse's own behaviour (a
+project hook file's trust, what a stop report does and does not mean, a hook that fails
+being skipped) still hold and still explain why a hook is not the guard.
 
 A Muse lane runs `muse --workspace <clone>` on the same terminal host, with the operator's
 HOME, sign-in, settings, hooks and MCP servers intact: no `muse exec`, no replaced
@@ -531,7 +563,16 @@ author and independently by the tester on 2026-11-13. It is converted, not accep
   asking the operator a question. Muse refreshes its own sign-in file when it starts; that
   is Muse's doing.
 
-### Antigravity lanes are Antigravity's own interactive session
+### Earlier terminal route for Antigravity lanes (history; lanes no longer use it)
+
+This section records how an Antigravity lane ran before it was hosted through
+Antigravity's session server, and the evidence gathered then, including why an ended
+terminal session was never restarted. It does not describe a lane today: no plugin is
+written into the clone, later messages are not held for a person, and an ended session is
+restarted by a message through `session/resume`. Two things in it still hold: the
+coordinator-seat paragraph (a seat is still Antigravity's own terminal UI, worked by a
+person), and the observations that a failed hook is skipped, which is why a hook is not the
+guard.
 
 An `agy` lane runs `agy` in its clone on the same terminal host, with the operator's HOME,
 sign-in, settings, hooks, plugins and MCP servers intact: no `--print`, no private HOME, no
@@ -776,9 +817,10 @@ start in print mode with a private configuration. Each launch records and prints
 agent's own name: it is empty only for `claude` and `claude-ollama`,
 and `python harness/agents.py describe --agent <lane agent>` prints it. For `cursor-agent`,
 `muse`, `agy` and `codex-interactive` it says what was run and what is still open. The
-registry reports `cursor-agent`, `muse` and `agy` as not resumable by the Factory (a Cursor
-session that has ended is restarted by a lane message, which is a different thing), so wrap-up
-and progress-review pauses, which continue a session, are not offered for them. The rest:
+registry reports `cursor-agent`, `muse` and `agy` as not resumable by the Factory (a Cursor,
+Muse or Antigravity session that has ended is restarted by a lane message, which is a
+different thing), so wrap-up and progress-review pauses, which continue a session, are not
+offered for them. The rest:
 
 | Provider | Established, and from where | Not established |
 |---|---|---|

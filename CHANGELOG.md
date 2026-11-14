@@ -156,11 +156,15 @@ public API is still pre-1.0.
   lane's clone. A later message now reaches a running lane (it was held for a person
   before), an ended session is restarted by a message, and a lane's done line is seen. An
   ended session is re-entered only with `session/resume` and its kept id; any other answer
-  sends no prompt and exits 70, and `session/load` is never sent. This is transport only:
-  a launch or restart that requires a Signet guard or author custody is refused with exit
-  77 before any provider check, because neither provider offers a gate on every tool
-  action. Run against stand-in servers and Muse's echo provider; no model turn has been
-  run through it (`docs/HARNESS.md`).
+  sends no prompt and exits 70, and `session/load` is never sent. This is transport only,
+  for an unprotected lane: a launch or restart that requires a Signet guard, author
+  custody or a kernel boundary is refused with exit 77 before the provider's program is
+  run at all, because neither provider offers a gate on every tool action and the
+  boundary is not qualified around a hosted session. The owner approved the hosted route
+  as acceptable for now. Run against stand-in servers and, for Muse, its own server on its
+  echo provider; no turn on a real model has been run through it for either provider
+  (`docs/HARNESS.md`). This replaces, for lanes, the terminal route the two entries above
+  and the held-message entry below describe.
 - A new round of a lane is no longer started beside an earlier round that is still
   stopping. `tmux_lane.sh launch` decided "finished" by the lane's tmux window alone, and a
   closed window or an ended tmux server can leave the earlier round's wrapper and program
