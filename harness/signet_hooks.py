@@ -6,6 +6,13 @@ existing evaluator, owner HOME, project and session. Empty, malformed, failed an
 decisions deny. Codex/Cursor cannot enforce an ASK in PreToolUse, so it remains a blocked
 decision rather than silently becoming permission. Configuration generation is not activation
 or a proof that a particular installed client loads/enforces hooks.
+
+The hook command is run by the client itself, in the session's workspace and with the client's
+environment, both of which the guarded session can influence. So the command decides nothing
+by where or with what it happens to be run: it starts this program isolated (``START``), this
+program names its own import path (``_dependencies``), and every way the program can fail to
+produce a decision ends in an explicit denial printed by the command itself (``GUARD``), not
+in an exit code a client may treat as "the hook did not work, go ahead".
 """
 from __future__ import annotations
 
@@ -26,6 +33,26 @@ from typing import Any
 SCHEMA = "factory-signet-hook/1"
 CLIENTS = ("claude", "codex", "cursor-agent")
 MAX_INPUT = 2 * 1024 * 1024
+#: What a client is told when this hook cannot decide. Fixed text: nothing of the input, the
+#: evaluator's output or an exception is ever echoed.
+UNAVAILABLE = "Factory Signet hook unavailable or invalid; action blocked."
+#: Interpreter flags the hook command starts this program with: isolated mode (no ``PYTHON*``
+#: variable is read, the user's site directory is not used, neither the working directory nor
+#: the script's directory is put on the import path) and no site start-up (no
+#: ``sitecustomize``, ``usercustomize`` or ``.pth`` file is run). What is left is the standard
+#: library, which is all the program needs until ``_dependencies`` says otherwise.
+START = ("-I", "-S")
+#: The hook command's own last word, as a POSIX shell script. ``$1`` is this client's denial
+#: and the rest is the program's command. The program's output is passed on only when the
+#: program exited 0 and printed something; in every other case (the interpreter or the script
+#: missing or unreadable, an import that failed, an uncaught exception, a signal, silence) the
+#: denial is printed instead, with exit 0, so that what the client receives is always a
+#: decision. Clients differ in what they do with a hook that merely failed, and the one that
+#: documents no rule at all is the reason this does not rest on an exit code. Only shell
+#: keywords, special built-ins and ``printf`` are used, and a ``printf`` function inherited
+#: from the environment is dropped first.
+GUARD = ('unset -f printf 2>/dev/null; deny=$1; shift; out=$("$@") && case $out in ?*) '
+         'printf \'%s\\n\' "$out"; exit 0;; esac; printf \'%s\\n\' "$deny"')
 
 
 def digest(value: Any) -> str:
@@ -282,6 +309,31 @@ def evaluate_host(client: str, payload: Any, address: str, plan_digest: str,
     return translate(client, output, payload["hook_event_name"])
 
 
+def _dependencies() -> None:
+    """The import path for the one decision path that needs more than the standard library.
+
+    Author custody (``author_custody``) is the harness's own code and, through it,
+    ``factory_core`` and its one third-party dependency. Started isolated, this program has
+    none of them on its path, so they are named here: the harness directory, the checkout,
+    and the interpreter's own site-packages directories, each absolute and added as a plain
+    directory (no ``.pth`` file is processed, nothing is imported to do it). The other
+    decision paths import nothing outside the standard library and never call this."""
+
+    import site
+
+    harness = os.path.dirname(os.path.abspath(__file__))
+    # Before Python 3.14, -S leaves sys.prefix at the base interpreter even in a
+    # venv. Resolve that interpreter's own packages without executing site startup.
+    venv = pathlib.Path(sys.executable).absolute().parent.parent
+    packages = list(site.getsitepackages())
+    if (venv / "pyvenv.cfg").is_file():
+        packages.insert(0, str(venv / "lib" /
+            f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"))
+    for entry in (harness, os.path.dirname(harness), *packages):
+        if entry not in sys.path and os.path.isdir(entry):
+            sys.path.append(entry)
+
+
 def configuration(client: str, path: pathlib.Path, expected: str, python: pathlib.Path,
                   *, custody_socket: str | None = None,
                   custody_digest: str | None = None,
@@ -289,7 +341,9 @@ def configuration(client: str, path: pathlib.Path, expected: str, python: pathli
                   author_digest: str | None = None) -> dict:
     """Build candidate client settings; does not install them or approve hook trust."""
     contract(path, expected)
-    arguments = [str(python), str(pathlib.Path(__file__).resolve()),
+    if client not in CLIENTS:
+        raise ValueError("client has no qualified hook configuration")
+    arguments = [str(python), *START, str(pathlib.Path(__file__).resolve()),
                  "--client", client, "--contract", str(path), "--digest", expected]
     if author_config is not None or author_digest is not None:
         if custody_socket is not None or custody_digest is not None:
@@ -307,7 +361,10 @@ def configuration(client: str, path: pathlib.Path, expected: str, python: pathli
                 or not custody_digest or not re.fullmatch(r"[0-9a-f]{64}", custody_digest)):
             raise ValueError("policy custody settings must be a complete host binding")
         arguments += ["--custody-socket", custody_socket, "--custody-digest", custody_digest]
-    command = shlex.join(arguments)
+    # One string that reads the same to ``sh -c`` and to a client that splits it into
+    # arguments itself: the guard script, a name for it, this client's denial, the program.
+    command = shlex.join(["/bin/sh", "-c", GUARD, "factory-signet-hook",
+                          json.dumps(denial(client, UNAVAILABLE)), *arguments])
     if client == "cursor-agent":
         base = {"command": command, "timeout": HOOK_TIMEOUT_S, "failClosed": True}
         return {"version": 1, "hooks": {
@@ -380,6 +437,7 @@ def main(argv: list[str] | None = None) -> int:
             if (not args.author_config or not args.author_digest
                     or args.custody_socket is not None or args.custody_digest is not None):
                 raise ValueError("invalid author custody binding")
+            _dependencies()
             import author_custody
             output = author_custody.evaluate(
                 pathlib.Path(args.author_config), args.author_digest, args.client,
@@ -394,9 +452,11 @@ def main(argv: list[str] | None = None) -> int:
     except NotThisLanesKindex as refusal:
         # Fixed text naming the lane's own server; nothing from the input is echoed.
         output = denial(args.client, str(refusal))
-    except (OSError, ValueError, TypeError, subprocess.SubprocessError):
+    except Exception:  # noqa: BLE001 - whatever went wrong, the answer is a denial
+        # Every failure to decide is a decision: a dependency that would not import, an
+        # evaluator that failed, input that is not what it should be, anything unforeseen.
         # Do not echo input, evaluator stderr, credential values or arbitrary exception text.
-        output = denial(args.client, "Factory Signet hook unavailable or invalid; action blocked.")
+        output = denial(args.client, UNAVAILABLE)
     print(json.dumps(output))
     return 0
 
@@ -422,4 +482,8 @@ def resume_arguments(record: Any) -> str:
 
 
 if __name__ == "__main__":
+    # Nothing is imported by way of the directory this happens to be run in: a relative
+    # import-path entry is read against it. (Started as the hook command starts it, there is
+    # none to begin with; started plainly, an editable install can leave one.)
+    sys.path[:] = [entry for entry in sys.path if os.path.isabs(entry)]
     raise SystemExit(main())
