@@ -824,6 +824,58 @@ through `lane_agent.py`. It is an author-lane adapter and is not accepted.
   started with nothing hosting it is refused a message for the same reason. To continue
   such a conversation the operator uses Codex's own `codex resume <session id>`.
 
+### The Signet guard hook command: how it starts, and what a failure is
+
+A lane that requires a Signet guard gives the client one command to run before each tool
+action (`harness/signet_hooks.py`). The client runs it itself: in the session's workspace,
+which the session can write, and with the client's own environment. Nothing about either
+may decide what the guard does.
+
+- **It starts isolated.** The command starts the program with Python's isolated, no-site
+  flags (`-I -S`): no `PYTHON*` variable is read, no `sitecustomize`, `usercustomize` or
+  `.pth` file runs, the user's site directory is not used, and neither the working
+  directory nor the script's own directory is on the import path. Before this, a
+  `PYTHONPATH` in the client's environment (a lane's `--cache-env PYTHONPATH=<store>` is
+  one way to have one), or a module in a directory named like an editable install's
+  placeholder in the workspace, was imported by the guard.
+- **Its dependencies are named.** The program imports the standard library only, except
+  on the author-custody path, where it first adds the harness directory, the checkout and
+  the interpreter's own site-packages directories, as plain absolute directories.
+- **A failure is a denial the command prints, not an exit code.** The command is a small
+  shell guard around the program. The program's answer is passed on only if the program
+  exited 0 and printed something. Otherwise (no interpreter, no script, a script that does
+  not parse, an import that fails, any uncaught error, a signal, silence) the guard prints
+  the client's own denial and exits 0. Inside the program, any error while deciding is the
+  same denial, a failed import included.
+- **Why not rely on the exit code.** What a client does with a hook that failed, as its
+  public documentation states it (read 2026-11-14, not exercised here):
+
+  | Client | Explicit deny (JSON, exit 0) | Exit 2 | Other failure (non-zero, crash, cannot start) | Timeout |
+  |---|---|---|---|---|
+  | Claude Code | blocks | blocks | **proceeds**, unless the handler sets `onFailure: "block"` (v2.1.295 and later; the Factory sets it) | proceeds, unless `onFailure: "block"` |
+  | Cursor | blocks | blocks | **proceeds**, unless `failClosed: true` (the Factory sets it); invalid JSON blocks either way | as other failures |
+  | Codex | blocks | blocks | **not stated**; no setting makes a failed hook block | not stated |
+
+  So an explicit denial is the one answer all three document as blocking, and for Codex
+  it is the only one. The guard gives that answer for every failure it can see.
+- **What it cannot do.** Deny when the client does not run it: Codex skips a hook it has
+  not been told to trust (the launcher checks that trust before a guarded Codex lane
+  starts), and Claude Code and Cursor have settings that turn hooks off. Outlast a hang:
+  past the client's own timer for the hook, the client's rule above applies (the program's
+  own deadlines end inside the 25 seconds it asks for). And Codex's documentation says some
+  tool paths do not go through the hook at all; a guard on Codex is a guardrail on the
+  paths that do.
+- **What was run.** Synthetic evaluator, the command exactly as configured for each client,
+  from a workspace holding planted `sitecustomize`, `usercustomize`, `json`, `argparse`
+  and `hashlib` modules (in it, in a placeholder-named directory, and on `PYTHONPATH`):
+  allow and deny came out unchanged and nothing planted ran, where the command as it was
+  before ran them and exited 1 with no decision. A denial, exit 0, for: an interpreter
+  that is missing or not executable; one that prints an allow and exits 1, prints nothing,
+  or is ended by a signal; a script that does not parse or is gone; an evaluator that
+  fails; empty, malformed or deeply nested input; a contract changed after configuration;
+  the author-custody path on an interpreter without the dependency; a `printf` shell
+  function inherited from the environment. **Not run:** any real client.
+
 ### Memory isolation, said plainly
 
 A launch records `memory_isolation` and prints it. `lane-only` means the lane sees its
