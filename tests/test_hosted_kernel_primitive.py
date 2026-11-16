@@ -110,7 +110,9 @@ def test_g0_protected_hosted_wrapper_refuses_before_provider(
         ],
         case["env"],
     )
-    expected = 70 if agent == "agy" and not require_signet else 77
+    # macOS reaches the hosted coverage check; elsewhere the public launcher
+    # refuses the unsupported boundary at admission, before any provider runs.
+    expected = 70 if platform.system() == "Darwin" and agent == "agy" and not require_signet else 77
     assert result.returncode == expected, result.stdout + result.stderr
     assert not marker.exists(), "protected hosted gate cannot spawn even preflight"
 

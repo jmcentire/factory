@@ -5,6 +5,7 @@ No implementation inspection, no actual providers, no native sandbox override.
 """
 
 import json
+import platform
 import subprocess
 import sys
 import time
@@ -29,6 +30,7 @@ def eventually(check):
     raise AssertionError("public hosted kernel lifecycle outcome missing")
 
 
+@pytest.mark.skipif(platform.system() != "Darwin", reason="actual macOS hosted kernel lifecycle")
 @pytest.mark.parametrize("agent", ["agy"])
 @pytest.mark.parametrize(
     "tamper",

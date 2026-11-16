@@ -116,6 +116,16 @@ jobs:
       - name: Prove kernel-enforced lane separation
         run: make test-isolation
 
+      - name: Install hosted lifecycle test transport
+        run: command -v tmux >/dev/null || brew install tmux
+
+      - name: Prove hosted kernel admission, attestation and lifecycle
+        run: |
+          python -m pytest tests/test_hosted_kernel_primitive.py \
+            tests/test_hosted_kernel_attestation.py \
+            tests/test_hosted_kernel_future.py \
+            tests/test_hosted_semantic_refusal.py
+
       - name: Prove the signed runtime through preview
         env:
           FACTORY_TESSERA_BIN: ${{ github.workspace }}/tessera/target/release/tessera

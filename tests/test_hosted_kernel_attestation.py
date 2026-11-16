@@ -5,6 +5,7 @@ Only synthetic ACP servers; no model, account, provider configuration or source.
 
 import json
 import os
+import platform
 import subprocess
 import sys
 import tempfile
@@ -133,6 +134,7 @@ def test_incomplete_kernel_coverage_refuses_before_provider(kernel_probe, omit):
     assert not (kernel_probe[1] / "coder-hosted.json").exists()
 
 
+@pytest.mark.skipif(platform.system() != "Darwin", reason="actual macOS child attestation")
 @pytest.mark.parametrize("resume", [None, "11111111-2222-4333-8444-555555555555"])
 def test_complete_profile_attests_actual_child_without_prompt(kernel_probe, resume):
     b, path = policy(kernel_probe)
@@ -213,3 +215,14 @@ def test_direct_provider_checks_refuse_incomplete_code_coverage(kernel_probe, en
         )
     assert not rows(kernel_probe), "incomplete trusted-code protection spawned provider"
     assert result.returncode == (77 if entry == "preflight" else 70), result.stdout + result.stderr
+
+
+@pytest.mark.skipif(platform.system() == "Darwin", reason="unsupported-platform refusal")
+@pytest.mark.parametrize("resume", [None, "11111111-2222-4333-8444-555555555555"])
+def test_complete_profile_refuses_unsupported_backend_before_provider(kernel_probe, resume):
+    b, path = policy(kernel_probe)
+    result = probe(kernel_probe, b, path, resume)
+    assert result.returncode == 70, result.stdout + result.stderr
+    assert "required macOS boundary backend is unavailable" in result.stdout + result.stderr
+    assert not rows(kernel_probe), "unsupported backend must not start the provider"
+    assert not (kernel_probe[1] / "coder-hosted.json").exists()
