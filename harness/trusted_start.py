@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import site
 import sys
 from collections.abc import Mapping
@@ -114,7 +115,14 @@ def complete() -> None:
     working directory, which a lane can write."""
 
     if sys.flags.no_site:
-        for entry in (_HARNESS, os.path.dirname(_HARNESS), *site.getsitepackages()):
+        # Python <3.14 does not resolve a venv prefix when site startup is disabled.
+        # Add its own packages as plain paths without running .pth or customizers.
+        venv = pathlib.Path(sys.executable).absolute().parent.parent
+        packages = list(site.getsitepackages())
+        if (venv / "pyvenv.cfg").is_file():
+            packages.insert(0, str(venv / "lib" /
+                f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"))
+        for entry in (_HARNESS, os.path.dirname(_HARNESS), *packages):
             if entry not in sys.path and os.path.isdir(entry):
                 sys.path.append(entry)
     sys.path[:] = [entry for entry in sys.path if os.path.isabs(entry)]
