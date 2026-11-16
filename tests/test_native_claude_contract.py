@@ -42,7 +42,11 @@ def native_case(tmp_path):
     default_before = (home / '.claude.json').read_bytes()
     target = tmp_path / 'target'
     target.mkdir()
-    env = {**os.environ, 'HOME': str(home), 'CLAUDE_CONFIG_DIR': str(profile),
+    # Preserve only process-launch necessities, never ambient account/provider
+    # credentials, Python startup overrides, or a developer's Factory settings.
+    inherited = {key: os.environ[key] for key in
+                 ('PATH', 'SHELL', 'TMPDIR', 'TERM', 'LANG', 'LC_ALL') if key in os.environ}
+    env = {**inherited, 'HOME': str(home), 'CLAUDE_CONFIG_DIR': str(profile),
            'FACTORY_VALIDATOR_AGENT': 'claude', 'FACTORY_ORCHESTRATOR_AGENT': 'claude',
            'FACTORY_PYTHON': sys.executable, 'ANTHROPIC_API_KEY': 'not-a-real-key',
            'FACTORY_CONFIG': str(tmp_path / 'no-config.toml')}
@@ -215,7 +219,13 @@ def launch(case):
     while time.monotonic() < deadline:
         events = [e for e in read_events(case['log']) if 'argv' in e
                   and e['argv'] != ['auth', 'status', '--json']]
-        if len(events) >= 2:
+        # Provider spawn precedes the wrapper's atomic state publication.
+        # Callers exercise public status/restart only after both owned receipts
+        # exist; status assertions still validate their content independently.
+        root = case['runs'] / 'native-acceptance'
+        receipts_ready = all((root / f'{slot}-persistent.json').is_file()
+                             for slot in ('orchestrator', 'validator'))
+        if len(events) >= 2 and receipts_ready:
             return events
         time.sleep(0.05)
     pytest.fail('Factory reported start but no selected native launcher was observed')
@@ -227,7 +237,7 @@ def test_coordinator_uses_selected_interactive_native_launcher(native_case, laun
         executable = native_case['bin_dir'] / 'cl'
         hidden = native_case['bin_dir'] / 'native-recorder'
         executable.rename(hidden)
-        # This is a synthetic test profile, never Jeremy's real profile.
+        # This is a synthetic test profile, never the operator's real profile.
         (native_case['home'] / '.bash_profile').write_text(
             'cl() { exec ' + shlex.quote(str(hidden)) + ' "$@"; }\n')
         native_case['env']['SHELL'] = '/bin/bash'
@@ -303,7 +313,26 @@ def test_native_conversation_and_restart_keep_identity(native_case, tmp_path):
                          native_case['env'])
     run = json.loads(run_status.stdout)
     assert Path(run['repository']).parent == native_case['runs'].parent
+    original_processes = []
+    for slot in ('orchestrator', 'validator'):
+        record = native_case['runs'] / 'native-acceptance' / f'{slot}-process.json'
+        original_processes.append(json.loads(record.read_text()))
     execute(['tmux', '-L', run['tmux_socket'], 'kill-server'], native_case['env'])
+    # kill-server returns before its old pane wrappers finish handling SIGHUP.
+    # This test covers restart after shutdown, not a concurrent shutdown/start.
+    # Wait for the captured test-owned processes, never a replacement PID or
+    # another user's session, and leave every identity/no-replay assertion intact.
+    def previous_processes_exited():
+        for record in original_processes:
+            for kind in ('worker', 'wrapper'):
+                command = subprocess.run(
+                    ['ps', '-ww', '-p', str(record[kind]['pid']), '-o', 'command='],
+                    capture_output=True, text=True,
+                ).stdout
+                if str(native_case['runs']) in command or str(native_case['bin_dir']) in command:
+                    return False
+        return True
+    wait_for(previous_processes_exited)
     start(native_case)
     resumed = wait_for(lambda: next((e for e in read_events(native_case['log'])
                                    if '--resume' in e.get('argv', [])
@@ -428,18 +457,21 @@ def test_hook_observations_do_not_claim_model_completion(native_case):
 @pytest.mark.parametrize('corruption', ['invalid-json', 'invalid-deliveries'])
 def test_corrupt_saved_state_refuses_restart_without_retyping(native_case, corruption):
     launch(native_case)
-    running = wait_for(lambda: (s if (s := status(native_case)).get('stop_reports', 0)
-                               else None))
+    running = [wait_for(lambda slot=slot: (
+        s if (s := status(native_case, slot)).get('stop_reports', 0) else None
+    )) for slot in ('validator', 'orchestrator')]
     run_result = execute(native_case['base'] + ['status'] + native_case['common'],
                          native_case['env'])
     run = json.loads(run_result.stdout)
     assert Path(run['repository']).parent == native_case['runs'].parent
     assert execute(['tmux', '-L', run['tmux_socket'], 'kill-server'],
                    native_case['env']).returncode == 0
-    for identity in ('worker', 'wrapper'):
-        pid = running[identity]['pid']
-        wait_for(lambda pid=pid: subprocess.run(['ps', '-p', str(pid), '-o', 'pid='],
-                                       capture_output=True).returncode != 0)
+    # Both fixture-owned wrappers must finish before their receipts are corrupted.
+    for saved in running:
+        for identity in ('worker', 'wrapper'):
+            pid = saved[identity]['pid']
+            wait_for(lambda pid=pid: subprocess.run(['ps', '-p', str(pid), '-o', 'pid='],
+                                           capture_output=True).returncode != 0)
     root = native_case['runs'] / 'native-acceptance'
     # Test-owned public state artifacts only. Corrupt both coordinator receipts.
     for slot in ('validator', 'orchestrator'):

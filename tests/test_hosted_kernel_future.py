@@ -4,11 +4,13 @@ Static kernel only; semantic Signet/custody requests remain separately refused.
 No implementation inspection, no actual providers, no native sandbox override.
 """
 
+import importlib.metadata
 import json
 import platform
 import subprocess
 import sys
 import time
+import venv
 from pathlib import Path
 
 import pytest
@@ -74,6 +76,32 @@ def test_kernel_only_hosted_launch_live_message_and_retained_restart(
         "FACTORY_REQUIRE_BOUNDARY",
     }
     case["env"] = {k: v for k, v in case["env"].items() if k in allowed}
+    if tamper in ("editable-injection", "editable-first-injection"):
+        # Model an editable install's relative startup hook in a disposable venv.
+        # No assumptions about the operator's installed packages or .pth files.
+        fixture_venv = tmp_path / "editable-runtime"
+        venv.EnvBuilder(with_pip=False, system_site_packages=False).create(fixture_venv)
+        fixture_python = fixture_venv / "bin/python"
+        version = f"{sys.version_info.major}.{sys.version_info.minor}"
+        site_dir = fixture_venv / f"lib/python{version}/site-packages"
+        # Only declared runtime dependencies and their transitive closure, never
+        # ambient startup hooks or unrelated development packages.
+        for name in ("jsonschema", "attrs", "jsonschema-specifications", "referencing",
+                     "rpds-py", "typing-extensions"):
+            distribution = importlib.metadata.distribution(name)
+            for file in distribution.files or ():
+                top = Path(str(file)).parts[0]
+                if top in ("..", "sitecustomize.py", "usercustomize.py") or top.endswith(".pth"):
+                    continue
+                destination = site_dir / top
+                if not destination.exists():
+                    destination.symlink_to(distribution.locate_file(top))
+        for package in ("factory_core", "factory_runtime"):
+            (site_dir / package).symlink_to(H.parent / package)
+        (site_dir / "fixture-editable.pth").write_text(
+            "import sys; sys.path.append('fixture-editable-startup')\n"
+        )
+        case["env"]["FACTORY_PYTHON"] = str(fixture_python)
     launch(case)
     run = case["runs"] / "native-acceptance"
     denied = tmp_path / "withheld"
@@ -88,11 +116,12 @@ def test_kernel_only_hosted_launch_live_message_and_retained_restart(
         marker = workspace / "trusted-first-launch-injection-executed"
         observed = subprocess.run(
             [case["env"]["FACTORY_PYTHON"], "-c", "import sys,json; print(json.dumps(sys.path))"],
+            env=case["env"],
             capture_output=True,
             text=True,
             check=True,
         )
-        relative = [p for p in json.loads(observed.stdout) if p and not Path(p).is_absolute()]
+        relative = [p for p in json.loads(observed.stdout) if p == "fixture-editable-startup"]
         assert relative
         for item in relative:
             startup = tmp_path / "target" / item
@@ -129,14 +158,17 @@ def test_kernel_only_hosted_launch_live_message_and_retained_restart(
     )
     assert prepared.returncode == 0, prepared.stderr
     workspace = Path(json.loads(prepared.stdout)["repository"])
+    # Plan against the same HOME/interpreter startup surface used by launch.
+    # Framework Python user-site roots depend on HOME, even if absent on disk.
     planned = subprocess.run(
         [
-            sys.executable,
+            case["env"]["FACTORY_PYTHON"],
             str(H / "protocol_host.py"),
             "trust-roots",
             "--control",
             str(run.resolve() / "tmux-lanes"),
         ],
+        env=case["env"],
         capture_output=True,
         text=True,
         check=True,
@@ -198,11 +230,15 @@ log(invocation_guarded=guarded_invocation, invocation_args=args)
         "        log(prompt=p, durable_before_write=snapshots)",
         probe + "\n        log(prompt=p, durable_before_write=snapshots)",
     )
-    # Keep the live reply observable before the separate clean-end transition.
-    # Immediate response+exit is an independent transport acknowledgment race.
+    # Separate live reply from clean exit using a fixture-owned handshake, not
+    # an elapsed-time guess that races a loaded CI host.
     body = body.replace(
         'if (folder / "exit-after-completion").exists():',
-        'if (folder / "exit-after-completion").exists():\n            time.sleep(1)',
+        'if (folder / "exit-after-completion").exists():\n'
+        '            deadline = time.monotonic() + 10\n'
+        '            while not (folder / "allow-completion-exit").exists():\n'
+        '                assert time.monotonic() < deadline, "fixture exit release missing"\n'
+        '                time.sleep(0.01)',
     )
     provider.write_text("#!/usr/bin/python3\n" + body)
     provider.chmod(0o755)
@@ -294,6 +330,7 @@ log(invocation_guarded=guarded_invocation, invocation_args=args)
     live = message()
     assert live.returncode in (0, 75), live.stdout + live.stderr
     eventually(lambda: len([r for r in rows() if "prompt" in r]) == 2)
+    (case["bin_dir"] / "allow-completion-exit").touch()
     eventually(
         lambda: (
             any((run / "tmux-lanes/coder-exits.jsonl").read_text().splitlines())
@@ -301,6 +338,8 @@ log(invocation_guarded=guarded_invocation, invocation_args=args)
             else False
         )
     )
+    # The next launch is a live resumed session, not another requested exit.
+    (case["bin_dir"] / "exit-after-completion").unlink()
     before = len([r for r in rows() if r.get("spawn")])
     if tamper == "changed":
         changed = json.loads(contract.read_text())
@@ -339,19 +378,21 @@ log(invocation_guarded=guarded_invocation, invocation_args=args)
                     "-c",
                     "import sys,json; print(json.dumps(sys.path))",
                 ],
+                env=case["env"],
                 capture_output=True,
                 text=True,
                 check=True,
             )
             relative = [
-                p for p in json.loads(observed_paths.stdout) if p and not Path(p).is_absolute()
+                p for p in json.loads(observed_paths.stdout) if p == "fixture-editable-startup"
             ]
-            assert relative, "this qualification requires the installed editable startup path"
+            assert relative, "synthetic editable startup fixture must be active"
             for item in relative:
                 startup = workspace / item
                 startup.mkdir(parents=True, exist_ok=True)
                 (startup / "sitecustomize.py").write_text(
-                    "open(" + repr(str(marker)) + ", 'w').write('executed')\n"
+                    "import sys,os; open(" + repr(str(marker))
+                    + ", 'w').write(repr({'argv':sys.argv,'cwd':os.getcwd()}))\n"
                 )
         elif tamper == "json-injection":
             (workspace / "json.py").write_text(
