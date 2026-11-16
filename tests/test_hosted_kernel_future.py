@@ -14,6 +14,7 @@ import venv
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
 
 from harness.validator_boundary import Boundary
 from tests.test_hosted_transport_contract import FAKE
@@ -86,9 +87,18 @@ def test_kernel_only_hosted_launch_live_message_and_retained_restart(
         site_dir = fixture_venv / f"lib/python{version}/site-packages"
         # Only declared runtime dependencies and their transitive closure, never
         # ambient startup hooks or unrelated development packages.
-        for name in ("jsonschema", "attrs", "jsonschema-specifications", "referencing",
-                     "rpds-py", "typing-extensions"):
+        pending = ["jsonschema"]
+        installed = set()
+        while pending:
+            name = pending.pop().lower().replace("_", "-")
+            if name in installed:
+                continue
+            installed.add(name)
             distribution = importlib.metadata.distribution(name)
+            for requirement in distribution.requires or ():
+                dependency = Requirement(requirement)
+                if dependency.marker is None or dependency.marker.evaluate({"extra": ""}):
+                    pending.append(dependency.name)
             for file in distribution.files or ():
                 top = Path(str(file)).parts[0]
                 if top in ("..", "sitecustomize.py", "usercustomize.py") or top.endswith(".pth"):
@@ -326,10 +336,19 @@ log(invocation_guarded=guarded_invocation, invocation_args=args)
             cwd=workspace if tamper in ("cwd-injection", "json-injection") else None,
         )
 
+    prior_deliveries = set(state()["deliveries"])
     (case["bin_dir"] / "exit-after-completion").touch()
     live = message()
     assert live.returncode in (0, 75), live.stdout + live.stderr
     eventually(lambda: len([r for r in rows() if "prompt" in r]) == 2)
+    # Provider prompt receipt and a 75 transport result do not establish that
+    # the host durably recorded the reply. Release only this new delivery's stop.
+    def live_reply_recorded():
+        deliveries = state().get("deliveries", {})
+        new_ids = set(deliveries) - prior_deliveries
+        return len(new_ids) == 1 and deliveries[new_ids.pop()].get("response_stop")
+
+    eventually(live_reply_recorded)
     (case["bin_dir"] / "allow-completion-exit").touch()
     eventually(
         lambda: (
