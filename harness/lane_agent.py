@@ -58,6 +58,20 @@ from typing import Any
 _HARNESS_ROOT = str(pathlib.Path(__file__).resolve().parent)
 if _HARNESS_ROOT not in sys.path:
     sys.path.insert(0, _HARNESS_ROOT)
+import trusted_start  # noqa: E402
+
+#: How this program starts, and what is the provider's alone (harness/trusted_start.py).
+PROVIDER_ENV = trusted_start.PROVIDER_ENV
+TRUSTED_STARTUP = trusted_start.TRUSTED_STARTUP
+provider_environment = trusted_start.provider_environment
+
+
+if __name__ == "__main__":
+    # As a program the wrapper is trusted and runs outside any lane's boundary, in the lane's
+    # clone. Only absolute import-path entries are kept: a relative one (the empty entry, or
+    # the placeholder an editable install leaves) is read against the working directory,
+    # where the lane can write, and a module found there would run out here.
+    sys.path[:] = [entry for entry in sys.path if os.path.isabs(entry)]
 
 import agents  # noqa: E402  (harness/agents.py, the harness registry)
 import validator_boundary  # noqa: E402
@@ -410,10 +424,18 @@ Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 def _status(argv: Sequence[str], *, timeout: float, runner: Runner, remediation: str,
             label: str, env: Mapping[str, str] | None = None,
+            cwd: pathlib.Path | None = None,
             ) -> subprocess.CompletedProcess[str]:
     # ``env``: the environment the check is about. Without it the runner uses this process's
     # own, which is the lane's when a launcher runs this under the lane's environment.
-    extra: dict[str, Any] = {} if env is None else {"env": dict(env)}
+    # ``cwd``: where the check runs, when it must be somewhere in particular.
+    extra: dict[str, Any] = {} if env is None else {"env": provider_environment(env)}
+    if env is None and any(os.environ.get(name) == value
+                           for name, value in TRUSTED_STARTUP.items()):
+        # The provider's own command is not given this helper's start-up isolation.
+        extra["env"] = provider_environment(os.environ)
+    if cwd is not None:
+        extra["cwd"] = str(cwd)
     try:
         return runner(
             list(argv),
@@ -444,9 +466,19 @@ def preflight(
     timeout: float = 20.0,
     runner: Runner = subprocess.run,
     billing: str = "plan",
+    boundary_record: object = None,
+    boundary_role: str = "",
+    cwd: pathlib.Path | None = None,
+    control: Sequence[pathlib.Path] = (),
 ) -> str:
     """Return how sign-in was established, or raise PreflightRefused with the exact fix. A plan
-    lane (the default) must be signed in to the operator's plan, not to a per-use API key."""
+    lane (the default) must be signed in to the operator's plan, not to a per-use API key.
+
+    With ``boundary_record`` (a hosted lane under the kernel boundary) the provider's own
+    account command runs inside that boundary, in ``cwd``: its start-up is the provider's
+    code, and no run of it for a bounded lane is left outside. The boundary is first held
+    to what a hosted lane needs of it (``protocol_host.confinement``, with the lane's
+    ``control`` directories when given), here as everywhere."""
 
     chosen = agent(name)
     if name in ("muse", "agy"):
@@ -455,7 +487,8 @@ def preflight(
         import protocol_host
 
         try:
-            protocol_host.refuse_guarded(environ)
+            protocol_host.refuse_guarded(environ, dialect=name,
+                                         boundary=boundary_record is not None)
         except protocol_host.GuardRequired as error:
             raise PreflightRefused(
                 str(error), "choose an agent with a qualified guard for this lane "
@@ -578,8 +611,19 @@ def preflight(
         return "ollama-server-answers"
     if chosen.auth == "agy-plan":
         remediation = "agy   (run it once interactively, as this user, to sign in)"
-        result = _status([chosen.executable, "models"], timeout=timeout, runner=runner,
-                         remediation=remediation, label="agy")
+        check = [chosen.executable, "models"]
+        if boundary_record is not None:
+            import protocol_host
+
+            try:
+                check = protocol_host.confined_argv(
+                    check, boundary_record, boundary_role, cwd or pathlib.Path.cwd(),
+                    control)
+            except protocol_host.BoundaryUnusable as error:
+                raise PreflightRefused(str(error), "supply a boundary contract and digest "
+                                       "that validate for this lane") from None
+        result = _status(check, timeout=timeout, runner=runner,
+                         remediation=remediation, label="agy", cwd=cwd)
         shown = result.stdout + result.stderr
         if result.returncode != 0 or "sign in" in shown.lower():
             raise PreflightRefused("agy is not signed in", remediation)
@@ -871,7 +915,11 @@ def run_lane(
                          "session, or a hosted Muse or Antigravity session, only")
     if prompt is not None and not persistent:
         argv.append(argv_prompt(prompt, pathlib.Path.cwd()))
-    child_env = dict(os.environ)
+    # What the provider's program is given: never this wrapper's own start-up isolation, and
+    # the lane's ``--cache-env`` settings under their own names. Those are the provider's;
+    # this wrapper has them only in the one variable they are carried in.
+    provider_settings = trusted_start.carried(os.environ)
+    child_env = provider_environment(os.environ)
     if session_agent == "claude":
         # The operator's launcher on their subscription ("unset ANTHROPIC_API_KEY && cl"): no
         # API-billing variable the launching shell happened to export reaches Claude Code,
@@ -942,7 +990,16 @@ def run_lane(
                     workspace=pathlib.Path.cwd(),
                     prompt=argv_prompt(prompt, pathlib.Path.cwd()), python=sys.executable,
                     message_id=launch_message_id, api_env=chosen.api_env,
-                    environ=child_env, boundary=boundary_record is not None)
+                    environ=child_env, boundary_record=boundary_record,
+                    boundary_role=boundary_role,
+                    # With a boundary, the provider's server runs inside it and the host
+                    # outside. Everything this wrapper records must then be out of the
+                    # provider's reach too, and the plan refuses a boundary that leaves
+                    # any of it within reach.
+                    control=sorted({log.parent.resolve(), exits.parent.resolve(),
+                                    session_file.parent.resolve(),
+                                    (run_root / "tmux-lanes").resolve()})
+                    if boundary_record is not None and session_file is not None else ())
             elif chosen is not None and chosen.dialect == "codex":
                 # Codex runs lane hooks from its workspace, takes its first message as its
                 # launch argument and later ones through its own queue command.
@@ -997,7 +1054,10 @@ def run_lane(
             # such (77), not a start that could not be made (127).
             import protocol_host
 
-            refused = 77 if isinstance(error, protocol_host.GuardRequired) else 127
+            # A boundary that was handed over and cannot be relied on is a start that
+            # must not be made (70).
+            refused = (77 if isinstance(error, protocol_host.GuardRequired)
+                       else 70 if isinstance(error, protocol_host.BoundaryUnusable) else 127)
             _append(log, f"lane-agent: could not start {argv[0]}: {error}\n".encode())
             marker = f"__LANE_EXIT__ {slot} rc={refused}\n"
             _append(log, marker.encode())
@@ -1007,8 +1067,26 @@ def run_lane(
             native_session.write_bounded(1, marker.encode())
             return refused
         argv = list(native_plan.argv)
-    argv = validator_boundary.model_command(
-        argv, boundary_record, boundary_role, pathlib.Path.cwd())
+    if native and chosen is not None and chosen.dialect in ("muse", "agy"):
+        # A hosted session's host is trusted and stays outside the boundary, as this wrapper
+        # does; it puts only the provider's server inside (protocol_host). Wrapping the host
+        # here would put its records and its socket within the provider's reach.
+        pass
+    else:
+        bounded = validator_boundary.model_command(
+            argv, boundary_record, boundary_role, pathlib.Path.cwd())
+        if bounded is not argv:
+            # The boundary program is trusted code that runs here, outside the boundary and
+            # in the lane's clone, until it becomes the confined command. It is started
+            # isolated: no site start-up, nothing imported by way of the clone.
+            bounded = trusted_start.isolated(bounded)
+        argv = bounded
+    if len(argv) > 1 and os.path.realpath(argv[1]) == os.path.join(
+            _HARNESS_ROOT, "codex_lane_session.py"):
+        # Codex's session driver is the Factory's own program, run here in the lane's clone
+        # and outside the model's boundary, with the environment the provider is given. It
+        # is started isolated too, and names its own import path.
+        argv = [argv[0], *trusted_start.ISOLATED, *argv[1:]]
     stopped = False
     refused_billing = ""
     session_seen = False
@@ -1155,7 +1233,12 @@ def run_lane(
                 _append(log, raw)  # never the pane: that terminal is the program's
                 _watch(raw)
 
-            hosted = native_session.Terminal(argv, env=child_env)
+            # A hosted session's host is trusted and starts the provider's server itself:
+            # it is handed the provider's settings carried, as this wrapper was, not set.
+            host_env = (trusted_start.trusted_environment(child_env, provider_settings)
+                        if chosen is not None and chosen.dialect in ("muse", "agy")
+                        else child_env)
+            hosted = native_session.Terminal(argv, env=host_env)
             process = hosted.process
             register()
             if process.poll() not in {None, 0}:
@@ -1178,7 +1261,7 @@ def run_lane(
                        if chosen is not None and chosen.dialect == "codex" else
                        # A later message goes to the host that owns the session, over its
                        # own socket; the host gives it to the provider's server.
-                       dict(queue_env=child_env, queue_command=functools.partial(
+                       dict(queue_env=host_env, queue_command=functools.partial(
                            protocol_host.queue, sys.executable, protocol_host.record_path(
                                native_dir or log.parent, slot)))
                        if chosen is not None and chosen.dialect in ("muse", "agy") else {}))
@@ -1300,7 +1383,7 @@ def run_lane(
 # directory the lane cannot write: a read-only store, never a credential.
 CORE_SHELL_POLICY = 'shell_environment_policy={inherit="core",ignore_default_excludes=false}'
 RESERVED_ENV = frozenset({"HOME", "USER", "PATH", "TMPDIR", "TERM", "SHELL", "LANG", "CODEX_HOME",
-                          "FACTORY_RUNS_DIR", "HARNESS_RUN_ROOT"})
+                          "FACTORY_RUNS_DIR", "HARNESS_RUN_ROOT", PROVIDER_ENV})
 
 
 @dataclass(frozen=True)
@@ -1323,8 +1406,15 @@ class LaneEnvironment:
                 "runtime_dirs": list(self.runtime_dirs)}
 
     def assignments(self) -> str:
-        return " ".join(shlex.quote(f"{name}={value}")
-                        for name, value in sorted(self.cache_env.items()))
+        """The one assignment the launchers add to the environment they rebuild.
+
+        The settings are the provider's (a ``PYTHONPATH`` among them would otherwise decide
+        what the lane wrapper and its watcher import), so none is set under its own name
+        there: the wrapper sets them on the provider's program only."""
+
+        if not self.cache_env:
+            return ""
+        return shlex.quote(f"{PROVIDER_ENV}={trusted_start.carry(self.cache_env)}")
 
     def notice(self) -> str:
         lines = [f"- {name}={value} is set for your commands; it is a read-only, pre-fetched "
@@ -1409,6 +1499,10 @@ def main(argv: list[str] | None = None) -> int:
     check.add_argument("--agent", required=True)
     check.add_argument("--timeout", type=float, default=20.0)
     check.add_argument("--billing", choices=("plan", "metered"), default="plan")
+    check.add_argument("--boundary-record", type=json.loads, default=None)
+    check.add_argument("--boundary-role", choices=("coder", "tester"), default="")
+    check.add_argument("--cwd", type=pathlib.Path, default=None)
+    check.add_argument("--control", action="append", default=[], type=pathlib.Path)
     environment = commands.add_parser("environment")
     environment.add_argument("--path", required=True)
     environment.add_argument("--cache-env", action="append", default=[])
@@ -1485,7 +1579,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if arguments.command == "preflight":
             how = preflight(arguments.agent, environ=os.environ, timeout=arguments.timeout,
-                            billing=arguments.billing)
+                            billing=arguments.billing,
+                            boundary_record=arguments.boundary_record,
+                            boundary_role=arguments.boundary_role, cwd=arguments.cwd,
+                            control=arguments.control)
             print(how)
             return 0
         wake = _Wake(arguments.ready_channel) if arguments.ready_channel else None

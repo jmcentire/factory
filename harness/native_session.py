@@ -208,11 +208,26 @@ def resolve_launcher(environ: Mapping[str, str], *, executable: str = CLAUDE_PRO
 
 # -- arguments and hooks -------------------------------------------------------------------------
 
+#: How the hook command starts this program: Python's isolated, no-site flags. A provider
+#: runs the command itself, in the session's workspace, which the session can write, and
+#: outside any boundary; so no environment the provider has, no site start-up and no
+#: directory it happens to be run in decides what the command loads. The ``hook`` command
+#: uses the standard library only, which is all that such a start leaves it.
+HOOK_START = ("-I", "-S")
+
+
+def hook_command(python: str, journal: pathlib.Path, dialect: str = "") -> str:
+    """The one command a session is given to run for each lifecycle event."""
+
+    return shlex.join([python, *HOOK_START, str(pathlib.Path(__file__).resolve()), "hook",
+                       *(("--dialect", dialect) if dialect else ()),
+                       "--journal", str(journal)])
+
+
 def hook_settings(journal: pathlib.Path, python: str) -> dict[str, object]:
     """Settings that add one observation hook per lifecycle event and nothing else."""
 
-    command = shlex.join(
-        [python, str(pathlib.Path(__file__).resolve()), "hook", "--journal", str(journal)])
+    command = hook_command(python, journal)
     entry = [{"hooks": [{"type": "command", "command": command, "timeout": 10}]}]
     return {"hooks": {event: entry for event in HOOK_EVENTS}}
 
@@ -653,8 +668,7 @@ def cursor_plan(arguments: Sequence[str], *, executable: str, directory: pathlib
     journal = directory / f"{slot}-native-events.jsonl"
     if journal.is_symlink():
         raise ValueError("symlinked native event journal")
-    command = shlex.join([python, str(pathlib.Path(__file__).resolve()), "hook",
-                          "--dialect", "cursor", "--journal", str(journal)])
+    command = hook_command(python, journal, "cursor")
     hooks: dict[str, list[object]] = {event: [{"command": command}] for event in CURSOR_EVENTS}
     extra = directory / "cursor-hooks.json"
     if extra.exists():
@@ -741,8 +755,7 @@ def muse_plan(arguments: Sequence[str], *, executable: str, directory: pathlib.P
     journal = directory / f"{slot}-native-events.jsonl"
     if journal.is_symlink():
         raise ValueError("symlinked native event journal")
-    command = shlex.join([python, str(pathlib.Path(__file__).resolve()), "hook",
-                          "--dialect", "muse", "--journal", str(journal)])
+    command = hook_command(python, journal, "muse")
     # The one file shape observed to load: an outer "hooks" object keyed by Claude Code's
     # event names. The same object without the outer key is silently ignored by Muse.
     hooks = {event: [{"matcher": "*", "hooks": [{"type": "command", "command": command}]}]
@@ -827,8 +840,7 @@ def agy_plan(arguments: Sequence[str], *, executable: str, directory: pathlib.Pa
                 f"{', '.join(foreign[:5])}, which is the target project's own plugin and is "
                 "not edited or added to, so the lane cannot run as a native session in this "
                 "repository")
-    command = shlex.join([python, str(pathlib.Path(__file__).resolve()), "hook",
-                          "--dialect", "agy", "--journal", str(journal)])
+    command = hook_command(python, journal, "agy")
     # The shape Antigravity's own validator accepts and its loader ran: a named hook set,
     # then event, then a list of command handlers.
     hooks = {"lane": {event: [{"type": "command", "command": command}]
@@ -923,8 +935,7 @@ def codex_plan(arguments: Sequence[str], *, executable: str, directory: pathlib.
     journal = directory / f"{slot}-native-events.jsonl"
     if journal.is_symlink():
         raise ValueError("symlinked native event journal")
-    command = shlex.join([python, str(pathlib.Path(__file__).resolve()), "hook",
-                          "--dialect", "codex", "--journal", str(journal)])
+    command = hook_command(python, journal, "codex")
     hooks = {event: [{"hooks": [{"type": "command", "command": command}]}]
              for event in CODEX_EVENTS}
     manifest = directory / f"{slot}-project-files.json"

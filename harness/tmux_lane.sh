@@ -3,6 +3,18 @@
 # Authentication, native session identity, input separation and explicit spend caps are
 # real boundaries. Model approval, signatures and review-backlog holds are not prerequisites.
 set -euo pipefail
+# The Python helpers this script runs are the Factory's own code, run outside any lane's
+# boundary, from wherever the operator happens to be, which can be a lane's clone. What they
+# import is decided here and by the checkout, from the first one on: never by a variable
+# that happened to be in the caller's environment (a directory named there could hold code
+# a lane was able to write), and never by the working directory. Safe-path mode keeps the
+# working directory off every helper's import path, the helpers' own directory is named
+# instead, and harness/trusted_startup runs first in each and drops any other relative
+# entry.
+unset PYTHONSTARTUP PYTHONHOME PYTHONINSPECT
+_factory_harness="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+export PYTHONSAFEPATH=1 PYTHONPATH="$_factory_harness/trusted_startup:$_factory_harness"
+unset _factory_harness
 # shellcheck source=harness/factory_python.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
@@ -304,23 +316,53 @@ if [ "$ACTION" != "freeze" ]; then
   }
   # Muse and Antigravity are hosted through their own session servers. Neither asks about
   # every action (existing grants and permissive modes are not asked about) and both skip a
-  # hook that fails, so no gate on every tool action and no read isolation is established
-  # for them, and the kernel boundary has not been qualified around a host and its server.
-  # A protected launch (one that requires a Signet guard, author custody or a boundary, by
-  # flag or by a named binding) is refused here: before the provider's sign-in check or any
-  # other run of the provider's program, before any record and before any process.
+  # hook that fails, so no gate on every tool action is established for them. A launch that
+  # requires a Signet guard or author custody (by flag or by a named binding) is refused
+  # here: before the provider's sign-in check or any other run of the provider's program,
+  # before any launch record and before any process. The kernel boundary does not change
+  # that: it confines paths and sockets and decides nothing per action.
+  #
+  # The kernel boundary itself: an Antigravity lane may run under one, with its host
+  # outside and only Antigravity's server inside (protocol_host). A Muse lane may not:
+  # Muse's own shell sandbox cannot be applied inside the boundary, and running Muse with
+  # that sandbox off is not adopted.
+  EARLY_BOUNDARY=null
   case "$AGENT" in muse|agy)
     PROTECTED=""
-    for NAME in FACTORY_REQUIRE_SIGNET FACTORY_REQUIRE_AUTHOR_CUSTODY FACTORY_REQUIRE_BOUNDARY; do
+    for NAME in FACTORY_REQUIRE_SIGNET FACTORY_REQUIRE_AUTHOR_CUSTODY; do
       case "${!NAME:-}" in ""|0) ;; *) PROTECTED="$PROTECTED $NAME" ;; esac
     done
     for NAME in FACTORY_SIGNET_CONTRACT FACTORY_SIGNET_DIGEST FACTORY_AUTHOR_CUSTODY_CONFIG \
-        FACTORY_AUTHOR_CUSTODY_DIGEST FACTORY_BOUNDARY_CONTRACT FACTORY_BOUNDARY_DIGEST; do
+        FACTORY_AUTHOR_CUSTODY_DIGEST; do
       [ -z "${!NAME:-}" ] || PROTECTED="$PROTECTED $NAME"
     done
     [ -z "$PROTECTED" ] || \
-      refuse 77 "a Signet guard, author custody or a boundary is required ($(printf '%s' "$PROTECTED" | cut -c2-)), and none is qualified for a hosted $AGENT session: no gate on every tool action and no read isolation is established for it" \
+      refuse 77 "a Signet guard or author custody is required ($(printf '%s' "$PROTECTED" | cut -c2-)), and neither is qualified for a hosted $AGENT session: no gate on every tool action is established for it, and the kernel boundary is not one" \
         "choose an agent with a qualified guard for this lane (harness/agents.py describe); nothing was started"
+    BOUNDED=""
+    case "${FACTORY_REQUIRE_BOUNDARY:-}" in ""|0) ;; *) BOUNDED="$BOUNDED FACTORY_REQUIRE_BOUNDARY" ;; esac
+    for NAME in FACTORY_BOUNDARY_CONTRACT FACTORY_BOUNDARY_DIGEST; do
+      [ -z "${!NAME:-}" ] || BOUNDED="$BOUNDED $NAME"
+    done
+    if [ -n "$BOUNDED" ] && [ "$AGENT" = muse ]; then
+      refuse 77 "a kernel boundary is required ($(printf '%s' "$BOUNDED" | cut -c2-)), and a hosted muse session is refused under one: Muse's own shell sandbox cannot be applied inside the boundary (macOS forbids a second sandbox), and running Muse with that sandbox off is not adopted, because the boundary leaves IP egress open and would not keep Muse's own network policy for shell commands" \
+        "run this lane without the boundary, or choose another agent for it; nothing was started"
+    fi
+    if [ -n "$BOUNDED" ]; then
+      # Antigravity under a boundary. The boundary is admitted, and held to what a hosted
+      # lane needs of it, here: before the provider's program is run for any reason. A
+      # contract that is missing, changed, or that leaves the lane's control records or the
+      # code the trusted host runs within the provider's reach, starts nothing.
+      EARLY_BOUNDARY=$("$FACTORY_PYTHON" "$D/validator_boundary.py" select-lane \
+        --role "$ROLE" --cwd "$REPOSITORY" 2>/dev/null) || \
+        refuse 77 "author boundary admission failed" \
+          "supply a boundary contract and its digest that validate for this lane; nothing was started"
+      BOUNDARY_WHY=$("$FACTORY_PYTHON" "$D/protocol_host.py" check-boundary \
+        --boundary-record "$EARLY_BOUNDARY" --boundary-role "$ROLE" --workspace "$REPOSITORY" \
+        --control "$TMUX_ROOT" --control "$TMUX_ROOT/$SLOT-agent-home" 2>&1 >/dev/null) || \
+        refuse 70 "${BOUNDARY_WHY#hosted-session: }" \
+          "python harness/protocol_host.py trust-roots --control $TMUX_ROOT --control $TMUX_ROOT/$SLOT-agent-home lists what the contract must cover; nothing was started"
+    fi
     ;;
   esac
   [ ! -s "$EVENTS" ] || refuse 64 "slot $SLOT was already launched in this run" \
@@ -528,7 +570,7 @@ PY
     IFS= read -r MIN_COMMITS && IFS= read -r WRAP_S && IFS= read -r REVIEW_S; } <<< "$CAPS" ||
     refuse 70 "lane caps could not be read back"
 
-  REPOSITORY_RECEIPT=$(PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" \
+  REPOSITORY_RECEIPT=$(PYTHONPATH="$PYTHONPATH:$REPO_ROOT" "$FACTORY_PYTHON" \
     "$REPO_ROOT/harness/lane_repository.py" validate --source "$REPOSITORY") || \
     refuse 70 "the lane repository is not a standalone clone" \
       "give each lane and each parallel instance its own clone (git clone <source> <dir>), never a git worktree: the Codex sandbox blocks writes to the parent repository's git directory"
@@ -567,7 +609,7 @@ PY
     # .muse/hooks.json or .agents/plugins/lane is no obstacle and is not looked for.
   fi
   if [ "$ACTION" = launch ]; then
-    PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" "$D/role_inputs.py" verify \
+    PYTHONPATH="$PYTHONPATH:$REPO_ROOT" "$FACTORY_PYTHON" "$D/role_inputs.py" verify \
       --runs "$RUNS_ARG" --run "$RUN" --role "$ROLE" --repo "$REPOSITORY" \
       ${REPLACE_REASON:+--replacing} >/dev/null || \
       refuse 70 "author inputs are not the prepared role projection" \
@@ -648,8 +690,12 @@ PY
   SAFE_SHELL="${SHELL:-/bin/bash}"
   SAFE_LANG="${LANG:-en_US.UTF-8}"
   SAFE_CODEX_HOME="${CODEX_HOME:-$SAFE_HOME/.codex}"
+  # A rebuilt environment starts a trusted Python helper too, so it carries the same
+  # start-up isolation as the helpers above (see the top of this script). The helper keeps
+  # it to itself: lane_agent.py passes neither variable on to a provider's program.
   LANE_ENV=(env -i HOME="$SAFE_HOME" USER="$SAFE_USER" PATH="$SAFE_PATH" TMPDIR="$SAFE_TMPDIR"
     TERM="$SAFE_TERM" SHELL="$SAFE_SHELL" LANG="$SAFE_LANG" CODEX_HOME="$SAFE_CODEX_HOME"
+    PYTHONSAFEPATH=1 PYTHONPATH="$D/trusted_startup:$D"
     ${CLAUDE_CONFIG_DIR:+CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR"})
 
   # A codex lane runs with the operator's own Codex configuration: nothing of it is ignored
@@ -704,8 +750,14 @@ PY
   set +e
   PREFLIGHT_BILLING=plan
   [ "$METERED" != true ] || PREFLIGHT_BILLING=metered
+  # Under the kernel boundary (a hosted Antigravity lane) the provider's account check runs
+  # inside that boundary, in the lane's clone, and so do the contract check's runs below.
+  CONFINED_PREFLIGHT=()
+  [ "$EARLY_BOUNDARY" = null ] || CONFINED_PREFLIGHT=(--boundary-record "$EARLY_BOUNDARY" \
+    --boundary-role "$ROLE" --cwd "$REPOSITORY" \
+    --control "$TMUX_ROOT" --control "$TMUX_ROOT/$SLOT-agent-home")
   AUTH=$("${LANE_ENV[@]}" "$FACTORY_PYTHON" "$D/lane_agent.py" preflight --agent "$AGENT" \
-    --billing "$PREFLIGHT_BILLING" 2>&1)
+    --billing "$PREFLIGHT_BILLING" ${CONFINED_PREFLIGHT[@]+"${CONFINED_PREFLIGHT[@]}"} 2>&1)
   AUTH_RC=$?
   set -e
   if [ "$AUTH_RC" -ne 0 ]; then
@@ -718,7 +770,10 @@ PY
 
   # The agent's CLI contract, before anything is written (harness/agent_contract.sh, which
   # setup also runs to confirm or update an agent before a run).
-  CONTRACT_REPORT=$("$D/agent_contract.sh" "$AGENT" "$AGENT_EXECUTABLE" "$PERSISTENT" 2>&1) || \
+  CONTRACT_REPORT=$(FACTORY_CONTRACT_BOUNDARY_RECORD="$EARLY_BOUNDARY" \
+    FACTORY_CONTRACT_BOUNDARY_ROLE="$ROLE" FACTORY_CONTRACT_WORKSPACE="$REPOSITORY" \
+    FACTORY_CONTRACT_CONTROL="$TMUX_ROOT"$'\n'"$TMUX_ROOT/$SLOT-agent-home" \
+    "$D/agent_contract.sh" "$AGENT" "$AGENT_EXECUTABLE" "$PERSISTENT" 2>&1) || \
     refuse 70 "$CONTRACT_REPORT" \
       "update that executable (its own update command, brew or npm), or put a current one first on PATH"
   CLI_CONTRACT=${CONTRACT_REPORT%%$'\n'*}
@@ -795,7 +850,7 @@ PY
   printf -v CLOCK_CMD '%q %q remaining --root %q --slot %q' \
     "$FACTORY_PYTHON" "$D/lane_watchdog.py" "$ROOT" "$SLOT"
   RESUMABLE="$AGENT_RESUMABLE"
-  PROMPT_DIGEST=$(LANE_PROTOCOL_NOTE="$PROTOCOL_NOTE" PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" - "$TASK_COPY" "$PROMPT" "$ROLE" "$SLOT" "$STANDARD_BLOCK" \
+  PROMPT_DIGEST=$(LANE_PROTOCOL_NOTE="$PROTOCOL_NOTE" PYTHONPATH="$PYTHONPATH:$REPO_ROOT" "$FACTORY_PYTHON" - "$TASK_COPY" "$PROMPT" "$ROLE" "$SLOT" "$STANDARD_BLOCK" \
     "$LANE_ENV_NOTICE" "$WALL_CAP_S" "$WRAP_S" "$REVIEW_S" "$RESUMABLE" "$CLOCK_CMD" \
     "$REPOSITORY" "$BRIEF_MANIFEST" "$ROOT" "$D" <<'PY'
 import hashlib, json, os, pathlib, sys
@@ -940,6 +995,11 @@ PY
     ) || refuse 77 "author private runtime cannot be isolated"
     KINDEX_HOME="$PRIVATE_RUNTIME/kindex"
     AGENT_HOME="$PRIVATE_RUNTIME/agent"
+    # A hosted Antigravity session's host runs outside the boundary, and its journal, its
+    # record and its socket are what the lane's reports rest on. They stay in the run's own
+    # control tree, which the boundary keeps from the provider, and never go into the clone.
+    # (The lane's Kindex home stays in the clone: the provider's own child server writes it.)
+    [ "$AGENT" != agy ] || AGENT_HOME="$TMUX_ROOT/$SLOT-agent-home"
   fi
   # Kindex scoped to this lane's own copy of the target's .kin (harness/lane_kindex.py).
   SEED_ARGS=()
@@ -1156,7 +1216,18 @@ PY
   printf -v ENV_PREFIX 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q FACTORY_RUNS_DIR=%q HARNESS_RUN_ROOT=%q' \
     "$SAFE_HOME" "$SAFE_USER" "$LANE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
     "$FACTORY_RUNS_ROOT" "$ROOT"
-  # Agents without a shell policy (cursor-agent) read the cache variables from their own env.
+  # The lane wrapper and the watcher are trusted Python programs started from this rebuilt
+  # environment, the wrapper in the lane's clone. They start isolated like every helper of
+  # this script: the working directory is on neither's import path and
+  # harness/trusted_startup runs first in each. The wrapper removes both variables from
+  # what it hands the provider's program, so the lane's own environment is unchanged.
+  printf -v STARTUP_ENV ' PYTHONSAFEPATH=1 PYTHONPATH=%q' "$D/trusted_startup:$D"
+  ENV_PREFIX+="$STARTUP_ENV"
+  # Agents without a shell policy (cursor-agent) read the cache variables from their own
+  # environment. Those settings are the provider's and nobody else's: they travel in one
+  # variable (FACTORY_LANE_PROVIDER_ENV), and the wrapper sets them, under their own names,
+  # on the provider's program only. A PYTHONPATH among them therefore decides nothing about
+  # what the wrapper, the watcher or a session's host imports.
   ENV_PREFIX+="${LANE_ENV_ASSIGN:+ $LANE_ENV_ASSIGN}"
   printf -v SOCKET_ENV " FACTORY_TMUX_SOCKET=%q" "$FACTORY_TMUX_SOCKET"
   ENV_PREFIX+="$SOCKET_ENV"
@@ -1430,7 +1501,7 @@ for MANIFEST in "$TMUX_ROOT/$SLOT-agent-home/$SLOT-project-files.json" \
   }
 done
 
-EXPORT=$(PYTHONPATH="$REPO_ROOT" "$FACTORY_PYTHON" "$REPO_ROOT/harness/lane_repository.py" freeze \
+EXPORT=$(PYTHONPATH="$PYTHONPATH:$REPO_ROOT" "$FACTORY_PYTHON" "$REPO_ROOT/harness/lane_repository.py" freeze \
   --source "$REPOSITORY" --store "$TMUX_ROOT/snapshots" --durable-through "$ROOT" \
   --projection-conf "${HARNESS_PROJECTION_CONF:-$FACTORY_WORKDIR/.factory/projection.conf}") || exit $?
 PLAN_GAPS=null

@@ -16,6 +16,14 @@ _HARNESS_ROOT = str(pathlib.Path(__file__).resolve().parent)
 if _HARNESS_ROOT not in sys.path:
     sys.path.insert(0, _HARNESS_ROOT)
 
+import trusted_start  # noqa: E402
+
+if __name__ == "__main__":
+    # As a program this is trusted and runs outside the model's boundary, in the lane's
+    # clone. The lane wrapper starts it isolated; its import path is named here, before
+    # anything else is imported, and holds no entry read against the working directory.
+    trusted_start.complete()
+
 import codex_hook_admission  # noqa: E402
 import validator_boundary  # noqa: E402
 from lane_dialogue import (  # noqa: E402
@@ -209,8 +217,13 @@ def run_turn(
         codex_hook_admission.check_command(command, pathlib.Path.cwd())
     except codex_hook_admission.HookAdmissionError as exc:
         raise SessionError(str(exc)) from exc
-    command = validator_boundary.model_command(
+    bounded = validator_boundary.model_command(
         command, boundary_record, (role or "").split("-", 1)[0], pathlib.Path.cwd())
+    if bounded is not command:
+        # The boundary program is trusted and runs here until it becomes the confined
+        # command: started isolated, it imports nothing by way of the lane's clone.
+        bounded = trusted_start.isolated(bounded)
+    command = bounded
     event_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     event_descriptor = os.open(
         event_path,

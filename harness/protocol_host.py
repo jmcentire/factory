@@ -54,7 +54,19 @@ import uuid
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-import native_session
+if __name__ == "__main__":
+    # As a program this is trusted and runs outside any boundary, in the lane's clone. Only
+    # absolute import-path entries are kept: a relative one (the empty entry, or the
+    # placeholder an editable install leaves) is read against the working directory, where
+    # a lane can write. (Imported, the importing program's path is its own business.)
+    # It is started isolated (``-I -S``: no site start-up, its own directory not implied),
+    # so its own directory is named here.
+    sys.path[:] = [os.path.dirname(os.path.abspath(__file__)),
+                   *(entry for entry in sys.path if os.path.isabs(entry))]
+
+import native_session  # noqa: E402
+import trusted_start  # noqa: E402
+import validator_boundary  # noqa: E402
 
 SCHEMA = "factory-hosted-session/1"
 #: The lane's dialect names, and the protocol each provider's server speaks.
@@ -80,40 +92,276 @@ class Refused(Exception):
 
 
 class GuardRequired(ValueError):
-    """A guard or custody is required of this start, and a hosted session has neither."""
+    """Something is required of this start that a hosted session does not have (exit 77)."""
 
 
-#: What makes a lane a protected one: a flag that is set, or a binding that is named. The
-#: three families are the guard, author custody, and the kernel boundary. None of them is
-#: qualified around a hosted session (a host program and the provider's server under it).
-GUARD_FLAGS = ("FACTORY_REQUIRE_SIGNET", "FACTORY_REQUIRE_AUTHOR_CUSTODY",
-               "FACTORY_REQUIRE_BOUNDARY")
+class BoundaryUnusable(ValueError):
+    """A boundary was handed to this start and cannot be relied on as handed (exit 70)."""
+
+
+#: What requires a Signet guard or author custody of a lane: a flag that is set, or a binding
+#: that is named. Neither is qualified for any hosted session.
+GUARD_FLAGS = ("FACTORY_REQUIRE_SIGNET", "FACTORY_REQUIRE_AUTHOR_CUSTODY")
 GUARD_BINDINGS = ("FACTORY_SIGNET_CONTRACT", "FACTORY_SIGNET_DIGEST",
-                  "FACTORY_AUTHOR_CUSTODY_CONFIG", "FACTORY_AUTHOR_CUSTODY_DIGEST",
-                  "FACTORY_BOUNDARY_CONTRACT", "FACTORY_BOUNDARY_DIGEST")
+                  "FACTORY_AUTHOR_CUSTODY_CONFIG", "FACTORY_AUTHOR_CUSTODY_DIGEST")
+#: What requires the kernel boundary of a lane.
+BOUNDARY_FLAGS = ("FACTORY_REQUIRE_BOUNDARY",)
+BOUNDARY_BINDINGS = ("FACTORY_BOUNDARY_CONTRACT", "FACTORY_BOUNDARY_DIGEST")
+#: The hosted providers that may run inside the kernel boundary. Antigravity only. Muse is
+#: not: its own shell sandbox cannot be applied inside the boundary (macOS forbids a second
+#: sandbox), and Muse with its sandbox off is not adopted, because the boundary leaves IP
+#: egress open and so would not keep Muse's own network policy for shell commands.
+BOUNDED_DIALECTS = ("agy",)
 
 
-def refuse_guarded(environ: Mapping[str, str], *, boundary: bool = False) -> None:
-    """Refuse a hosted start that a guard, custody or a boundary is required of.
-
-    ``boundary`` says the caller was handed a boundary record for this start.
+def refuse_guarded(environ: Mapping[str, str], *, dialect: str = "",
+                   boundary: bool = False, starting: bool = True) -> None:
+    """Refuse a hosted start that is required to have what a hosted session does not.
 
     This is the authority for that refusal: every way of starting a hosted session comes
     through ``plan`` or ``run``, and both call it before anything is spawned or recorded.
     The launcher's own refusal only says the same thing earlier. Fail closed: a flag set to
-    anything but empty or ``0`` is a requirement.
+    anything but empty or ``0`` is a requirement, and so is any named binding.
+
+    - A Signet guard or author custody: refused for every hosted session, with or without a
+      boundary. The kernel boundary confines paths and sockets; it decides nothing per
+      action and is no substitute for either.
+    - The kernel boundary: refused for a provider not in ``BOUNDED_DIALECTS``. For one that
+      is, a start (``starting``) that is required to be bounded and was handed no boundary
+      record is refused: a session is never started unbounded where a boundary is required.
+
+    ``boundary`` says the caller was handed a boundary record for this start.
     """
 
     named = [name for name in GUARD_FLAGS if environ.get(name, "") not in ("", "0")]
     named += [name for name in GUARD_BINDINGS if environ.get(name)]
-    if boundary:
-        named.append("a boundary record")
     if named:
         raise GuardRequired(
-            "a guard, author custody or a boundary is required (" + ", ".join(named) + "), "
-            "and none is qualified for a hosted Muse or Antigravity session: no gate on "
-            "every tool action and no read isolation is established for it. Nothing was "
+            "a guard or author custody is required (" + ", ".join(named) + "), and neither "
+            "is qualified for a hosted Muse or Antigravity session: no gate on every tool "
+            "action is established for it, and the kernel boundary is not one. Nothing was "
             "started")
+    asked = [name for name in BOUNDARY_FLAGS if environ.get(name, "") not in ("", "0")]
+    asked += [name for name in BOUNDARY_BINDINGS if environ.get(name)]
+    if boundary:
+        asked.append("a boundary record")
+    if not asked:
+        return
+    if dialect not in BOUNDED_DIALECTS:
+        raise GuardRequired(
+            "a kernel boundary is required (" + ", ".join(asked) + "), and this hosted "
+            "session is refused under one. For Muse: its own shell sandbox cannot be "
+            "applied inside the boundary (macOS forbids a second sandbox), and running it "
+            "with that sandbox off is not adopted, because the boundary leaves IP egress "
+            "open and would not keep Muse's own network policy for shell commands. Nothing "
+            "was started")
+    if starting and not boundary:
+        raise GuardRequired(
+            "a kernel boundary is required (" + ", ".join(asked) + ") and no boundary "
+            "record was handed to this start; a hosted session is never started unbounded "
+            "where one is required. Nothing was started")
+
+
+def trust_roots(launch_dir: pathlib.Path | None = None) -> list[pathlib.Path]:
+    """Every place the trusted side loads code from when it starts: this checkout, the
+    interpreter's own trees, every entry of the import path as this interpreter actually
+    has it (site-packages, anything a ``.pth`` file or ``PYTHONPATH`` added), the user's
+    site directory where it is in use (whether or not it exists yet), and ``launch_dir``
+    when a caller has one that its helpers import from. (The lane launchers have none:
+    their helpers never import by way of the working directory, ``harness/trusted_startup``.)
+
+    A provider that could write into any of them, or create one that is missing, could run
+    code outside the boundary the next time the trusted side starts, so each must be out of
+    its reach.
+    """
+
+    import site
+
+    roots = {pathlib.Path(__file__).resolve().parent.parent,
+             pathlib.Path(os.path.realpath(sys.executable)).parent}
+    for value in (sys.prefix, sys.base_prefix, sys.exec_prefix, sys.base_exec_prefix,
+                  *site.getsitepackages(), *(entry for entry in sys.path if entry)):
+        roots.add(pathlib.Path(value).resolve())
+    if site.ENABLE_USER_SITE:
+        roots.add(pathlib.Path(site.getusersitepackages()).resolve())
+    if launch_dir is not None:
+        roots.add(pathlib.Path(launch_dir).resolve())
+    return sorted(roots)
+
+
+#: Python flags for a trusted program started in a lane's clone: isolated mode and no site.
+ISOLATED = trusted_start.ISOLATED
+_isolated = trusted_start.isolated
+
+
+def _within(path: pathlib.Path, roots: Sequence[pathlib.Path]) -> bool:
+    return any(path == root or path.is_relative_to(root) for root in roots)
+
+
+#: How many entries of an uncovered tree are examined before it is called too large to
+#: establish, which counts as within reach.
+REACH_LIMIT = 100000
+
+
+def _reachable(root: pathlib.Path) -> str | None:
+    """A path at or under ``root`` that this user could change, or None if there is none.
+
+    The whole tree is looked at, not its top: a tree another user owns can hold a directory
+    this one may write. A path that does not exist is within reach if the nearest directory
+    that does exist is. A symlink that leaves the tree is followed one step, to what it
+    names. What cannot be examined, and a tree too large to examine, count as within reach.
+    """
+
+    uid = os.getuid()
+
+    def mine(path: str) -> bool:
+        try:
+            status = os.lstat(path)
+        except OSError:
+            return True
+        return status.st_uid == uid or (not os.path.islink(path) and os.access(path, os.W_OK))
+
+    top = str(root)
+    while not os.path.lexists(top):
+        parent = os.path.dirname(top)
+        if parent == top:
+            return top
+        top = parent
+    if top != str(root):
+        return top if mine(top) else None
+    if mine(top):
+        return top
+    pending, seen = [top], 0
+    while pending:
+        current = pending.pop()
+        try:
+            entries = list(os.scandir(current))
+        except OSError:
+            return current
+        for entry in entries:
+            seen += 1
+            if seen > REACH_LIMIT:
+                return f"{root} (too large to establish)"
+            if mine(entry.path):
+                return entry.path
+            if entry.is_symlink():
+                target = os.path.realpath(entry.path)
+                if not _within(pathlib.Path(target), [root]) and mine(target):
+                    return target
+            elif entry.is_dir(follow_symlinks=False):
+                pending.append(entry.path)
+    return None
+
+
+def confinement(record: object, role: str, workspace: pathlib.Path,
+                control: Sequence[pathlib.Path], launch_dir: pathlib.Path | None = None,
+                ) -> tuple[dict, validator_boundary.Boundary]:
+    """Check a boundary before anything is spawned under it, and that it protects what the
+    trusted side depends on. Returns the validated record and the parsed boundary.
+
+    The contract and digest are validated as every bounded lane's are
+    (``validator_boundary.validate_lane_record``). Beyond that, a hosted session adds a
+    trusted program outside the boundary, so the contract must itself put out of the
+    provider's reach, and is refused if it does not:
+
+    - every directory in ``control`` (the lane's journals, the host's record with its socket
+      secret, its command ids, its socket): under a root the boundary denies reading, which
+      it also denies writing;
+    - every place in ``trust_roots`` (with ``launch_dir``, when a launcher asks) that this
+      user could change anywhere within: under a root the boundary denies writing.
+
+    Nothing is assumed from how a contract was provisioned: one that leaves any of these
+    out is refused here, by name.
+    """
+
+    try:
+        checked = validator_boundary.validate_lane_record(record, role, workspace)
+        if checked is None:
+            raise validator_boundary.BoundaryError("no boundary record")
+        with open(checked["contract"], encoding="utf-8") as stream:
+            boundary = validator_boundary.Boundary.parse(json.load(stream))
+    except (validator_boundary.BoundaryError, OSError, ValueError, TypeError,
+            KeyError) as error:
+        raise BoundaryUnusable(f"the kernel boundary cannot be used: {error}") from None
+    unwritable = (*boundary.denied_reads, *boundary.protected_writes)
+    for path in dict.fromkeys(pathlib.Path(item).resolve() for item in control):
+        if not _within(path, boundary.denied_reads):
+            raise BoundaryUnusable(
+                f"the kernel boundary does not keep the lane's control records from the "
+                f"provider: {path} is not under a root it denies reading")
+    for root in trust_roots(launch_dir):
+        if _within(root, unwritable):
+            continue
+        found = _reachable(root)
+        if found is not None:
+            raise BoundaryUnusable(
+                f"the kernel boundary does not protect what the trusted host runs from: "
+                f"{root} is not under a root it denies writing, and {found} can be changed "
+                "by this user (`protocol_host.py trust-roots` lists what a contract must "
+                "cover)")
+    return checked, boundary
+
+
+def confined_argv(argv: Sequence[str], record: object, role: str,
+                  workspace: pathlib.Path, control: Sequence[pathlib.Path] = ()) -> list[str]:
+    """One run of the provider's program inside the boundary, for the runs that are not its
+    session server (its account check, its version, its help). Every run of the provider's
+    program for a bounded lane goes inside: its start-up is the provider's code too.
+
+    The boundary is held to the same things here as for the server (``confinement``): a
+    contract that validates and yet leaves the trusted side's code, or the control
+    directories named, within the provider's reach is refused before the command is built.
+    No caller is relied on to have checked."""
+
+    confinement(record, role, workspace, control)
+    try:
+        return _isolated(validator_boundary.model_command(list(argv), record, role, workspace))
+    except (validator_boundary.BoundaryError, OSError, ValueError, TypeError,
+            KeyError) as error:
+        raise BoundaryUnusable(f"the kernel boundary cannot be used: {error}") from None
+
+
+#: Run inside the boundary, as the very process that becomes the provider's server, before
+#: that program exists: it tries what the boundary must stop, says what the kernel
+#: answered, and then becomes the server. It is a shell script on the trusted host's command
+#: line, run by the system's own shell and tools: nothing of it is in a file the provider
+#: could reach, and it needs nothing of the Factory's (so a contract may deny the provider
+#: the Factory's checkout and interpreter outright).
+#: Arguments: the working directory; a count and that many directories to list; a count
+#: and that many directories to create a file in; a count and that many sockets to connect
+#: to; ``--``; the provider's command.
+#: Listing and creating count as denied only on the kernel's own "Operation not permitted".
+#: A connection counts as denied when it is not made: the kernel refuses that one without a
+#: word the tools pass on, so the host first shows, from outside, that the same socket can
+#: be connected to (``Host``), which leaves the boundary as the only difference.
+_ATTEST = r"""
+cwd=$1; shift
+out="factory_confinement $$"
+verdict() { case "$1" in *"Operation not permitted"*) echo denied ;; *) echo error ;; esac; }
+n=$1; shift; i=0
+while [ "$i" -lt "$n" ]; do
+  p=$1; shift
+  if e=$(/bin/ls "$p" 2>&1 >/dev/null); then a=allowed; else a=$(verdict "$e"); fi
+  out="$out r$i=$a"; i=$((i+1))
+done
+n=$1; shift; i=0
+while [ "$i" -lt "$n" ]; do
+  p=$1; shift; f="$p/.factory-confinement-probe-$$"
+  if e=$( ( : > "$f" ) 2>&1 ); then /bin/unlink "$f"; a=allowed; else a=$(verdict "$e"); fi
+  out="$out w$i=$a"; i=$((i+1))
+done
+n=$1; shift; i=0
+while [ "$i" -lt "$n" ]; do
+  p=$1; shift
+  if ( cd "${p%/*}" && /usr/bin/nc -w 2 -U "${p##*/}" </dev/null ) >/dev/null 2>&1; then a=allowed
+  else a=denied; fi
+  out="$out c$i=$a"; i=$((i+1))
+done
+shift
+cd "$cwd" || exit 126
+printf '%s\n' "$out"
+exec "$@"
+"""
 
 
 def uuid7() -> str:
@@ -216,7 +464,8 @@ def plan(arguments: Sequence[str], *, dialect: str, executable: str,
          python: str = sys.executable, message_id: str = "",
          api_env: Sequence[str] = (),
          environ: Mapping[str, str] | None = None,
-         boundary: bool = False) -> native_session.Plan:
+         boundary_record: object = None, boundary_role: str = "",
+         control: Sequence[pathlib.Path] = ()) -> native_session.Plan:
     """A start of a hosted session, as the lane wrapper's terminal driver takes any start.
 
     The program the wrapper runs is this file; the provider's server is its child. The
@@ -226,7 +475,12 @@ def plan(arguments: Sequence[str], *, dialect: str, executable: str,
     Nothing is written into the lane's repository.
     """
 
-    refuse_guarded(os.environ if environ is None else environ, boundary=boundary)
+    refuse_guarded(os.environ if environ is None else environ, dialect=dialect,
+                   boundary=boundary_record is not None)
+    if boundary_record is not None:
+        # Before anything is recorded: the boundary handed to this start is one the lane can
+        # be held to, for the host's own files and for the wrapper's (``control``).
+        confinement(boundary_record, boundary_role, workspace, [directory, *control])
     settings = translate(dialect, arguments)
     resumed = bool(settings["resume"])
     if resumed and not message_id:
@@ -257,7 +511,11 @@ def plan(arguments: Sequence[str], *, dialect: str, executable: str,
                 "body_sha256": native_session.text_digest(prompt),
                 **({"message_id": message_id} if message_id else {})}
     protocol = PROTOCOL[dialect]
-    command = [python, str(pathlib.Path(__file__).resolve()), "run",
+    # The host is a trusted program started in the lane's clone. It is started isolated:
+    # no site start-up (so no ``.pth`` entry and no ``sitecustomize`` looked for), no
+    # variable honoured, nothing imported by way of the clone. It needs the standard
+    # library and this directory, nothing else.
+    command = [python, *ISOLATED, str(pathlib.Path(__file__).resolve()), "run",
                "--protocol", protocol, "--journal", str(journal),
                "--record", str(record_path(directory, slot)),
                "--workspace", str(pathlib.Path(settings["workspace"] or workspace).resolve())]
@@ -274,6 +532,11 @@ def plan(arguments: Sequence[str], *, dialect: str, executable: str,
     servers = directory / "agy-mcp.json"
     if protocol == "acp" and servers.exists():
         command += ["--mcp-file", str(servers)]
+    if boundary_record is not None:
+        command += ["--boundary-record", json.dumps(boundary_record, sort_keys=True),
+                    "--boundary-role", boundary_role]
+        for extra in control:
+            command += ["--control", str(extra)]
     command += ["--message", given, "--", executable, *settings["server"]]
     name = pathlib.Path(executable).name
     return native_session.Plan(
@@ -284,8 +547,8 @@ def plan(arguments: Sequence[str], *, dialect: str, executable: str,
 def queue(python: str, record: pathlib.Path, session: str, text: str) -> list[str]:
     """The command that gives a later message to the running host; nothing is typed."""
 
-    return [python, str(pathlib.Path(__file__).resolve()), "send", "--record", str(record),
-            "--session", session, "--message", text]
+    return [python, *ISOLATED, str(pathlib.Path(__file__).resolve()), "send",
+            "--record", str(record), "--session", session, "--message", text]
 
 
 def _store(path: pathlib.Path, value: Mapping[str, Any]) -> None:
@@ -308,6 +571,70 @@ def _started(pid: int) -> str:
     snapshot = lane_watchdog.process_snapshot()
     entry = (snapshot or {}).get(pid)
     return str(entry.get("started") or "") if isinstance(entry, dict) else ""
+
+
+def _listen(address: str) -> socket.socket:
+    """Listen on a socket in its own directory. Bound by its name from inside that
+    directory, so a long control path is no obstacle (a socket address is short)."""
+
+    directory, name = os.path.split(address)
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    back = os.getcwd()
+    try:
+        os.chdir(directory)
+        try:
+            os.unlink(name)  # left by an earlier host of this slot that has ended
+        except FileNotFoundError:
+            pass
+        server.bind(name)
+    except OSError:
+        server.close()
+        raise
+    finally:
+        os.chdir(back)
+    server.listen(4)
+    return server
+
+
+def _connect(address: str, wait: float) -> socket.socket:
+    directory, name = os.path.split(address)
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.settimeout(wait)
+    back = os.getcwd()
+    try:
+        os.chdir(directory)
+        client.connect(name)
+    except OSError:
+        client.close()
+        raise
+    finally:
+        os.chdir(back)
+    return client
+
+
+def confined_command(provider: Sequence[str], checked: dict, role: str,
+                     workspace: pathlib.Path, boundary: validator_boundary.Boundary,
+                     control: Sequence[pathlib.Path], address: str) -> tuple[list[str], dict]:
+    """The provider's server command inside the boundary, with the attestation stage in
+    front of it, and what that stage is to try: every root of the contract that is a
+    directory, the lane's control directories, and the host's own socket."""
+
+    held = [pathlib.Path(item).resolve() for item in control]
+    spec = {
+        "read": sorted({str(path) for path in (*boundary.denied_reads, *held) if path.is_dir()}),
+        "write": sorted({str(path) for path in (*boundary.denied_reads,
+                                               *boundary.protected_writes, *held)
+                         if path.is_dir()}),
+        "connect": [address],
+    }
+    for tool in ("/bin/sh", "/bin/ls", "/bin/unlink", "/usr/bin/nc"):
+        if not os.access(tool, os.X_OK):
+            raise BoundaryUnusable(f"the boundary cannot be attested here: {tool} is missing")
+    inner = ["/bin/sh", "-c", _ATTEST, "factory-confinement", str(workspace)]
+    for kind in ("read", "write", "connect"):
+        inner += [str(len(spec[kind])), *spec[kind]]
+    inner += ["--", *provider]
+    return _isolated(validator_boundary.model_command(inner, checked, role, workspace)), spec
 
 
 class Host:
@@ -340,11 +667,141 @@ class Host:
         # The provider's server never has an API-routing variable, whoever started this
         # program and with whatever arguments: that is what keeps it on the operator's
         # sign-in. ``--unset`` only adds names to these; it cannot take any away.
+        # The lane's ``--cache-env`` settings are the provider's too: this program was
+        # handed them carried in one variable and sets them here, on the provider's server
+        # only. Its own start-up isolation, if it was given any, is not passed on.
         withheld = {*API_ENV, *args.unset}
-        environment = {key: value for key, value in os.environ.items() if key not in withheld}
-        self.child = subprocess.Popen(provider, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        environment = {key: value
+                       for key, value in trusted_start.provider_environment(os.environ).items()
+                       if key not in withheld}
+        self.secret = secrets.token_hex(24)
+        self.confined: dict | None = None
+        self.socket_dir = ""
+        record = getattr(args, "boundary_record", None)
+        command = list(provider)
+        if record is None:
+            self.pin(None)
+            self.socket_dir = tempfile.mkdtemp(prefix="factory-hosted-", dir="/tmp")
+            self.address = self.socket_dir + "/h.sock"
+        else:
+            # This program stays outside the boundary; only the provider's server goes in.
+            # What it depends on (its records, its socket, the code it runs) is checked
+            # against the contract before the socket exists and before anything is spawned.
+            control = [self.record.parent, self.journal.parent,
+                       *getattr(args, "control", [])]
+            checked, boundary = confinement(record, args.boundary_role,
+                                            pathlib.Path(self.workspace), control)
+            self.pin(checked["digest"])
+            self.address = str(self.record.with_name(self.record.name[:-5] + ".sock"))
+            command, spec = confined_command(provider, checked, args.boundary_role,
+                                             pathlib.Path(self.workspace), boundary, control,
+                                             self.address)
+        # The socket later messages arrive on exists before the provider does. And it
+        # answers: shown here from outside the boundary, so that the confined process not
+        # reaching it says something about the boundary and not about the socket.
+        self.server = _listen(self.address)
+        with _connect(self.address, 5):
+            self.server.accept()[0].close()
+        self.child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                       stderr=subprocess.PIPE, env=environment,
                                       cwd=self.workspace)
+        if record is not None:
+            try:
+                self.attest(checked, spec)
+            except BaseException:
+                _end(self.child)
+                self.server.close()
+                raise
+
+    def pin(self, digest: str | None) -> None:
+        """A restart of a lane keeps exactly the policy its session was started under: the
+        same boundary, or none, by the lane's own retained record of that session. The
+        record is this host's, out of the provider's reach when there is a boundary. With
+        no such record, a damaged one, one that is another session's, or one that names
+        another policy, the restart is refused before anything is started: a missing
+        record is not read as "no boundary".
+
+        A probe is not a lane's continuation and has no record to keep to."""
+
+        if not self.args.resume or getattr(self.args, "probing", False):
+            return
+        if self.record.is_symlink():
+            raise Refused("the record of how this session was hosted is a symlink; the "
+                          "restart is refused")
+        try:
+            raw = self.record.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            raise Refused(f"there is no record of how this session was hosted "
+                          f"({self.record.name}); a lane is continued only from its own "
+                          "retained record, so the restart is refused") from None
+        except OSError as error:
+            raise Refused(f"the record of how this session was hosted cannot be read "
+                          f"({error}); the restart is refused") from None
+        try:
+            prior = json.loads(raw)
+        except ValueError:
+            prior = None
+        held = prior.get("confined") if isinstance(prior, dict) else None
+        if (not isinstance(prior, dict) or prior.get("schema") != SCHEMA
+                or prior.get("protocol") != self.protocol
+                or ("confined" in prior and not (
+                    isinstance(held, dict) and isinstance(held.get("digest"), str)
+                    and held["digest"]))):
+            raise Refused("the record of how this session was hosted is damaged; the restart "
+                          "is refused")
+        if prior.get("session_id") != self.args.resume:
+            raise Refused("the record of how this lane was hosted is of another session than "
+                          "the one to resume; the restart is refused")
+        before = held["digest"] if isinstance(held, dict) else None
+        if before != digest:
+            def named(value: str | None) -> str:
+                return f"under the boundary {value[:16]}" if value else "with no boundary"
+            raise Refused(f"this session was hosted {named(before)} and this restart is "
+                          f"{named(digest)}; a restart keeps exactly the policy the session "
+                          "was started under")
+
+    def attest(self, checked: dict, spec: dict) -> None:
+        """Take the confined process's own account of the boundary, before the provider's
+        server exists in it, and hold it to that. No account, another process's account, or
+        an account of anything the kernel allowed, and there is no confined provider."""
+
+        assert self.child.stdout is not None and self.child.stderr is not None
+        deadline = time.monotonic() + HANDSHAKE_S
+        while b"\n" not in self.buffer:
+            if time.monotonic() >= deadline:
+                raise Refused("the confined process gave no account of its boundary in time")
+            readable, _, _ = select.select([self.child.stdout], [], [], 0.2)
+            if readable:
+                chunk = os.read(self.child.stdout.fileno(), 65536)
+                if chunk:
+                    self.buffer += chunk
+                    continue
+            if self.child.poll() is not None:
+                said = self.child.stderr.read().decode("utf-8", "replace").strip()[-300:]
+                raise Refused(f"the boundary did not start the provider "
+                              f"(exit {self.child.returncode}): {said}")
+        line, self.buffer = self.buffer.split(b"\n", 1)
+        words = line.decode("utf-8", "replace").split()
+        if words[:1] != ["factory_confinement"] or len(words) < 2:
+            raise Refused("the first thing the confined process said was not its account of "
+                          "the boundary")
+        if words[1] != str(self.child.pid):
+            raise Refused("the account of the boundary is not from the process that was started")
+        answers = dict(word.split("=", 1) for word in words[2:] if "=" in word)
+        for kind, letter in (("read", "r"), ("write", "w"), ("connect", "c")):
+            for index, path in enumerate(spec[kind]):
+                if answers.get(f"{letter}{index}") != "denied":
+                    raise Refused(f"the kernel boundary is not in force for the provider: "
+                                  f"{kind} of {path} was "
+                                  f"{answers.get(f'{letter}{index}')!r}, not denied")
+        started = _started(self.child.pid)
+        if not started:
+            raise Refused("the confined provider's start time could not be read")
+        self.confined = {
+            "pid": self.child.pid, "started": started, "contract": checked["contract"],
+            "digest": checked["digest"], "role": checked["role"],
+            "denied": {kind: len(spec[kind]) for kind in ("read", "write", "connect")}}
+        self.keep("confined", self.confined)
 
     # -- the pane and the retained record ------------------------------------------------
 
@@ -697,14 +1154,17 @@ class Host:
 
     # -- the session ---------------------------------------------------------------------
 
-    def open(self) -> None:
-        """Handshake, then the one session: a new one, or the kept one and no other."""
+    def open(self, create: bool = True) -> None:
+        """Handshake, then the one session: a new one, or the kept one and no other. With
+        ``create`` false nothing is made: a handshake, and a resume if an id was given."""
 
         resume = self.args.resume
         if self.protocol == "msp":
             self.call("initialize", {"clientInfo": {"name": "factory_lane", "version": "1"},
                                      "capabilities": {"userInputDialogs": False}})
             self.write({"jsonrpc": "2.0", "method": "initialized"})
+            if not resume and not create:
+                return
             if resume:
                 result = self.call("session/resume", {
                     "sessionId": resume, "commandId": uuid7(), "excludeItems": True})
@@ -728,6 +1188,8 @@ class Host:
                         "command": entry["command"], "args": list(entry.get("args") or []),
                         "env": [{"name": key, "value": value}
                                 for key, value in (entry.get("env") or {}).items()]})
+            if not resume and not create:
+                return
             if resume:
                 offered = _dict(opened.get("agentCapabilities"))
                 if "resume" not in _dict(offered.get("sessionCapabilities")):
@@ -812,27 +1274,28 @@ class Host:
     def serve(self) -> int:
         self.open()
         self.report("SessionStart", source="resume" if self.args.resume else "startup")
-        secret = secrets.token_hex(24)
-        directory = tempfile.mkdtemp(prefix="factory-hosted-", dir="/tmp")
-        address = directory + "/h.sock"
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
-            server.bind(address)
-            server.listen(4)
+        with self.server:
             _store(self.record, {
                 "schema": SCHEMA, "protocol": self.protocol, "session_id": self.session,
-                "pid": os.getpid(), "started": _started(os.getpid()), "socket": address,
-                "secret": secret})
+                "pid": os.getpid(), "started": _started(os.getpid()), "socket": self.address,
+                "secret": self.secret,
+                # The provider's server as it runs inside the boundary: the exact process,
+                # the contract and its digest. Absent: this session has no boundary.
+                **({"confined": self.confined} if self.confined is not None else {})})
             self.say(f"[hosted {self.protocol} session {self.session}] "
-                     + ("resumed" if self.args.resume else "new"))
+                     + ("resumed" if self.args.resume else "new")
+                     + (f", provider confined under boundary {self.confined['digest'][:16]}"
+                        if self.confined is not None else ""))
             self.give(self.args.message)
             try:
-                return self.loop(server, secret)
+                return self.loop(self.server, self.secret)
             finally:
-                pathlib.Path(address).unlink(missing_ok=True)
-                try:
-                    os.rmdir(directory)
-                except OSError:
-                    pass
+                pathlib.Path(self.address).unlink(missing_ok=True)
+                if self.socket_dir:
+                    try:
+                        os.rmdir(self.socket_dir)
+                    except OSError:
+                        pass
 
     def give(self, text: str) -> str:
         if self.protocol == "msp":
@@ -900,12 +1363,23 @@ def _end(child: subprocess.Popen) -> None:
             child.send_signal(signal.SIGKILL)
 
 
-def run(args: argparse.Namespace, provider: list[str]) -> int:
+def _refusal(args: argparse.Namespace) -> int | None:
+    """77 and its reason on stdout if this start is refused as such, else None."""
+
+    dialect = {protocol: name for name, protocol in PROTOCOL.items()}[args.protocol]
     try:
-        refuse_guarded(os.environ)
+        refuse_guarded(os.environ, dialect=dialect,
+                       boundary=getattr(args, "boundary_record", None) is not None)
     except GuardRequired as error:
         print(f"hosted-session: refused: {error}", flush=True)
         return 77
+    return None
+
+
+def run(args: argparse.Namespace, provider: list[str]) -> int:
+    refused = _refusal(args)
+    if refused is not None:
+        return refused
     host = None
     restore = None
     if sys.stdin.isatty():
@@ -923,7 +1397,7 @@ def run(args: argparse.Namespace, provider: list[str]) -> int:
     try:
         host = Host(args, provider)
         return host.serve()
-    except Refused as error:
+    except (Refused, BoundaryUnusable) as error:
         # Before any session was reported, this is the whole of what the lane will know.
         os.set_blocking(sys.stdout.fileno(), True)
         print(f"hosted-session: refused: {error}", flush=True)
@@ -945,6 +1419,41 @@ def run(args: argparse.Namespace, provider: list[str]) -> int:
             _end(host.child)
 
 
+def probe(args: argparse.Namespace, provider: list[str]) -> int:
+    """A handshake, and a resume if an id is given, and nothing else: no session is made
+    and no prompt is sent. With a boundary, the provider's server runs inside it exactly as
+    for a lane, and its attestation is printed. For qualifying a real server with no model
+    turn; a lane is never started this way."""
+
+    refused = _refusal(args)
+    if refused is not None:
+        return refused
+    host = None
+    try:
+        host = Host(args, provider)
+        host.open(create=False)
+        result: dict[str, Any] = {
+            "initialized": True, "session_id": host.session or None,
+            "resumed": bool(args.resume), "confined": host.confined, "prompts_sent": 0,
+            "sessions_made": 0}
+        code = 0
+    except (Refused, BoundaryUnusable) as error:
+        result, code = {"refused": str(error)}, 70
+    finally:
+        if host is not None:
+            _end(host.child)
+            host.server.close()
+            pathlib.Path(host.address).unlink(missing_ok=True)
+            if host.socket_dir:
+                try:
+                    os.rmdir(host.socket_dir)
+                except OSError:
+                    pass
+    os.set_blocking(sys.stdout.fileno(), True)
+    print(json.dumps(result, sort_keys=True), flush=True)
+    return code
+
+
 def send(args: argparse.Namespace) -> int:
     """Give one message to the host that owns this lane's session, and to no other."""
 
@@ -954,9 +1463,7 @@ def send(args: argparse.Namespace) -> int:
             raise ValueError("the hosted-session record is not this session's")
         if not known.get("started") or _started(int(known["pid"])) != known["started"]:
             raise ValueError("the host that owned this session is not running")
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-            client.settimeout(40)
-            client.connect(known["socket"])
+        with _connect(known["socket"], 40) as client:
             client.sendall(json.dumps({"secret": known["secret"], "session": args.session,
                                        "text": args.message}).encode() + b"\n")
             raw = bytearray()
@@ -973,9 +1480,35 @@ def send(args: argparse.Namespace) -> int:
     return 0 if answer.get("ok") is True else 70
 
 
+def cover(args: argparse.Namespace) -> int:
+    """Say what a boundary contract must cover for a hosted lane whose control directories
+    are those given: nothing is guessed by the caller and nothing is random. The host's
+    socket is ``<slot>-hosted.sock`` in the lane's own control directory."""
+
+    reach = {str(root): _reachable(root) for root in trust_roots()}
+    print(json.dumps({
+        "deny_read": [str(pathlib.Path(item).resolve()) for item in args.control],
+        "deny_write": [root for root, found in reach.items() if found is not None],
+        "out_of_reach_already": [root for root, found in reach.items() if found is None],
+        "socket": "<slot>-hosted.sock in the lane's control directory; never listed in "
+                  "allowed_sockets",
+    }, indent=1, sort_keys=True))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
+
+    def bounded(command: argparse.ArgumentParser) -> None:
+        command.add_argument("--boundary-record", type=json.loads, default=None,
+                             help="the lane's boundary record; the provider's server then "
+                                  "runs inside that boundary and this program outside it")
+        command.add_argument("--boundary-role", choices=("coder", "tester"), default="")
+        command.add_argument("--control", action="append", default=[], type=pathlib.Path,
+                             help="a further directory of the lane's control records that "
+                                  "the boundary must keep from the provider (repeatable)")
+
     runner = sub.add_parser("run", help="host one session; the provider's server command "
                             "follows --")
     runner.add_argument("--protocol", choices=sorted(PROTOCOL.values()), required=True)
@@ -989,17 +1522,79 @@ def main(argv: Sequence[str] | None = None) -> int:
     runner.add_argument("--mcp-file", type=pathlib.Path)
     runner.add_argument("--unset", action="append", default=[])
     runner.add_argument("--message", required=True)
+    bounded(runner)
     runner.add_argument("provider", nargs=argparse.REMAINDER)
+    prober = sub.add_parser("probe", help="handshake (and resume, with --resume) only: no "
+                            "session made, no prompt sent; prints one JSON object")
+    prober.add_argument("--protocol", choices=sorted(PROTOCOL.values()), required=True)
+    prober.add_argument("--record", type=pathlib.Path, required=True,
+                        help="where a lane's host record would be; names the control "
+                             "directory. Nothing is written to it")
+    prober.add_argument("--workspace", type=pathlib.Path, required=True)
+    prober.add_argument("--resume", default="")
+    prober.add_argument("--unset", action="append", default=[])
+    bounded(prober)
+    prober.add_argument("provider", nargs=argparse.REMAINDER)
     sender = sub.add_parser("send", help="give a later message to the running host")
     sender.add_argument("--record", type=pathlib.Path, required=True)
     sender.add_argument("--session", required=True)
     sender.add_argument("--message", required=True)
+    covering = sub.add_parser("trust-roots", help="print what a boundary contract must "
+                              "cover for a hosted lane with these control directories")
+    covering.add_argument("--control", action="append", default=[], type=pathlib.Path)
+    checking = sub.add_parser("check-boundary", help="say whether a boundary record can be "
+                              "relied on for a hosted lane with these control directories: "
+                              "exit 0, or 70 with the reason; nothing is started")
+    checking.add_argument("--workspace", type=pathlib.Path, required=True)
+    bounded(checking)
+    confining = sub.add_parser("confined-run", help="run one command of the provider's "
+                               "program inside the lane's boundary (its account check, "
+                               "version or help); the command follows --")
+    confining.add_argument("--workspace", type=pathlib.Path, required=True)
+    bounded(confining)
+    confining.add_argument("provider", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     if args.command == "send":
         return send(args)
+    if args.command == "trust-roots":
+        return cover(args)
+    if args.command == "check-boundary":
+        try:
+            confinement(args.boundary_record, args.boundary_role, args.workspace, args.control)
+        except BoundaryUnusable as error:
+            print(f"hosted-session: {error}", file=sys.stderr)
+            return 70
+        return 0
+    if args.command == "confined-run":
+        command = args.provider[1:] if args.provider[:1] == ["--"] else args.provider
+        if not command or args.boundary_record is None:
+            parser.error("confined-run needs --boundary-record and a command after --")
+        try:
+            wrapped = confined_argv(command, args.boundary_record, args.boundary_role,
+                                    args.workspace, args.control)
+        except BoundaryUnusable as error:
+            print(f"hosted-session: {error}", file=sys.stderr)
+            return 70
+        os.chdir(args.workspace)
+        # The provider's program gets none of the start-up isolation this one was given.
+        os.execve(wrapped[0], wrapped, trusted_start.provider_environment(os.environ))
+    # A start that is refused as such is refused first, whatever else is wrong with the
+    # command line: nothing about a malformed request turns a refusal into a usage error.
+    refused = _refusal(args)
+    if refused is not None:
+        return refused
     provider = args.provider[1:] if args.provider[:1] == ["--"] else args.provider
-    if not provider or not args.record.name.endswith(".json"):
+    if not args.record.name.endswith(".json"):
+        parser.error("--record names the host's record file and must end in .json "
+                     "(its sibling files are named from it)")
+    if not provider:
         parser.error("the provider's server command is required after --")
+    if args.command == "probe":
+        args.probing = True
+        args.journal = args.record.with_name("probe-events.jsonl")
+        args.message, args.model, args.effort = "", "", ""
+        args.permissive, args.mcp_file = False, None
+        return probe(args, provider)
     return run(args, provider)
 
 
