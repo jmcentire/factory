@@ -227,7 +227,10 @@ THREAD_ID=$(tr -d '\r\n' < "$THREAD_FILE")
   exit 70
 }
 
-exec 3< <("$FACTORY_PYTHON" - "$LAUNCHES" "$RUN" "$LANE" <<'PY'
+# Keep the heredoc outside process substitution: Bash 3.2 otherwise interprets
+# Python quoting while finding the substitution's closing parenthesis.
+retained_launch_fields() {
+"$FACTORY_PYTHON" - "$LAUNCHES" "$RUN" "$LANE" <<'PY'
 import json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
 run, lane = sys.argv[2:]
@@ -266,7 +269,8 @@ if any(not isinstance(value, str) or "\0" in value for value in values):
 for value in values:
     sys.stdout.buffer.write(value.encode("utf-8") + b"\0")
 PY
-)
+}
+exec 3< <(retained_launch_fields)
 IFS= read -r -d '' REPOSITORY <&3 || {
   echo "lane-message: retained repository is missing or malformed" >&2; exit 70;
 }
