@@ -209,7 +209,7 @@ class Seats:
         try:
             out = subprocess.run(
                 [
-                    "tmux",
+                    os.environ.get("FACTORY_TMUX") or "tmux",
                     "list-panes",
                     "-s",
                     "-t",
@@ -304,8 +304,19 @@ class Seats:
         if row["state"].startswith("Z") or (require_running and "T" in row["state"]):
             raise SupervisorError("executing Validator is not running")
         shown = subprocess.run(
-            ["tmux", "display-message", "-p", "-t", binding["pane"], "#{pane_pid}"],
-            capture_output=True, text=True, check=True, timeout=10)
+            [
+                os.environ.get("FACTORY_TMUX") or "tmux",
+                "display-message",
+                "-p",
+                "-t",
+                binding["pane"],
+                "#{pane_pid}",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
         pane_row = table.get(binding["pane_pid"])
         if (shown.stdout.strip() != str(binding["pane_pid"]) or pane_row is None
                 or pane_row["started"] != binding.get("pane_started")):
@@ -514,8 +525,20 @@ def _validator_binding(root: pathlib.Path, session: str, pid: int,
     table = process_snapshot()
     if table is None or pid not in table or table[pid]["started"] != started:
         raise SupervisorError("Validator PID/start identity is not current")
-    shown = subprocess.run(["tmux", "display-message", "-p", "-t", pane, "#{pane_pid}"],
-                           capture_output=True, text=True, check=True, timeout=10)
+    shown = subprocess.run(
+        [
+            os.environ.get("FACTORY_TMUX") or "tmux",
+            "display-message",
+            "-p",
+            "-t",
+            pane,
+            "#{pane_pid}",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=10,
+    )
     if not shown.stdout.strip().isdigit():
         raise SupervisorError("Validator pane has no process")
     pane_pid = int(shown.stdout.strip())
@@ -795,7 +818,8 @@ def run(
                 _event(root, "heartbeat-failed", str(error), wake=False)
         if (
             not subprocess.run(
-                ["tmux", "has-session", "-t", session], capture_output=True
+                [os.environ.get("FACTORY_TMUX") or "tmux", "has-session", "-t", session],
+                capture_output=True,
             ).returncode
             == 0
         ):

@@ -28,12 +28,12 @@ factory_load_context() {
 }
 
 # Every shell operation is addressed to this run's private server, including teardown.
-tmux() { command tmux -L "${FACTORY_TMUX_SOCKET:?load the run before using tmux}" "$@"; }
+tmux() { command "${FACTORY_TMUX:-tmux}" -L "${FACTORY_TMUX_SOCKET:?load the run before using tmux}" "$@"; }
 
 factory_seat_env() {
   local var
   for var in FACTORY_RUNS_DIR FACTORY_HARNESS_ROOT FACTORY_CONTROL_ROOT FACTORY_TMUX_SOCKET \
-    FACTORY_LOG FACTORY_PYTHON FACTORY_HOME; do
+    FACTORY_LOG FACTORY_PYTHON FACTORY_HOME FACTORY_TMUX; do
     [ -z "${!var:-}" ] || printf ' %s=%q' "$var" "${!var}"
   done
   printf ' CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false'

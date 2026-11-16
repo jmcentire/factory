@@ -789,9 +789,19 @@ class _Wake:
         try:
             # Not the pane's terminal: a tmux client on one checks TERM, and refuses a terminal
             # type it has no entry for (xterm-ghostty) before it sends anything.
-            subprocess.run(["tmux", *(["-L", socket] if socket else []), "wait-for", "-S",
-                            self.channel], stdin=subprocess.DEVNULL, capture_output=True,
-                           check=False, timeout=15)
+            subprocess.run(
+                [
+                    os.environ.get("FACTORY_TMUX") or "tmux",
+                    *(["-L", socket] if socket else []),
+                    "wait-for",
+                    "-S",
+                    self.channel,
+                ],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                check=False,
+                timeout=15,
+            )
         except (OSError, subprocess.SubprocessError):
             pass  # The launcher's wait times out and reports the seat unregistered.
 

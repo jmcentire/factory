@@ -117,6 +117,22 @@ until it prints `READY`. Apply each listed fix as you go. Editing the user's she
 PATH), removing another `factory` install, or installing Python or Rust is the user's call, so
 ask before doing it.
 
+### Packaged runtime paths
+
+`FACTORY_HOME` optionally selects a directory containing `prompts/` and `docs/`.
+It supplies coordinator doctrine and the Tester's prompt/testing standard, while Python
+imports and executable harness helpers still come from the installed Factory checkout.
+Unset means this checkout; an empty or incomplete directory is rejected before run creation.
+Relative paths resolve from the invoking directory. Set it consistently when starting or
+restarting coordinators; resource contents are not copied or snapshotted.
+
+`FACTORY_TMUX` optionally selects one executable (an absolute path is recommended for
+packaged installations). Unset or empty means `tmux` on PATH. The selection reaches
+Factory's shell/Python controls, scrubbed coordinator environments and lane watchers;
+it does not change the per-run private socket or select the operator's unrelated server.
+A missing explicitly selected binary fails rather than substituting another executable.
+`FACTORY_PYTHON` already selects the Factory-capable Python interpreter.
+
 ## Workflow and implementation
 
 [docs/SOFTWARE-FACTORY.md](docs/SOFTWARE-FACTORY.md) defines the four roles and the

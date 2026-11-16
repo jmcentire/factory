@@ -55,6 +55,20 @@ def run_root(runs: Path, run: str) -> Path:
     return root
 
 
+def resource_home() -> Path:
+    """Select doctrine only; executable helpers and Python imports stay with this checkout."""
+    value = os.environ.get("FACTORY_HOME", str(Path(__file__).resolve().parent.parent))
+    if not value:
+        raise ValueError("FACTORY_HOME is empty; unset it or select a complete resource directory")
+    home = Path(value).resolve()
+    required = ("prompts/validate.md", "prompts/orchestrate.md", "prompts/test.md",
+                "docs/SOFTWARE-FACTORY.md", "docs/standards/TESTING.md")
+    missing = [name for name in required if not (home / name).is_file()]
+    if missing:
+        raise ValueError(f"FACTORY_HOME {home} is missing required resources: {', '.join(missing)}")
+    return home
+
+
 def create(
     runs: Path,
     run: str,
@@ -66,6 +80,7 @@ def create(
 ) -> Path:
     from factory_runtime.host_git import run_host_git
 
+    resource_home()  # Refuse invalid resource selection before creating any run state.
     root = run_root(runs, run)
     repository = repository.resolve(strict=True)
     if not task.strip():
@@ -643,7 +658,8 @@ def _start_locked(runs: Path, run: str) -> None:
               "server and every seat inherit; start runs from a shell outside it", file=sys.stderr)
     tools = Path(__file__).resolve().parent
     home = tools.parent
-    tmux = ["tmux", "-L", doc["tmux_socket"]]
+    resources = resource_home()
+    tmux = [os.environ.get("FACTORY_TMUX") or "tmux", "-L", doc["tmux_socket"]]
     retry = shlex.join([sys.executable, str(tools / "run_record.py"), "start",
                         "--runs", str(root.parent), "--run", run])
     if subprocess.run([*tmux, "has-session", "-t", f"={run}"], capture_output=True).returncode == 0:
@@ -688,8 +704,8 @@ def _start_locked(runs: Path, run: str) -> None:
         model, effort = choices[role]["model"], choices[role]["effort"]
         directive = "validate" if role == "validator" else "orchestrate"
         prompt = (
-            f"Act as Factory {role}. Read {home}/prompts/{directive}.md, "
-            f"{home}/docs/SOFTWARE-FACTORY.md and {root}/TASK.md. "
+            f"Act as Factory {role}. Read {resources}/prompts/{directive}.md, "
+            f"{resources}/docs/SOFTWARE-FACTORY.md and {root}/TASK.md. "
             f"Run {run}; repository {doc['repository']}; commit {doc['resolved_commit']}. "
             f"Use the harness at {tools}. Read {root}/{role}/inbox.jsonl when checking progress. "
             "Both coordinators review actual code and tests at the initial approach, first useful "
@@ -801,9 +817,9 @@ def _start_locked(runs: Path, run: str) -> None:
         for key in adapter.api_env:
             env.pop(key, None)
         env.update(
-            TERM=(env["TERM"] if env.get("TERM") not in {None, "", "dumb"}
-                  else "xterm-256color"),
-            FACTORY_HOME=str(home),
+            TERM=(env["TERM"] if env.get("TERM") not in {None, "", "dumb"} else "xterm-256color"),
+            FACTORY_HOME=str(resources),
+            FACTORY_TMUX=os.environ.get("FACTORY_TMUX") or "tmux",
             PYTHONPATH=str(home),
             FACTORY_PYTHON=sys.executable,
             FACTORY_RUNS_DIR=str(root.parent),
@@ -887,12 +903,14 @@ def _start_locked(runs: Path, run: str) -> None:
             if waited.returncode:
                 raise SeatStartFailed(f"the {role} did not register: {waited.stderr.strip()}")
         if any(agent == "claude" for agent in selected.values()):
-            wake = shlex.join([sys.executable, str(tools / "inbox_wake.py"),
+            wake = shlex.join(["env", f"FACTORY_TMUX={tmux[0]}",
+                               sys.executable, str(tools / "inbox_wake.py"),
                                "run", "--root", str(root)])
             subprocess.run([*tmux, "new-window", "-d", "-t", f"={run}",
                             "-n", "inbox-wake", "-c", doc['repository'], wake], check=True)
         # Native inbox transport only; no supervisor may stop work for review lag.
-        print(f"Factory {run}: tmux -L {doc['tmux_socket']} attach -t {shlex.quote(run)}")
+        print(f"Factory {run}: {shlex.quote(tmux[0])} -L {doc['tmux_socket']} "
+              f"attach -t {shlex.quote(run)}")
         if selected["validator"] == "kickoff":
             print(f"Existing Validator: read {root}/validator/BRIEF.md")
     except BaseException as error:
