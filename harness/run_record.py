@@ -20,6 +20,7 @@ import stat
 import sys
 from io import BufferedReader
 from pathlib import Path
+from subprocess import CompletedProcess
 from typing import Any, cast
 
 SCHEMA = "factory-harness/3"
@@ -82,10 +83,16 @@ def create(
     top = Path(run_host_git(repository, ["rev-parse", "--show-toplevel"]).decode().strip())
     if top.resolve() != repository:
         raise ValueError("--repo must name the repository root")
+    import importlib
+
     from factory_runtime.version import build_identity
+
+    settings = (importlib.import_module("harness.model_settings") if __package__
+                else importlib.import_module("model_settings"))
 
     record = dict(
         factory_version=build_identity(),
+        system_one_profile=settings.system_one_profile(),
         schema_version=SCHEMA,
         run_id=run,
         repository=str(repository),
@@ -215,6 +222,24 @@ def check_builder(root: Path, doc: dict, repository: Path, commit: str,
     return result
 
 
+def github_command(argv: list[str]) -> CompletedProcess[str]:
+    """Keep gh's transitive Git reads outside candidate repositories and configuration."""
+    import subprocess
+    import tempfile
+
+    from factory_runtime.kindex_workspace import mark_no_index
+
+    env = {key: os.environ[key] for key in (
+        "HOME", "USER", "PATH", "LANG", "LC_ALL", "TMPDIR", "XDG_CONFIG_HOME", "GH_CONFIG_DIR",
+        "GH_TOKEN", "GITHUB_TOKEN",
+    ) if key in os.environ}
+    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GH_HOST="github.com")
+    with tempfile.TemporaryDirectory(prefix="factory-github-") as temporary:
+        mark_no_index(Path(temporary))
+        return subprocess.run(["gh", *argv], cwd=temporary, env=env, capture_output=True,
+                              text=True, timeout=60)
+
+
 def fetch_pr(url: str) -> dict:
     """Read GitHub's current body/head, without changing the PR or invoking a shell."""
     import subprocess
@@ -222,9 +247,8 @@ def fetch_pr(url: str) -> dict:
     if not re.fullmatch(r"https://github\.com/[^/]+/[^/]+/pull/[0-9]+", url):
         raise ValueError("--pr requires a GitHub pull request URL")
     try:
-        fetched = subprocess.run(
-            ["gh", "pr", "view", url, "--json", "url,body,headRefOid"],
-            check=True, capture_output=True, text=True, timeout=60)
+        fetched = github_command(["pr", "view", url, "--json", "url,body,headRefOid"])
+        fetched.check_returncode()
     except (subprocess.SubprocessError, OSError) as error:
         raise ValueError("could not read PR metadata; no provenance verdict retained") from error
     pr = json.loads(fetched.stdout)
@@ -234,12 +258,24 @@ def fetch_pr(url: str) -> dict:
     return pr
 
 
-def system_one_review(report: dict) -> dict:
+def profile_for_run(doc: dict) -> bool:
+    """New runs retain consent; old records keep their explicit invocation behavior."""
+    value = doc.get("system_one_profile", os.environ.get("FACTORY_SYSTEM_ONE_PROFILE") == "1")
+    if not isinstance(value, bool):
+        raise ValueError("invalid retained System One profile permission")
+    return value
+
+
+def system_one_review(report: dict, root: Path | None = None) -> dict:
     import importlib
 
     screen = (importlib.import_module("harness.jev_screen") if __package__
               else importlib.import_module("jev_screen"))
-    return screen.builder_review(report)
+    if root is None:
+        return screen.builder_review(report)
+    doc = read_json(root / "harness.json")
+    return screen.builder_review(
+        report, call=lambda payload: screen.request(payload, profile=profile_for_run(doc)))
 
 
 def retain_provenance(root: Path, report: dict) -> Path:
@@ -251,7 +287,7 @@ def retain_provenance(root: Path, report: dict) -> Path:
     directory.mkdir(mode=0o700, exist_ok=True)
     path = directory / f"{uuid.uuid4().hex}.json"
     report.setdefault("pr_verification", "not-checked")
-    report["system_one"] = system_one_review(report)
+    report["system_one"] = system_one_review(report, root)
     report = dict(report, observed_at=dt.datetime.now(dt.UTC).isoformat())
     temporary = path.with_suffix(".tmp")
     try:
@@ -265,8 +301,72 @@ def retain_provenance(root: Path, report: dict) -> Path:
             f"System One: {report['system_one']['status']} "
             f"({report['system_one'].get('reason', 'see retained observation')}). "
             f"Findings: {json.dumps(report['findings'])}. This checks retained identity "
-            "consistency, not product acceptance or cryptographic authorship.")
+            "consistency, not product acceptance or cryptographic authorship. "
+            "Read the report and send the Validator a concrete assessment citing this path, "
+            "uncovered claims and the next action (or why no correction is needed), using "
+            "run_record.py message. Delivery alone is not a completed review.")
     return path
+
+
+def publish_pr(runs: Path, run: str, repository: Path, commit: str, operation: str, *,
+               body_file: Path, title: str | None = None, pr: str | None = None,
+               head: str | None = None, base: str | None = None, draft: bool = False,
+               github_repo: str | None = None) -> dict:
+    """Perform one authorized PR mutation, then inspect GitHub's actual result.
+
+    Publication and verification are separate outcomes. Never retry a mutation because its
+    subsequent read failed; the retained inbox tells the Orchestrator what remains unknown.
+    """
+    import subprocess
+
+    from factory_runtime.host_git import run_host_git
+
+    root, doc = load(runs, run)
+    actual = run_host_git(repository, ["rev-parse", "--verify", "HEAD^{commit}"]).decode().strip()
+    if commit != actual:
+        raise ValueError("PR operation requires the exact current candidate commit")
+    if operation not in {"create", "edit"}:
+        raise ValueError("PR operation must be create or edit")
+    argv = ["pr", operation]
+    if operation == "create":
+        if (not head or not title or not github_repo
+                or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", github_repo)):
+            raise ValueError("PR create requires --head, --title and --github-repo OWNER/REPO")
+        argv += [f"--head={head}", f"--repo=github.com/{github_repo}", "--label=Factory"]
+        if base:
+            argv += [f"--base={base}"]
+        if draft:
+            argv.append("--draft")
+    else:
+        if head or base or draft:
+            raise ValueError("--head, --base and --draft apply only to PR create")
+        if not pr or not re.fullmatch(r"https://github\.com/[^/]+/[^/]+/pull/[0-9]+", pr):
+            raise ValueError("PR edit requires a GitHub PR URL")
+        argv.append(pr)
+    if title is not None:
+        argv += [f"--title={title}"]
+    argv += [f"--body-file={body_file.resolve(strict=True)}"]
+    outcome = dict(operation=operation, mutation="uncertain", verification="unavailable", pr=pr)
+    try:
+        completed = github_command(argv)
+        if completed.returncode:
+            outcome["reason"] = "GitHub command failed; inspect remote state before retrying."
+        else:
+            outcome["mutation"] = "completed"
+            url = pr if operation == "edit" else completed.stdout.strip()
+            outcome["pr"] = url
+            snapshot = fetch_pr(url or "")
+            report = check_builder(root, doc, repository, commit, pr=snapshot)
+            evidence = retain_provenance(root, report)
+            return dict(outcome, verification=report["status"], evidence=str(evidence))
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+        outcome["reason"] = (
+            "PR mutation completed, but verification is unavailable; recheck the PR, "
+            "do not repeat the mutation." if outcome["mutation"] == "completed" else
+            "PR mutation outcome uncertain; inspect GitHub before retrying.")
+    message(root, "orchestrator", "host", json.dumps(outcome) +
+            " Review the actual remote state and report the remaining gap to the Validator.")
+    return outcome
 
 
 def context(runs: Path, run: str) -> None:
@@ -694,7 +794,7 @@ def _start_locked(runs: Path, run: str) -> None:
         if role == "validator":
             env.update({key: os.environ[key] for key in GITHUB_ENV if key in os.environ})
         # Permission to source the profile reaches the trusted HTTP child; no key reaches seats.
-        if os.environ.get("FACTORY_SYSTEM_ONE_PROFILE") == "1":
+        if profile_for_run(doc):
             env["FACTORY_SYSTEM_ONE_PROFILE"] = "1"
         # Reuse the adapter's credential declarations. Plan mode never inherits API keys.
         adapter = agents.harness("codex" if agent == "ollama" else agent)
@@ -821,13 +921,20 @@ def _start_locked(runs: Path, run: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["create", "start", "context", "status", "message",
-                                           "capture", "provenance"])
+                                           "capture", "provenance", "pr"])
     parser.add_argument("--runs", type=Path, required=True)
     parser.add_argument("--run", required=True)
     parser.add_argument("--repo", type=Path)
     parser.add_argument("--task-file", type=Path)
     parser.add_argument("--commit", help="exact candidate or revision to check")
-    parser.add_argument("--pr", help="GitHub PR URL to fetch and check (read-only)")
+    parser.add_argument("--pr", help="GitHub PR URL to inspect, or edit with pr --operation edit")
+    parser.add_argument("--operation", choices=["create", "edit"])
+    parser.add_argument("--body-file", type=Path)
+    parser.add_argument("--title")
+    parser.add_argument("--head")
+    parser.add_argument("--github-repo", help="explicit OWNER/REPO for authorized PR creation")
+    parser.add_argument("--base")
+    parser.add_argument("--draft", action="store_true")
     parser.add_argument("--budget", type=float)
     parser.add_argument("--log", default=os.environ.get("FACTORY_LOG", os.devnull))
     parser.add_argument("--to", choices=["validator", "orchestrator"])
@@ -855,7 +962,16 @@ def main() -> int:
             context(args.runs, args.run)
         else:
             root, doc = load(args.runs, args.run)
-            if args.action == "provenance":
+            if args.action == "pr":
+                if not all((args.repo, args.commit, args.operation, args.body_file)):
+                    parser.error("pr requires --repo, --commit, --operation and --body-file")
+                outcome = publish_pr(args.runs, args.run, args.repo, args.commit, args.operation,
+                                     body_file=args.body_file, title=args.title, pr=args.pr,
+                                     head=args.head, base=args.base, draft=args.draft,
+                                     github_repo=args.github_repo)
+                print(json.dumps(outcome, indent=2))
+                return 0 if outcome["mutation"] == "completed" else 1
+            elif args.action == "provenance":
                 if not args.commit:
                     if args.pr:
                         parser.error("--pr requires --commit")

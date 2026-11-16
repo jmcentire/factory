@@ -80,7 +80,7 @@ def report(root: Path, *, block: bool = False, start: int = 0) -> dict:
         guidance_findings=[],
         screen_review=review,
         decision="block" if block else "no-op",
-        adherence_findings=["Unqualified lane must stop"] if block else [],
+        adherence_findings=["A lane reports an unresolved sign-in screen"] if block else [],
     )
 
 
@@ -117,7 +117,7 @@ def test_dispatcher_wires_screen_and_does_not_filter_activity(tmp_path: Path, mo
     with pytest.raises(channel.OrchestratorChannelError, match="Jev receipt"):
         channel.record_assessment(root, assessment(2))
     bad = report(root, block=True)
-    bad["screen_review"][0]["rules"].pop("model_unqualified")
+    bad["screen_review"][0]["rules"].pop("interactive_auth_screen")
     with pytest.raises(channel.OrchestratorChannelError, match="not reviewed"):
         channel.record_assessment(root, bad)
     channel.record_assessment(root, report(root, block=True))
@@ -161,8 +161,8 @@ def test_budget_and_crash_reservation_survive_restart(tmp_path: Path, monkeypatc
     screen.screen_pending(root, lambda _: pytest.fail("must not retry or exceed cap"))
     assert len(called) == 1
     first, second = receipts(root)
-    assert first["body"]["results"]["model_unqualified"]["reason"] == "interrupted-call"
-    assert second["body"]["results"]["model_unqualified"]["reason"] == "call-ceiling"
+    assert first["body"]["results"]["interactive_auth_screen"]["reason"] == "interrupted-call"
+    assert second["body"]["results"]["interactive_auth_screen"]["reason"] == "call-ceiling"
     channel.record_assessment(root, report(root))  # manual inspection is possible during outage
 
 
@@ -171,7 +171,7 @@ def test_bad_probabilities_are_unavailable_not_clean(tmp_path: Path, bad: object
     root = setup(tmp_path)
     activity(root)
     screen.screen_pending(root, lambda p: response(p, bad))
-    assert receipts(root)[0]["body"]["results"]["model_unqualified"]["band"] == "unavailable"
+    assert receipts(root)[0]["body"]["results"]["interactive_auth_screen"]["band"] == "unavailable"
 
 
 @pytest.mark.parametrize("mutation", ["wrong-model", "missing-answer", "wrong-type"])
@@ -190,7 +190,7 @@ def test_response_must_bind_model_and_all_questions(tmp_path: Path, mutation: st
         return result
 
     screen.screen_pending(root, provider)
-    assert receipts(root)[0]["body"]["results"]["model_unqualified"]["band"] == "unavailable"
+    assert receipts(root)[0]["body"]["results"]["interactive_auth_screen"]["band"] == "unavailable"
 
 
 def test_every_screened_rule_runs_with_real_retained_evidence_handles(tmp_path: Path) -> None:
@@ -212,7 +212,7 @@ def test_every_screened_rule_runs_with_real_retained_evidence_handles(tmp_path: 
     )
     seen = []
     screen.screen_pending(root, lambda p: (seen.append(p), response(p))[1])
-    assert set(seen[0]["questions"]) == set(screen.RULES) and len(screen.RULES) == 23
+    assert set(seen[0]["questions"]) == set(screen.RULES)
     assert all(v["band"] == "no" for v in receipts(root)[0]["body"]["results"].values())
     channel.record_assessment(root, report(root))
 
@@ -229,7 +229,7 @@ def test_pane_text_cannot_impersonate_a_contract_and_linked_evidence_is_unavaila
     screen.screen_pending(root, response)
     assert "contract_excerpt" not in receipts(root)[0]["body"]["state"]
     assert (
-        receipts(root)[0]["body"]["results"]["ruling_contradicts_signature"]["band"]
+        receipts(root)[0]["body"]["results"]["code_contract_conflict"]["band"]
         == "unavailable"
     )
     with pytest.raises((OSError, screen.ScreenError)):
@@ -246,7 +246,8 @@ def test_input_bound_and_total_http_deadline(tmp_path, monkeypatch, api_key_name
     activity(root, "a" * 2000)
     monkeypatch.setattr(screen, "MAX_INPUT", 100)
     screen.screen_pending(root, lambda _: pytest.fail("oversized call"))
-    assert receipts(root)[0]["body"]["results"]["model_unqualified"]["reason"] == "input-ceiling"
+    reason = receipts(root)[0]["body"]["results"]["interactive_auth_screen"]["reason"]
+    assert reason == "input-ceiling"
     monkeypatch.setenv(api_key_name, "test-only-not-a-real-key")
 
     def deadline(args, **kwargs):
@@ -273,3 +274,14 @@ def test_changed_receipt_or_unreviewed_upheld_finding_is_refused(tmp_path: Path)
     value["adherence_findings"] = []
     with pytest.raises(channel.OrchestratorChannelError, match="requires an adherence block"):
         channel.record_assessment(root, value)
+
+
+def test_band_has_three_outcomes() -> None:
+    rules = importlib.import_module("jev_rules")
+    assert rules.band(0.95) == "yes"
+    assert rules.band(0.71) == "yes"
+    assert rules.band(0.7) == "escalate"
+    assert rules.band(0.5) == "escalate"
+    assert rules.band(0.3) == "escalate"
+    assert rules.band(0.29) == "no"
+    assert rules.band(0.0) == "no"

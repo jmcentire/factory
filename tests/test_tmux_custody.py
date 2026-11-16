@@ -195,9 +195,8 @@ def test_real_tmux_explicit_stop_is_stable_but_review_lag_does_not_stop_work(fix
         json.dumps({'cursor': 1, 'ts': old})+'\n')
     before = fixture.count('external')
     assert not fixture.tick()['holds']
-    time.sleep(.3)
+    wait_for(lambda: fixture.count('external') > before)
     assert not fixture.tick()['holds']
-    assert fixture.count('external') > before
 
 
 def test_real_tmux_failed_signal_retains_hold_without_blind_retry(fixture, monkeypatch):

@@ -141,7 +141,10 @@ else
 fi
 RUN_CONTRACTS_RECEIPT=null
 if [ "$SUPPLY_CONTRACTS" -eq 1 ]; then
-  RUN_CONTRACTS_RECEIPT=$(python3 - "$RUN_CONTRACTS" "${HARNESS_ORACLE_CONTRACT:-}" "$DEST" <<'PY'
+  # Bash 3.2 parses backticks inside a substitution's heredoc as shell syntax.
+  # Keep the Python payload outside that parser, preserving its output and status.
+  copy_run_contracts() {
+    python3 - "$RUN_CONTRACTS" "${HARNESS_ORACLE_CONTRACT:-}" "$DEST" <<'PY'
 import hashlib, json, pathlib, re, shutil, sys
 source, oracle, destination = pathlib.Path(sys.argv[1]), sys.argv[2], pathlib.Path(sys.argv[3])
 if not oracle:
@@ -184,7 +187,8 @@ print(json.dumps({"source": str(source), "oracle_contract": str(oracle_path),
                   "oracle_contract_digest": oracle_digest, "files": files},
                  sort_keys=True, separators=(",", ":")))
 PY
-  ) || exit 66
+  }
+  RUN_CONTRACTS_RECEIPT=$(copy_run_contracts) || exit 66
 fi
 ABSENT_JSON=$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1:]))' ${ABSENT[@]+"${ABSENT[@]}"})
 

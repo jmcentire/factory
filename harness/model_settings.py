@@ -21,21 +21,14 @@ DEFAULTS = {
 }
 
 
-def resolve(
-    role: str,
-    *,
-    explicit: Mapping[str, str] | None = None,
-    environ: Mapping[str, str] | None = None,
-) -> dict[str, str]:
-    env = os.environ if environ is None else environ
-    chosen = dict(DEFAULTS[role])
+def configuration(env: Mapping[str, str]) -> dict:
     path = Path(
         env.get("FACTORY_CONFIG", str(Path(env.get("HOME", "~")) / ".config/factory/config.toml"))
     )
     if path.exists() or "FACTORY_CONFIG" in env:
         with path.open("rb") as stream:
             config = tomllib.load(stream)
-        unknown = config.keys() - {"roles"}
+        unknown = config.keys() - {"roles", "system_one"}
         roles = config.get("roles", {})
         if unknown or not isinstance(roles, dict) or roles.keys() - set(ROLES):
             raise ValueError(f"invalid role defaults in {path}")
@@ -44,7 +37,35 @@ def resolve(
                 raise ValueError(f"invalid settings for {name} in {path}")
             if any(not isinstance(v, str) or "\0" in v for v in settings.values()):
                 raise ValueError(f"role choices must be literal strings in {path}")
-        chosen.update(roles.get(role, {}))
+        screen = config.get("system_one", {})
+        if (not isinstance(screen, dict) or screen.keys() - {"profile"}
+                or ("profile" in screen and not isinstance(screen["profile"], bool))):
+            raise ValueError(f"invalid System One settings in {path}")
+        return config
+    return {}
+
+
+def system_one_profile(environ: Mapping[str, str] | None = None) -> bool:
+    """Resolve explicit profile permission; never inspect a profile or credential value."""
+    env = os.environ if environ is None else environ
+    configured = configuration(env).get("system_one", {}).get("profile", False)
+    if "FACTORY_SYSTEM_ONE_PROFILE" in env:
+        value = env["FACTORY_SYSTEM_ONE_PROFILE"]
+        if value not in {"0", "1"}:
+            raise ValueError("FACTORY_SYSTEM_ONE_PROFILE must be 0 or 1")
+        return value == "1"
+    return configured
+
+
+def resolve(
+    role: str,
+    *,
+    explicit: Mapping[str, str] | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    env = os.environ if environ is None else environ
+    chosen = dict(DEFAULTS[role])
+    chosen.update(configuration(env).get("roles", {}).get(role, {}))
     overrides = {
         field: env[f"FACTORY_{role.upper()}_{field.upper()}"]
         for field in FIELDS

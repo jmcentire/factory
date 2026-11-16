@@ -138,8 +138,11 @@ jev_screen._http_request()
 
 
 def test_coordinators_receive_profile_opt_in_but_never_credentials(launch, monkeypatch):
-    _, _, _, capture, _, execute = launch
-    monkeypatch.setenv("FACTORY_SYSTEM_ONE_PROFILE", "1")
+    root, _, _, capture, _, execute = launch
+    record_path = root / "harness.json"
+    record = json.loads(record_path.read_text())
+    record["system_one_profile"] = True
+    record_path.write_text(json.dumps(record))
     for name in KEYS:
         monkeypatch.setenv(name, "dummy-credential-" + name)
     calls = capture()

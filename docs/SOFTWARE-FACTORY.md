@@ -94,6 +94,16 @@ Classify risk by behavior and reachable side effects. Critical behavior needs ad
 
 The classification includes the surfaces reached by side effects. The Validator assigns it per component and reachable surface. An acceptance claim needs cited evidence; an unchecked item remains a visible gap. Review the exact frozen candidate, not a moving working tree.
 
+### Proportionate validation and evidence reuse
+
+Choose checks for the behavior and reachable risks of the actual delta, not for the fact that a commit was made or pushed. Reviewing an exact candidate does not require rerunning every suite on that candidate. Reuse trustworthy prior evidence for unaffected claims when inspection of the complete diff and relevant inputs establishes that it still applies. Run the smallest useful additional checks for changed or uncertain claims; broaden them when the consequences justify it.
+
+A verified nonbehavioral comment-only edit can use semantic diff review plus the prior passing results, without a full suite. Do not classify it from filenames, a line-prefix regex, or the author's assertion alone. Inspect both versions in their language and tooling context: comments may carry compiler/linter directives, code-generation markers, documentation examples, or other consumed input. Block-comment boundaries, line continuations and other lexical effects may change executable code. Use a targeted parse/compile check when syntax or lexical scope is in question, and exercise affected tooling when comments are its input. Documentation and agent-instruction edits can change intended or generated behavior and need semantic review; they are not automatically inert.
+
+Keep the evidence chain explicit in the existing verdict: the exact accepted candidate, the tested baseline commit and retained results, the complete baseline-to-candidate diff reviewed, why each reused result remains relevant (including dependencies, configuration and environment), additional checks actually run, and remaining gaps. Never relabel a baseline run as execution on the new commit. Missing, failed or incompatible prior evidence cannot be inherited as a pass. This is judgment recorded in the normal review, not a new approval artifact, comment detector or blanket exemption.
+
+Applicable target instructions still govern. If a target explicitly mandates a full rerun after every push, resolve that conflict against the user's current authorization; Factory guidance alone does not silently override the target rule. Identify the conflicting rule and the narrow change needed rather than repeatedly performing work with no evidentiary value.
+
 For a repair, reproduce the defect in a disposable environment when possible and retain the failing result. Test the intended success path, the reported failure, and meaningful regressions. A test that was already green does not prove that it catches the defect. If reproduction is unavailable, state what remains unproven. Tests should derive from expected behavior, not mirror implementation branches. Critical deterministic guarantees need deterministic evidence; repeating a flaky check until green is not qualification.
 
 The negative control demonstrates the defect on the broken baseline; the positive control protects behavior that already works. A previously passing control that fails after a change is a regression to investigate, not evidence that the new test forced the fix. Suspected over-constraint is a concrete contract question for the Validator. Preserve the original failure and answer rather than silently adjusting expected results.
@@ -213,8 +223,11 @@ new acceptance gate. A crash before persistence can lose an observation; no exac
 is made. `TYPESAFE_API_KEY` and the existing `JMC_JEV_API_KEY` alias are supported in the invoking
 environment; absent credentials or provider failures are reported as unavailable. Resident
 coordinator environments intentionally omit these keys. With explicit user authorization,
-`FACTORY_SYSTEM_ONE_PROFILE=1` on the Factory invocation passes only that non-secret flag to
-coordinators. If no direct provider key is present, the existing short-lived HTTP child sources
+`[system_one] profile = true` in the normal Factory configuration, or
+`FACTORY_SYSTEM_ONE_PROFILE=1` at run creation, retains that non-secret permission in the run.
+An explicit `0` overrides configuration at creation. Startup, resume and checkpoints use the
+retained choice, so an unrelated later shell cannot silently grant profile access. The flag
+alone reaches coordinators; credentials do not. If no direct provider key is present, the existing short-lived HTTP child sources
 `~/.profile` with startup output suppressed and profile input disconnected from the request.
 It selects only the System One key, clears unrelated environment variables, and returns only
 validated model/probability fields; no credential returns to the coordinator or enters author
@@ -223,6 +236,20 @@ by at most one second of cleanup of this invocation's own process group. An unre
 or missing key is explicit unavailability. The default remains no profile loading; no broker,
 worker, profile edit or machine-wide setting is introduced. Candidate test commands do not
 inherit either the provider key or this flag.
+
+The ordinary authorized PR command is `run_record.py pr --runs RUNS --run RUN --repo REPO
+--commit SHA --operation create --github-repo OWNER/REPO --head BRANCH --title TITLE --body-file BODY`, or
+`--operation edit --pr URL --body-file BODY`. It mutates once and immediately checks the actual
+GitHub snapshot. Mutation success and verification availability are separate: after a read
+failure, inspect/recheck the existing PR and never retry its creation blindly. Changes made
+through other tools, including a later push, still require the explicit provenance check.
+
+The resident `dispatcher --observe` path also runs a bounded batch of current semantic checks
+against new lane output and actual retained context. Its per-rule coverage distinguishes
+missing evidence from a clean observation; exact batch replay reuses the receipt. Read
+[System One observations](practices/jev-runtime.md) for coverage and optional actual-evidence
+handles. The Orchestrator sends the Validator a concrete assessment citing the report and
+next action. An inbox acknowledgment is delivery evidence, not that assessment.
 
 Endgame checks commits, so its PR coverage is explicitly `not-checked`. The PR command records
 `checked` only when it compares the fetched snapshot; that means inspected, not necessarily

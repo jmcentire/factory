@@ -357,25 +357,29 @@ unattended (Muse, Antigravity) or hold a restarted session to its conversation
 
 - It works for an unprotected lane: one that requires no Signet guard, no author custody
   and no kernel boundary. That is the positive capability, and the only one.
-- A protected lane is refused, as set out next. Nothing here is a step toward a guard.
+- A lane that requires a Signet guard or author custody is refused, as set out next.
+  Nothing here is a step toward a guard.
+- A lane that requires the kernel boundary is refused for Muse, and runs for Antigravity
+  with the host outside the boundary and only Antigravity's server inside it (see "Under
+  the kernel boundary" below). That is static confinement, and it is all it is.
 - On a real subscription model, one bounded thing has been run for each provider, by the
   independent tester: a single text-only turn. No tool call and no approval request
   occurred in either. What has been run is listed at the end of this section; everything
   beyond that list is unproven, including that a real model's tool call or approval
   request behaves as the stand-ins do.
 
-**This is transport, not a guard.** It is groundwork. A protected launch, or a message
-that would restart an ended session under protection, is refused with exit 77 before the
-provider's program is run at all (its sign-in check included) and before any prompt is
-delivered. A refusal does leave its own records: the launcher's refusal event; for
+**This is transport, not a guard.** It is groundwork. A launch, or a message that would
+restart an ended session, that requires a Signet guard or author custody, or that requires
+the kernel boundary of a Muse lane, is refused with exit 77 before the provider's program
+is run at all (its sign-in check included) and before any prompt is delivered. A refusal does leave its own records: the launcher's refusal event; for
 `lane_agent.py run`, a line in the lane log and an exit row carrying 77; for a message,
 the planned message, which stays planned and undelivered. In the cases tried it left no
-launch journal and no launch hand-over record. Protected means any of: `FACTORY_REQUIRE_SIGNET`,
-`FACTORY_REQUIRE_AUTHOR_CUSTODY` or `FACTORY_REQUIRE_BOUNDARY` set to anything but empty or
-`0`; a Signet contract or digest, an author-custody config or digest, or a boundary
-contract or digest named (by variable or by the launcher's own options); or a boundary
-record handed to the lane wrapper. The kernel boundary is in that list because it has not
-been qualified around a host program and the provider's server under it. The refusal is made by `protocol_host` itself, which every hosted
+launch journal and no launch hand-over record. A requirement is any of:
+`FACTORY_REQUIRE_SIGNET`, `FACTORY_REQUIRE_AUTHOR_CUSTODY` or `FACTORY_REQUIRE_BOUNDARY` set
+to anything but empty or `0`; a Signet contract or digest, an author-custody config or
+digest, or a boundary contract or digest named (by variable or by the launcher's own
+options); or a boundary record handed to the lane wrapper. A Signet or custody requirement
+is refused for both providers whether or not a boundary is also supplied. The refusal is made by `protocol_host` itself, which every hosted
 start goes through, so the direct entries refuse as the launcher does: `lane_agent.py run`
 (exit 77, the provider not started and no hand-over recorded), `lane_agent.py preflight` (exit 77, the provider's account
 command is not run) and `protocol_host.py run`. The reason is specific: neither provider asks about every action
@@ -475,7 +479,136 @@ for either, and none is claimed.
   session, a message arriving while a turn runs. For Antigravity, what its server sends
   before a prompt's answer in a turn that uses tools, and whether the model name the
   public launcher records matches a session option. The lane's Kindex reaching a real
-  session. A hosted lane inside the kernel boundary.
+  session. Either of these two real turns inside a kernel boundary: both ran with none.
+  (What has since been run under one, on Antigravity only, and that no real session has,
+  is the next section.)
+
+#### Under the kernel boundary (Antigravity only)
+
+When an `agy` lane is launched with a boundary contract and digest
+(`--boundary-contract`/`--boundary-digest`, or the variables), and no Signet or custody
+requirement, the host program stays **outside** the boundary, as the lane wrapper does, and
+only Antigravity's server runs **inside** it, started through `validator_boundary.py` with
+the lane's contract and digest unchanged. The host's journal, record, command ids and socket
+stay in the run's own control tree and never go into the clone.
+
+- **The contract is held to what a hosted lane needs, before anything is started.** The
+  lane's control directories must be under a root the contract denies reading. Every place
+  the trusted side loads code from when it starts must be under a root it denies writing,
+  unless nothing anywhere within it can be changed by this user (the whole tree is looked
+  at, not its top): the Factory checkout, the interpreter's own trees, each entry of its
+  import path as it actually is (site-packages, whatever a `.pth` file added), and the
+  user's site directory where one is in use. A contract that leaves any of that out is
+  refused by name, by the launcher before the provider's program is run for any reason, by
+  the message command before a restart, by the host, and by each direct entry that runs
+  the provider's program under a boundary (`lane_agent.py preflight`,
+  `protocol_host.py confined-run`): none relies on another to have checked.
+  `python harness/protocol_host.py trust-roots --control <dir>...` prints what a contract
+  must cover; `check-boundary` checks one. A contract that is missing, changed or has the
+  wrong digest fails the existing boundary admission (exit 77), also before any provider
+  run. On a machine whose interpreter is the user's own (Homebrew), covering it means
+  denying the lane that interpreter, or running the Factory on one the user cannot write:
+  the boundary module does not accept a write-protected root with symlinks that leave it.
+  That is a requirement on how the machine is provisioned and what the contract lists. It
+  is not something a launch can waive: an interpreter the lane could change is trusted
+  code the lane could change, and a bounded launch that leaves it uncovered is refused.
+- **Every run of the provider's program is inside.** Not only its session server: the
+  account check, the version and the help text the launcher asks of it before a lane
+  starts are run through the same boundary, in the lane's clone. Its start-up is the
+  provider's code too.
+- **Nothing ambient decides what the trusted side imports, from its first start.**
+  `tmux_lane.sh` and `tmux_lane_message.sh` can be run from anywhere, a lane's clone
+  included, and run dozens of Python helpers outside any boundary. Before the first of
+  them they drop `PYTHONSTARTUP`, `PYTHONHOME` and `PYTHONINSPECT`, replace `PYTHONPATH`
+  with the harness's own directories, and set `PYTHONSAFEPATH`, so the working directory
+  is on no helper's import path; `harness/trusted_startup` then runs first in every
+  helper and drops any other relative entry (an editable install leaves one, which Python
+  reads against the working directory). The same isolation is carried into every trusted
+  Python program started after that, and into none of the provider's
+  (`harness/trusted_start.py` is the one place that says how): the rebuilt environments
+  the lane wrapper and its watcher start from name the same two variables, and the wrapper
+  removes them from what it hands the provider's program. Where a variable cannot be
+  relied on, the program is started with Python's isolated, no-site flags instead, which
+  read no `PYTHON*` variable and run no site start-up: the host, its message command, the
+  boundary program and the Codex session driver, which the wrapper starts with the
+  environment the provider is given, and the lifecycle hook command
+  (`native_session.py hook`), which the provider itself runs from its settings, in the
+  session's workspace, with whatever environment it has. A module planted in the clone or
+  the workspace is not imported by any of them.
+- **A lane's `--cache-env` settings are the provider's and decide nothing for the trusted
+  side.** They used to be assigned by name in the rebuilt environment, after the
+  isolation, so a `--cache-env PYTHONPATH=<store>` replaced it for the wrapper and the
+  watcher. They now travel in one variable (`FACTORY_LANE_PROVIDER_ENV`, which
+  `--cache-env` may not name), and are set under their own names only on the provider's
+  program: by the wrapper, or by a hosted session's host on the provider's server. The
+  provider still gets its `PYTHONPATH`, exactly as given. Two limits, stated: the
+  boundary program and the Codex session driver share the provider's environment (one
+  becomes the provider's program, the other is its parent), so they are kept from Python
+  variables by the isolated flags and from nothing else; and inside a kernel boundary the
+  provider is given only the boundary's own short list of variables, as before, so a
+  `--cache-env` setting outside that list does not reach a bounded provider at all.
+- **The socket is not random.** Under a boundary it is `<slot>-hosted.sock` in the lane's
+  control directory, which the contract already keeps from the provider.
+- **The child attests before the provider exists.** The process the boundary starts first
+  runs a short system-shell stage, as the very process that then becomes Antigravity's
+  server: it lists every denied and control directory, tries to create a file in every
+  denied, protected and control directory, and tries to connect to the host's socket, says
+  what the kernel answered, and only then becomes the server. The host requires that
+  account first, from the process it started, with every attempt denied; otherwise there
+  is no confined provider and the start exits 70. Its record then carries `confined`: that
+  process's PID and start time (read from outside), the contract, its digest, the role and
+  how many attempts were denied. A requested digest alone never produces that record.
+- **A restart keeps the policy, by the lane's own record.** The boundary a lane was
+  launched under comes back from the launch record, and a contract that is gone or changed
+  starts nothing (one line, exit 70 for these lanes). The host then requires its own earlier
+  record of that session: valid, of this protocol, of the session being resumed, and naming
+  the same boundary digest or none. A record that is missing, damaged, of another session,
+  or of another policy is refused (exit 70) before anything is started: a missing record
+  is never read as "no boundary". This holds for unbounded hosted lanes as well. (The
+  zero-prompt `probe` is not a lane's continuation and keeps to no record.)
+- **What it is.** Static confinement of the server's process tree: no read of the denied
+  roots, no write of control records, no unix-socket, spawner or signal escape, by any
+  route, including tools the server runs.
+- **What it is not.** Not a decision per action: a Signet-required lane is still refused.
+  Not a limit on IP egress: what the lane can read, it can send. Not isolation of anything
+  the contract does not list: the profile denies named roots and allows the rest. And the
+  lane's reports are still the provider's own account: with the writer outside they cannot
+  be forged in the lane's files, which says nothing about a provider that reports
+  something untrue. macOS only.
+- **What was run.** A stand-in server, through the launcher and message command, under the
+  real profile: launch, a later message, restart on the same session with a new confined
+  process under the same digest; from inside, on first start and after the restart, 21
+  attempts refused each time (reads of a canary, the host record, the journal and the
+  wrapper's delivery record, direct and through `/bin/sh`; writes and a rename in the
+  control tree, the policy directory and the Factory's code; a connect to the host socket;
+  a signal to the host) while a write in the workspace succeeded; all four runs of the
+  stand-in's program for a launch (account check, version, help, server) found inside; a
+  contract leaving out the control records or the code refused; a wrong digest refused; a
+  restart refused, with nothing started, after the contract changed, with the contract
+  gone, with a host record of another schema, of another session, or with its confinement
+  removed; a `sitecustomize.py` on a `PYTHONPATH` given to the restart did not run; a
+  restart run from the lane's clone, with a `json.py` and a directory named like the
+  editable install's placeholder planted there, ran neither and succeeded; a trusted
+  script importing a module the interpreter lacks, started from that clone, loaded the
+  planted one with a bare rebuilt environment and not with the environment the launchers
+  now build nor with the isolated flags; with `--cache-env PYTHONPATH=<store>` on
+  unbounded Muse and Antigravity lanes, the store's start-up modules were loaded by the
+  provider's server alone (at launch and at restart), which had that `PYTHONPATH`, no
+  `PYTHONSAFEPATH` and no carrying variable, and by no trusted program, where the same
+  settings assigned by name, as before, were loaded by the wrapper; the hook command, run
+  from a workspace with planted modules and a `PYTHONPATH` naming more, ran none and wrote
+  its journal row, where the command as it was published before ran them; a stand-in
+  Cursor lane reported its lifecycle through the new command; the Codex session driver,
+  started as the wrapper now starts it, ran a stand-in turn and loaded nothing planted;
+  the direct
+  entries refused a contract that validates but leaves out the code or the named control
+  directory, with no run of the provider's program. Antigravity's real server: `initialize`
+  answered under the profile.
+  **Not run:** any real Antigravity session, prompt or tool under the boundary.
+- **Muse is refused under a boundary.** Its own shell sandbox cannot be applied inside one
+  (the kernel reports a forbidden second sandbox), and Muse with that sandbox off is not
+  adopted: the boundary leaves IP egress open and would not keep Muse's own network policy
+  for shell commands.
 
 ### Earlier terminal route for Muse lanes (history; lanes no longer use it)
 
@@ -823,6 +956,58 @@ through `lane_agent.py`. It is an author-lane adapter and is not accepted.
   file, is removed and refused by name. A `codex-interactive` lane that an earlier Factory
   started with nothing hosting it is refused a message for the same reason. To continue
   such a conversation the operator uses Codex's own `codex resume <session id>`.
+
+### The Signet guard hook command: how it starts, and what a failure is
+
+A lane that requires a Signet guard gives the client one command to run before each tool
+action (`harness/signet_hooks.py`). The client runs it itself: in the session's workspace,
+which the session can write, and with the client's own environment. Nothing about either
+may decide what the guard does.
+
+- **It starts isolated.** The command starts the program with Python's isolated, no-site
+  flags (`-I -S`): no `PYTHON*` variable is read, no `sitecustomize`, `usercustomize` or
+  `.pth` file runs, the user's site directory is not used, and neither the working
+  directory nor the script's own directory is on the import path. Before this, a
+  `PYTHONPATH` in the client's environment (a lane's `--cache-env PYTHONPATH=<store>` is
+  one way to have one), or a module in a directory named like an editable install's
+  placeholder in the workspace, was imported by the guard.
+- **Its dependencies are named.** The program imports the standard library only, except
+  on the author-custody path, where it first adds the harness directory, the checkout and
+  the interpreter's own site-packages directories, as plain absolute directories.
+- **A failure is a denial the command prints, not an exit code.** The command is a small
+  shell guard around the program. The program's answer is passed on only if the program
+  exited 0 and printed something. Otherwise (no interpreter, no script, a script that does
+  not parse, an import that fails, any uncaught error, a signal, silence) the guard prints
+  the client's own denial and exits 0. Inside the program, any error while deciding is the
+  same denial, a failed import included.
+- **Why not rely on the exit code.** What a client does with a hook that failed, as its
+  public documentation states it (read 2026-11-14, not exercised here):
+
+  | Client | Explicit deny (JSON, exit 0) | Exit 2 | Other failure (non-zero, crash, cannot start) | Timeout |
+  |---|---|---|---|---|
+  | Claude Code | blocks | blocks | **proceeds**, unless the handler sets `onFailure: "block"` (v2.1.295 and later; the Factory sets it) | proceeds, unless `onFailure: "block"` |
+  | Cursor | blocks | blocks | **proceeds**, unless `failClosed: true` (the Factory sets it); invalid JSON blocks either way | as other failures |
+  | Codex | blocks | blocks | **not stated**; no setting makes a failed hook block | not stated |
+
+  So an explicit denial is the one answer all three document as blocking, and for Codex
+  it is the only one. The guard gives that answer for every failure it can see.
+- **What it cannot do.** Deny when the client does not run it: Codex skips a hook it has
+  not been told to trust (the launcher checks that trust before a guarded Codex lane
+  starts), and Claude Code and Cursor have settings that turn hooks off. Outlast a hang:
+  past the client's own timer for the hook, the client's rule above applies (the program's
+  own deadlines end inside the 25 seconds it asks for). And Codex's documentation says some
+  tool paths do not go through the hook at all; a guard on Codex is a guardrail on the
+  paths that do.
+- **What was run.** Synthetic evaluator, the command exactly as configured for each client,
+  from a workspace holding planted `sitecustomize`, `usercustomize`, `json`, `argparse`
+  and `hashlib` modules (in it, in a placeholder-named directory, and on `PYTHONPATH`):
+  allow and deny came out unchanged and nothing planted ran, where the command as it was
+  before ran them and exited 1 with no decision. A denial, exit 0, for: an interpreter
+  that is missing or not executable; one that prints an allow and exits 1, prints nothing,
+  or is ended by a signal; a script that does not parse or is gone; an evaluator that
+  fails; empty, malformed or deeply nested input; a contract changed after configuration;
+  the author-custody path on an interpreter without the dependency; a `printf` shell
+  function inherited from the environment. **Not run:** any real client.
 
 ### Memory isolation, said plainly
 

@@ -166,6 +166,16 @@ public API is still pre-1.0.
   tester and nothing else (no tool call, no approval request, no lifecycle on a real
   model, and no billing-ledger or Signet proof; `docs/HARNESS.md`). This replaces, for lanes, the terminal route the two entries above
   and the held-message entry below describe.
+- A hosted Antigravity lane can run under the kernel boundary: the host stays outside it
+  and only Antigravity's server runs inside (`validator_boundary.py`, the lane's contract
+  and digest unchanged). The contract must keep the lane's control records and the code
+  the trusted host runs from out of the provider's reach, or the launch is refused before
+  the provider's program is run; the confined process attests the boundary itself before
+  the server exists, and its PID, start time and digest are recorded; a restart keeps the
+  session's policy. This is static confinement by path, socket, spawner and signal: not a
+  Signet guard (still refused), not a limit on IP egress, not isolation of unlisted paths.
+  Run on a stand-in server; no real Antigravity tool has run under it. Muse stays refused
+  under a boundary, and its refusal now says why (`docs/HARNESS.md`).
 - A new round of a lane is no longer started beside an earlier round that is still
   stopping. `tmux_lane.sh launch` decided "finished" by the lane's tmux window alone, and a
   closed window or an ended tmux server can leave the earlier round's wrapper and program

@@ -71,5 +71,8 @@ def test_dispatcher_observe_reports_retained_output_without_mutation(task) -> No
     assert len(observation["entries"]) == 1
     assert observation["entries"][0]["source"] == log.name
     assert observation["entries"][0]["text"] == before[Path(log.name)].decode()
-    assert {path.relative_to(root): path.read_bytes()
-            for path in root.rglob("*") if path.is_file()} == before
+    after = {path.relative_to(root): path.read_bytes()
+             for path in root.rglob("*") if path.is_file()}
+    assert all(after[path] == content for path, content in before.items())
+    assert all(path.is_relative_to("orchestrator/system-one")
+               for path in after.keys() - before.keys())

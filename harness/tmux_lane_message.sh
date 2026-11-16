@@ -5,6 +5,18 @@
 # question. The watchdog sends only the generated wrap-up notice (lane_watchdog.py), and only the
 # Validator sends a progress review, to a Coder lane, through the coder leak guard.
 set -euo pipefail
+# The Python helpers this script runs are the Factory's own code, run outside any lane's
+# boundary, from wherever the operator happens to be, which can be a lane's clone. What they
+# import is decided here and by the checkout, from the first one on: never by a variable
+# that happened to be in the caller's environment (a directory named there could hold code
+# a lane was able to write), and never by the working directory. Safe-path mode keeps the
+# working directory off every helper's import path, the helpers' own directory is named
+# instead, and harness/trusted_startup runs first in each and drops any other relative
+# entry.
+unset PYTHONSTARTUP PYTHONHOME PYTHONINSPECT
+_factory_harness="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+export PYTHONSAFEPATH=1 PYTHONPATH="$_factory_harness/trusted_startup:$_factory_harness"
+unset _factory_harness
 # shellcheck source=harness/factory_python.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
 
@@ -215,7 +227,10 @@ THREAD_ID=$(tr -d '\r\n' < "$THREAD_FILE")
   exit 70
 }
 
-exec 3< <("$FACTORY_PYTHON" - "$LAUNCHES" "$RUN" "$LANE" <<'PY'
+# Keep the heredoc outside process substitution: Bash 3.2 otherwise interprets
+# Python quoting while finding the substitution's closing parenthesis.
+retained_launch_fields() {
+"$FACTORY_PYTHON" - "$LAUNCHES" "$RUN" "$LANE" <<'PY'
 import json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
 run, lane = sys.argv[2:]
@@ -254,7 +269,8 @@ if any(not isinstance(value, str) or "\0" in value for value in values):
 for value in values:
     sys.stdout.buffer.write(value.encode("utf-8") + b"\0")
 PY
-)
+}
+exec 3< <(retained_launch_fields)
 IFS= read -r -d '' REPOSITORY <&3 || {
   echo "lane-message: retained repository is missing or malformed" >&2; exit 70;
 }
@@ -292,14 +308,25 @@ MODEL_CONFIG=()
 while IFS= read -r -d '' OVERRIDE <&3; do MODEL_CONFIG+=("$OVERRIDE"); done
 exec 3<&-
 # Reuse only the launch's binding. Ambient configuration cannot replace or drop it.
-"$FACTORY_PYTHON" - "$D" "$BOUNDARY_RECORD" "$LANE" "$REPOSITORY" <<'PY' || exit 77
+# A boundary that no longer validates (its contract gone or changed, another digest) starts
+# nothing, and says so in one line. For a hosted Muse or Antigravity lane that is exit 70,
+# as every unusable boundary is for them; for the others it stays 77.
+"$FACTORY_PYTHON" - "$D" "$BOUNDARY_RECORD" "$LANE" "$REPOSITORY" "$AGENT" "$RUN:$SLOT" <<'PY' || exit $?
 import json, os, pathlib, sys
 sys.path.insert(0, sys.argv[1])
 from validator_boundary import validate_lane_record
 record = json.loads(sys.argv[2])
+code = 70 if sys.argv[5] in ("muse", "agy") else 77
 if record is None and os.environ.get("FACTORY_REQUIRE_BOUNDARY") == "1":
-    raise SystemExit("lane-message: required retained author boundary is absent")
-validate_lane_record(record, sys.argv[3], pathlib.Path(sys.argv[4]))
+    print("lane-message: required retained author boundary is absent", file=sys.stderr)
+    raise SystemExit(code)
+try:
+    validate_lane_record(record, sys.argv[3], pathlib.Path(sys.argv[4]))
+except (OSError, ValueError, TypeError, KeyError) as error:
+    print(f"lane-message: the boundary {sys.argv[6]} was launched under cannot be used any "
+          f"more ({error}); nothing was started and no message was delivered",
+          file=sys.stderr)
+    raise SystemExit(code)
 PY
 BOUNDARY_MODEL_ARGS=""
 BOUNDARY_CODEX_ARGS=""
@@ -633,18 +660,41 @@ if [ "$PERSISTENT" = 1 ]; then
         # No Signet guard and no custody exist for these two (harness/agents.py), and a
         # restart is a start: refused before anything is spawned, as a launch is.
         PROTECTED=""
-        for NAME in FACTORY_REQUIRE_SIGNET FACTORY_REQUIRE_AUTHOR_CUSTODY FACTORY_REQUIRE_BOUNDARY; do
+        for NAME in FACTORY_REQUIRE_SIGNET FACTORY_REQUIRE_AUTHOR_CUSTODY; do
           case "${!NAME:-}" in ""|0) ;; *) PROTECTED="$PROTECTED $NAME" ;; esac
         done
         for NAME in FACTORY_SIGNET_CONTRACT FACTORY_SIGNET_DIGEST FACTORY_AUTHOR_CUSTODY_CONFIG \
-            FACTORY_AUTHOR_CUSTODY_DIGEST FACTORY_BOUNDARY_CONTRACT FACTORY_BOUNDARY_DIGEST; do
+            FACTORY_AUTHOR_CUSTODY_DIGEST; do
           [ -z "${!NAME:-}" ] || PROTECTED="$PROTECTED $NAME"
         done
         [ "$AUTHOR_CUSTODY" = null ] || PROTECTED="$PROTECTED recorded-author-custody"
-        [ "$BOUNDARY_RECORD" = null ] || PROTECTED="$PROTECTED recorded-boundary"
         if [ -n "$PROTECTED" ]; then
-          echo "lane-message: a Signet guard, author custody or a boundary is required ($(printf '%s' "$PROTECTED" | cut -c2-)), and none is qualified for a hosted $AGENT session (no gate on every tool action and no read isolation is established), so $RUN:$SLOT is not restarted and $MESSAGE_ID is planned and NOT delivered. Nothing was started" >&2
+          echo "lane-message: a Signet guard or author custody is required ($(printf '%s' "$PROTECTED" | cut -c2-)), and neither is qualified for a hosted $AGENT session (no gate on every tool action is established, and the kernel boundary is not one), so $RUN:$SLOT is not restarted and $MESSAGE_ID is planned and NOT delivered. Nothing was started" >&2
           exit 77
+        fi
+        # The boundary a session was launched under is the one a restart runs under (the
+        # launch's own record, read above; nothing ambient replaces or drops it). Muse is
+        # refused under any.
+        BOUNDED=""
+        case "${FACTORY_REQUIRE_BOUNDARY:-}" in ""|0) ;; *) BOUNDED="$BOUNDED FACTORY_REQUIRE_BOUNDARY" ;; esac
+        for NAME in FACTORY_BOUNDARY_CONTRACT FACTORY_BOUNDARY_DIGEST; do
+          [ -z "${!NAME:-}" ] || BOUNDED="$BOUNDED $NAME"
+        done
+        [ "$BOUNDARY_RECORD" = null ] || BOUNDED="$BOUNDED recorded-boundary"
+        if [ -n "$BOUNDED" ] && [ "$AGENT" = muse ]; then
+          echo "lane-message: a kernel boundary is required ($(printf '%s' "$BOUNDED" | cut -c2-)), and a hosted muse session is refused under one (Muse's own shell sandbox cannot be applied inside it, and Muse with that sandbox off is not adopted), so $RUN:$SLOT is not restarted and $MESSAGE_ID is planned and NOT delivered. Nothing was started" >&2
+          exit 77
+        fi
+        if [ "$BOUNDARY_RECORD" != null ]; then
+          # The restart is held to the boundary as the launch was, before anything of the
+          # lane's is started: its control records, the code the trusted side runs from and
+          # the directory this command is run in must all be out of the provider's reach.
+          BOUNDARY_WHY=$("$FACTORY_PYTHON" "$D/protocol_host.py" check-boundary \
+            --boundary-record "$BOUNDARY_RECORD" --boundary-role "$LANE" --workspace "$REPOSITORY" \
+            --control "$TMUX_ROOT" --control "$NATIVE_DIR" 2>&1 >/dev/null) || {
+            echo "lane-message: ${BOUNDARY_WHY#hosted-session: }, so $RUN:$SLOT is not restarted and $MESSAGE_ID is planned and NOT delivered. Nothing was started" >&2
+            exit 70
+          }
         fi ;;
       esac
       case "$AGENT" in codex-interactive|cursor-agent|muse|agy) LAUNCH_ARGUMENT_RESTART=1 ;; esac
@@ -701,6 +751,7 @@ if [ -f "$TURN_RECORD" ] && [ ! -L "$TURN_RECORD" ] && [ "$AGENT" = codex-intera
   # accept arbitrary extra arguments as a way around resume's fixed permission profile.
   GUARD_RESUME=$(env -i HOME="$SAFE_HOME" USER="$SAFE_USER" PATH="$SAFE_PATH" \
     TMPDIR="$SAFE_TMPDIR" CODEX_HOME="$SAFE_CODEX_HOME" \
+    PYTHONSAFEPATH=1 PYTHONPATH="$D/trusted_startup:$D" \
     "$FACTORY_PYTHON" "$D/signet_hooks.py" --resume-record "$TURN_RECORD" \
     --check-codex-cwd "$REPOSITORY") || {
     echo "lane-message: retained Signet configuration or exact Codex hook trust unavailable" >&2
@@ -761,6 +812,13 @@ elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
   printf -v ENV_PREFIX 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q FACTORY_RUNS_DIR=%q HARNESS_RUN_ROOT=%q' \
     "$SAFE_HOME" "$SAFE_USER" "$LANE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
     "$FACTORY_RUNS_ROOT" "$ROOT"
+  # The restarted wrapper and its watcher are trusted Python programs started from this
+  # rebuilt environment, the wrapper in the lane's clone: they start isolated, as every
+  # helper of this script does, and the wrapper keeps both variables from the provider.
+  printf -v STARTUP_ENV ' PYTHONSAFEPATH=1 PYTHONPATH=%q' "$D/trusted_startup:$D"
+  ENV_PREFIX+="$STARTUP_ENV"
+  # The launch's cache settings, carried in one variable for the provider's program alone
+  # (as at launch): none of them is set under its own name on a trusted program.
   ENV_PREFIX+="${LANE_ENV_ASSIGN:+ $LANE_ENV_ASSIGN}"
   if [ "$HOSTED_RESUME" = 1 ]; then
     # As at launch: the run's tmux server, and the command the operator starts Claude Code
