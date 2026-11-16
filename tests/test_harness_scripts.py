@@ -869,23 +869,52 @@ def test_spawn_ledger_signals_only_a_recorded_live_process(tmp_path: Path) -> No
 def test_spawn_reserves_a_label_under_the_ledger_lock(tmp_path: Path) -> None:
     """Review of #70: a start that raced another start of the same label never launches."""
     import fcntl
+    import select
 
     ledger = tmp_path / "spawns.jsonl"
     marker = tmp_path / "launched"
-    with open(ledger, "a+", encoding="utf-8") as held:
-        fcntl.flock(held, fcntl.LOCK_EX)
-        racer = subprocess.Popen(
-            [sys.executable, str(HARNESS / "spawn.py"), "start", "--root", str(tmp_path),
-             "--name", "probe", "--", "touch", str(marker)],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        )
-        time.sleep(1.0)  # the racer has read the label check by now unless it waits on the lock
-        held.write(json.dumps({"name": "probe", "pid": 1, "pgid": 1, "started": None}) + "\n")
-        held.flush()
-    _, err = racer.communicate(timeout=30)
-    assert racer.returncode == 65, err
-    assert not marker.exists()
-    assert len(ledger.read_text().splitlines()) == 1
+    ready_read, ready_write = os.pipe()
+    # Observe the real child's lock attempt, rather than guessing when its label
+    # check ran. Keep the real flock: the parent owns it until its row is flushed.
+    bootstrap = "\n".join([
+        "import fcntl, os, runpy, sys",
+        "original = fcntl.flock",
+        "def observed(fd, operation):",
+        f"    if operation == fcntl.LOCK_EX: os.write({ready_write}, b'R')",
+        "    return original(fd, operation)",
+        "fcntl.flock = observed",
+        "sys.argv = sys.argv[1:]",
+        "runpy.run_path(sys.argv[0], run_name='__main__')",
+    ])
+    racer = None
+    try:
+        with open(ledger, "a+", encoding="utf-8") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            racer = subprocess.Popen(
+                [sys.executable, "-c", bootstrap, str(HARNESS / "spawn.py"),
+                 "start", "--root", str(tmp_path), "--name", "probe",
+                 "--", "touch", str(marker)],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                pass_fds=(ready_write,),
+            )
+            os.close(ready_write)
+            ready_write = None
+            assert select.select([ready_read], [], [], 10)[0], "child never attempted ledger lock"
+            assert os.read(ready_read, 1) == b"R", "child exited before attempting ledger lock"
+            held.write(json.dumps({"name": "probe", "pid": 1, "pgid": 1,
+                                   "started": None}) + "\n")
+            held.flush()
+        _, err = racer.communicate(timeout=30)
+        assert racer.returncode == 65, err
+        assert not marker.exists()
+        assert len(ledger.read_text().splitlines()) == 1
+    finally:
+        os.close(ready_read)
+        if ready_write is not None:
+            os.close(ready_write)
+        if racer is not None and racer.poll() is None:
+            racer.kill()
+            racer.communicate(timeout=10)
 
 
 def test_with_secret_reaches_only_the_child_and_never_its_output(tmp_path: Path) -> None:
