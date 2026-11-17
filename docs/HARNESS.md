@@ -1056,8 +1056,9 @@ Optional-log failures warn after durable delivery and do not request another del
 `harness/orchestrator_checkpoint.sh RUN KIND DETAIL` queues a notification to the
 Orchestrator. It does not wait for a cursor, assessment, or permission to continue.
 The resident Orchestrator reads all retained activity using
-`harness/dispatcher.py --run RUN --root RUN_ROOT --observe`, retaining returned cursors
-for the next read. Output, exits and messages are evidence; silence is not proof of a
+`harness/dispatcher.py --run RUN --root RUN_ROOT --observe --continue`, which keeps its
+cursors in the run (`orchestrator/observe-cursors.json`) so every read is the same command
+an agent host can allow once; `--after CURSORS_JSON` passes returned cursors explicitly. Output, exits and messages are evidence; silence is not proof of a
 stall. Oversight addresses concrete findings without automatic backlog suspensions.
 
 ## Candidate checks and completion

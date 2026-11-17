@@ -710,8 +710,8 @@ def _start_locked(runs: Path, run: str) -> None:
         if role == "orchestrator":
             prompt += (
                 f" Continuously read all lane activity using {tools}/dispatcher.py "
-                f"--run {run} --root {root} --observe --wait-seconds 30 --after CURSORS_JSON. "
-                "Begin with {}; retain and pass the returned cursors to the next call. "
+                f"--run {run} --root {root} --observe --wait-seconds 30 --continue. "
+                "It is the same command every time: it keeps its cursors in the run between calls. "
                 "Keep observing and acting on concrete findings until task completion."
             )
         if agent == "kickoff" and role == "validator":

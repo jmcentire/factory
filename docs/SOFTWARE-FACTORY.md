@@ -64,7 +64,7 @@ Input separation and model diversity address different failure modes. Filtered i
 
 Before first author launch, the Validator uses `harness/role_inputs.py prepare` to select actual files. The Coder receives source minus the declared tests; the Tester receives only selected interfaces/specification, or an empty repository with its behavioral brief. Each tree has a fresh Git history. The launcher checks the prepared tree before handoff. The Validator must inspect semantic content: neither filenames nor a digest can prove a document contains no leaked implementation. Curated shared Kindex context is copied into private lane stores; the live author graphs are not a shared communication channel.
 
-The resident Orchestrator uses `harness/dispatcher.py --observe` to read retained output, launches, exits and coordinator inboxes. It supplies the previous byte offsets to read the next chunks, then waits for new activity. Its own conversation already contains its own activity. This replaces terminal injection and automatic backlog suspension with observation and concrete decisions. A log append or successful read is not an acknowledgment or completed review.
+The resident Orchestrator uses `harness/dispatcher.py --observe` to read retained output, launches, exits and coordinator inboxes. With `--continue` it keeps the previous byte offsets in the run and reads on from them, so each read is the same command; then it waits for new activity. Its own conversation already contains its own activity. This replaces terminal injection and automatic backlog suspension with observation and concrete decisions. A log append or successful read is not an acknowledgment or completed review.
 
 ## Regular quality check-ins
 

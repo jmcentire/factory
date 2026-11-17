@@ -25,8 +25,10 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Mapping
+from typing import NoReturn
 
 _HARNESS_MODULE_ROOT = str(pathlib.Path(__file__).resolve().parent)
 if _HARNESS_MODULE_ROOT not in sys.path:
@@ -1040,22 +1042,89 @@ def observe(root: pathlib.Path, previous: dict) -> dict:
     return dict(entries=entries, cursors=cursors)
 
 
+#: Where ``--observe --continue`` keeps its cursors between calls, inside the run.
+OBSERVE_CURSORS = pathlib.PurePosixPath("orchestrator/observe-cursors.json")
+
+
+def read_cursors(root: pathlib.Path) -> dict:
+    """The cursors the last ``--continue`` observation kept; none before the first.
+
+    With them kept here, every observation is the same command line, which an agent host's
+    "always allow this command" rule matches. A command carrying its cursors as an argument
+    differs on every call, and Antigravity asked for approval of each one (2026-11-17).
+    """
+    path = root / OBSERVE_CURSORS
+    try:
+        # Non-blocking: a FIFO here is refused below, not waited on for a writer.
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return {}
+    try:
+        regular = stat.S_ISREG(os.fstat(fd).st_mode)
+    except OSError:
+        os.close(fd)
+        raise
+    if not regular:  # checked before fdopen, which refuses a directory in its own words
+        os.close(fd)
+        raise ValueError(f"observe cursors are not a regular file: {OBSERVE_CURSORS}")
+    with os.fdopen(fd, "rb") as stream:
+        try:
+            cursors = json.loads(stream.read())
+        except ValueError:
+            raise ValueError(f"observe cursors are not JSON: {OBSERVE_CURSORS}") from None
+    if not isinstance(cursors, dict):
+        raise ValueError(f"observe cursors are not an object: {OBSERVE_CURSORS}")
+    return cursors
+
+
+def keep_cursors(root: pathlib.Path, cursors: dict) -> None:
+    """Replace the kept cursors whole, so a reader never sees a partial file."""
+    path = root / OBSERVE_CURSORS
+    if path.parent.is_symlink():
+        raise ValueError(f"observe cursors directory is a symlink: {OBSERVE_CURSORS.parent}")
+    path.parent.mkdir(mode=0o700, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".observe-cursors-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(cursors, stream)
+        os.replace(temporary, path)
+    except BaseException:
+        pathlib.Path(temporary).unlink(missing_ok=True)
+        raise
+
+
+def _refuse(reason: str) -> NoReturn:
+    """A refusal the caller can read: one line on stderr and the harness's refusal exit 70."""
+    print(f"dispatcher.py --observe refused: {reason}", file=sys.stderr)
+    raise SystemExit(70)
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--run", required=True)
     p.add_argument("--root", required=True)
     p.add_argument("--observe", action="store_true",
                    help="read retained activity without control actions")
-    p.add_argument("--after", default="{}", help="cursors JSON returned by the last observation")
+    p.add_argument("--after", default=None, help="cursors JSON returned by the last observation")
+    p.add_argument("--continue", dest="resume", action="store_true",
+                   help="continue from the cursors the last --continue observation kept in the run")
     p.add_argument("--wait-seconds", type=float, default=0)
     args = p.parse_args()
     root = pathlib.Path(args.root)
     if not args.observe:
         p.error("--observe is required")
+    if args.resume and args.after is not None:
+        p.error("--continue keeps its own cursors; do not also pass --after")
     from run_record import load
 
     root, _ = load(root.parent, args.run)
-    previous = json.loads(args.after)
+    if args.resume:
+        try:
+            previous = read_cursors(root)
+        except (OSError, ValueError) as error:
+            _refuse(f"--continue: {error}")
+    else:
+        previous = json.loads(args.after or "{}")
     if not isinstance(previous, dict) or not 0 <= args.wait_seconds <= 60:
         p.error("--after must be an object; --wait-seconds must be between 0 and 60")
     deadline = time.monotonic() + args.wait_seconds
@@ -1070,7 +1139,14 @@ def main() -> None:
                 # Advisory context/storage failures never suppress the observed activity.
                 # Raw exception/provider text may contain private inputs or credentials.
                 result["system_one"] = dict(status="unavailable", reason="screening-unavailable")
-            print(json.dumps(result))
+            print(json.dumps(result), flush=True)
+            if args.resume:
+                # Only once the observation is out: a call that printed nothing moves nothing.
+                try:
+                    keep_cursors(root, result["cursors"])
+                except (OSError, ValueError) as error:
+                    _refuse(f"--continue: observation printed, cursors not kept "
+                            f"(the next call reads it again): {error}")
             return
         time.sleep(min(1, max(0, deadline - time.monotonic())))
 
