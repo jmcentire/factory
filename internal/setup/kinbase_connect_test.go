@@ -39,6 +39,10 @@ type kinbaseWorld struct {
 }
 
 func newKinbaseWorld(t *testing.T, w kinbaseWorld) *kinbaseWorld {
+	// Linux runners can set XDG roots outside the temporary Options.Home.
+	// Each simulated machine needs its own session and proof-clock files.
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state"))
 	w.t = t
 	w.env = testEnv(t, kindexOptions())
 	w.env.Interactive = true
