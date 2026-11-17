@@ -31,6 +31,7 @@ from collections.abc import Mapping
 _HARNESS_MODULE_ROOT = str(pathlib.Path(__file__).resolve().parent)
 if _HARNESS_MODULE_ROOT not in sys.path:
     sys.path.insert(0, _HARNESS_MODULE_ROOT)
+import seat_attention  # noqa: E402 - adjacent harness module
 from attention_gate import append_blocking_event  # noqa: E402 - adjacent harness module
 from jev_screen import ScreenError, screen_pending  # noqa: E402
 from lane_dialogue import (  # noqa: E402 - adjacent harness module
@@ -60,37 +61,8 @@ TRIGGER_PATTERNS: dict[str, str] = {
     "spec_defect": r"spec-defect|specification defect",
     "contamination": r"contaminat",
 }
-# A seat sitting on a dialog is otherwise silent. Observe persistent prompts for the
-# run's owners; screen text is not authority to accept a permission or trust decision.
-SEAT_ATTENTION_PATTERNS: dict[str, re.Pattern[str]] = {
-    # A host permission dialog: Claude Code's (a PreToolUse "ask" hook raises the same one) or
-    # Codex's approval prompt. Nobody watches a seat's pane; run e's Validator sat 14 min on one.
-    "permission_prompt": re.compile(
-        r"Do you want to (?:proceed|make this edit|create|allow)\b|"
-        r"tell (?:Claude|Codex) what to do differently|"
-        r"Would you like to (?:run the following command|make the following edits)|"
-        r"Allow command\?"
-    ),
-    # A folder-trust dialog: Claude Code's and Codex's first-launch prompt for a workdir.
-    "folder_trust": re.compile(
-        r"Do you trust the (?:files|contents) (?:in|of) this (?:folder|directory)|"
-        r"Yes, I trust this folder|allow Codex to work in this folder"
-    ),
-    # A fresh Claude Code may show this after the user selected bypass permissions.
-    "bypass_permissions": re.compile(r"running in Bypass Permissions mode"),
-    # A provider usage or quota limit: the seat looks alive and does nothing until it resets.
-    # Anchored on each provider's own dialog line, never on words ordinary output also uses
-    # ("rate limit reached", "resets in 5 m"): Claude Code and Codex print "You've hit your usage
-    # limit" (run c: "You've hit your usage limit · resets 3pm (America/New_York)"); Claude Code
-    # 2.1.299 also prints "You've hit your limit" and "Usage limit reached · <what happens next>"
-    # (both read from that release's binary, 2026-10-14; the middle dot is U+00B7); agy prints
-    # "Individual quota reached. Resets in 154h." (run e).
-    "usage_limit": re.compile(
-        r"\bYou(?:'|\u2019)ve hit your (?:usage )?limit\b|"
-        r"\bUsage limit reached \u00b7|"
-        r"\bIndividual quota reached\.?\s+Resets in \d+\s*[hm]"
-    ),
-}
+# Seat dialog patterns are seat_attention's, whose watch records seat dialogs from a run's start.
+SEAT_ATTENTION_PATTERNS = seat_attention.PATTERNS
 #: A dialog already recorded as unanswerable; it is not recorded again until it clears.
 _RECORDED = 99
 HEALTHY_IDLE = "idle-awaiting-handoff"

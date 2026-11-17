@@ -77,7 +77,10 @@ def test_restart_resumes_each_retained_coordinator_without_changing_inputs(tmp_p
     if agent == "agy":
         # A manual start remains supported, but must not offer a wake daemon or
         # stream transport as if AGY had an unattended resume/delivery path.
-        assert windows == ["validator", "orchestrator"]
+        # The seat watch only records dialogs to inbox files; it delivers nothing into AGY.
+        assert [window for window in windows if window != "seat-watch"] == [
+            "validator", "orchestrator"]
+        assert windows.count("seat-watch") == 1
         assert all("--terminal" in argv and "--persistent" not in argv
                    and "--print" not in argv for argv in fresh.values())
         assert not agents.harness(agent).resumable

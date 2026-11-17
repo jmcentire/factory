@@ -114,8 +114,11 @@ def test_startup_pins_exact_inputs_and_uses_only_two_coordinators(launch):
     record = json.loads(before)
     assert (root / "TASK.md").read_bytes() == b"Keep this exact task.\n"
     assert (root / "harness.json").read_bytes() == before
-    assert [c[c.index("-n") + 1] for c in calls if "-n" in c] == [
+    windows = [c[c.index("-n") + 1] for c in calls if "-n" in c]
+    # Two coordinators, plus the seat watch every run gets (it is not a coordinator).
+    assert [window for window in windows if window != "seat-watch"] == [
         "validator", "orchestrator"]
+    assert windows.count("seat-watch") == 1
     for role in ("validator", "orchestrator"):
         call, environment, command = invocation(calls, role)
         assert call[1:3] == ["-L", record["tmux_socket"]]
@@ -282,7 +285,8 @@ def test_kickoff_validator_gets_private_brief_without_duplicate_process(launch, 
     monkeypatch.setenv("FACTORY_VALIDATOR_AGENT", "kickoff")
     calls = capture()
     windows = [c[c.index("-n") + 1] for c in calls if "-n" in c]
-    assert windows == ["orchestrator"]
+    assert [window for window in windows if window != "seat-watch"] == ["orchestrator"]
+    assert windows.count("seat-watch") == 1
     brief = root / "validator/BRIEF.md"
     assert "inbox.jsonl" in brief.read_text() and str(root / "TASK.md") in brief.read_text()
     assert brief.stat().st_mode & 0o077 == 0

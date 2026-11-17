@@ -1620,6 +1620,7 @@ def test_factory_starts_a_git_target_without_catalog_or_operational_abi(tmp_path
     assert str(root / "TASK.md") in orchestrator
     assert (root / "TASK.md").read_text() == "some task"
     assert "-n inbox-wake " not in commands
+    assert "-n seat-watch " in commands  # every run's seats are watched, whatever the agents
 
 
 @pytest.mark.parametrize("executable", ["tmux", "ollama"])
@@ -2139,7 +2140,7 @@ def test_startup_preflight_failure_preserves_task_and_allows_retry(tmp_path, mon
     run_record.start(runs, "r1")
     assert sum("new-session" in call for call in calls) == 1
     assert {call[call.index("-n") + 1] for call in calls if "new-window" in call} == {
-        "orchestrator"}
+        "orchestrator", "seat-watch"}
     assert (root / "harness.json").read_bytes() == original
 
 

@@ -891,6 +891,11 @@ def _start_locked(runs: Path, run: str) -> None:
                                "run", "--root", str(root)])
             subprocess.run([*tmux, "new-window", "-d", "-t", f"={run}",
                             "-n", "inbox-wake", "-c", doc['repository'], wake], check=True)
+        # Every run, whatever its agents: a seat stopped at a host dialog is otherwise unseen.
+        seats = shlex.join([sys.executable, str(tools / "seat_attention.py"),
+                            "watch", "--root", str(root)])
+        subprocess.run([*tmux, "new-window", "-d", "-t", f"={run}",
+                        "-n", "seat-watch", "-c", doc['repository'], seats], check=True)
         # Native inbox transport only; no supervisor may stop work for review lag.
         print(f"Factory {run}: tmux -L {doc['tmux_socket']} attach -t {shlex.quote(run)}")
         if selected["validator"] == "kickoff":
