@@ -92,9 +92,9 @@ Ask a maintainer to publish a GitHub release for a v* tag, or install Go (https:
   local src="$tmp/src"
   local source_ref="${FACTORY_SETUP_REF:-$TAG}"
   gh repo clone "$REPO" "$src" -- --quiet --depth 1 ${source_ref:+--branch "$source_ref"} 2>/dev/null \
-    || die "could not clone ${REPO}${FACTORY_SETUP_REF:+ at $FACTORY_SETUP_REF}"
+    || die "could not clone ${REPO}${source_ref:+ at $source_ref}"
   [[ -f "$src/go.mod" && -d "$src/cmd/factory-setup" ]] \
-    || die "${REPO}${FACTORY_SETUP_REF:+@$FACTORY_SETUP_REF} has no cmd/factory-setup to build.
+    || die "${REPO}${source_ref:+@$source_ref} has no cmd/factory-setup to build.
 Set FACTORY_SETUP_REF to a Chiron revision containing cmd/factory-setup, or wait for a release."
   (cd "$src" && GOTOOLCHAIN="${GOTOOLCHAIN:-auto}" CGO_ENABLED=0 go build -trimpath -o "$tmp/$asset" ./cmd/factory-setup) \
     || die "go build failed; see output above"

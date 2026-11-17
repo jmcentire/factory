@@ -2,7 +2,7 @@ name: Factory setup
 
 on:
   pull_request:
-    paths: ["cmd/**", "internal/**", "docs/**", "scripts/test_installer_startup.py", "go.mod", "go.sum", "install.sh", ".github/workflows/factory-setup.yml"]
+    paths: ["cmd/**", "internal/**", "docs/FACTORY-PUBLISHING.md", "docs/publishing.go", "scripts/test_installer_startup.py", "go.mod", "go.sum", "install.sh", ".github/workflows/factory-setup.yml"]
   push:
     branches: [main]
   release:
@@ -24,6 +24,7 @@ jobs:
       - run: bash -n install.sh
       - run: python3 scripts/test_installer_startup.py
   online-install:
+    if: github.event_name != 'release'
     needs: check
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -35,7 +36,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.14"
-      - uses: DeterminateSystems/nix-installer-action@2559b44fed7d4fc978e8dd0e379661afb8b73590
+      - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
       - name: Verify Nix daemon and runtime prerequisites
         run: |
           nix-store --add README.md
@@ -88,4 +89,4 @@ jobs:
           FACTORY_RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           gh release view "$FACTORY_RELEASE_TAG" --repo "$GITHUB_REPOSITORY"
-          gh release upload "$FACTORY_RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY"
+          gh release upload "$FACTORY_RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber

@@ -38,6 +38,7 @@ func TestLatestReleaseCachesAndBacksOff(t *testing.T) {
 	calls := filepath.Join(bin, "calls")
 	gh := func(script string) {
 		t.Helper()
+		script = strings.ReplaceAll(script, "factory-setup-linux-amd64", installerAssetName())
 		body := "#!/bin/sh\necho x >> " + calls + "\n" + script + "\n"
 		if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
@@ -88,10 +89,18 @@ func TestLatestInstallerReleaseSkipsRuntimeOnlyAndIncompleteAssets(t *testing.T)
         {"tag_name":"v8.0.0","assets":[{"name":"checksums.txt"}]},
         {"tag_name":"v7.0.0","draft":true,"assets":[{"name":"factory-setup-linux-amd64"},{"name":"checksums.txt"}]}
     ],[{"tag_name":"v1.0.0","assets":[{"name":"factory-setup-linux-amd64"},{"name":"checksums.txt"}]}]]`)
+	data = []byte(strings.ReplaceAll(string(data), "factory-setup-linux-amd64", installerAssetName()))
 	if got := latestInstallerRelease(data); got != "v1.0.0" {
 		t.Fatalf("got %q", got)
 	}
 	if got := latestInstallerRelease([]byte(`[[{"tag_name":"v9.0.0","assets":[]}]]`)); got != "" {
 		t.Fatalf("runtime-only release: %q", got)
+	}
+}
+
+func TestLatestInstallerReleaseRejectsOtherPlatformAssets(t *testing.T) {
+	data := []byte(`[[{"tag_name":"v9.0.0","assets":[{"name":"factory-setup-other-platform"},{"name":"checksums.txt"}]}]]`)
+	if got := latestInstallerRelease(data); got != "" {
+		t.Fatalf("other platform release: %q", got)
 	}
 }

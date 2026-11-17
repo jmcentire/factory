@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -109,7 +110,7 @@ func latestInstallerRelease(data []byte) string {
 		for _, release := range page {
 			binary, checksum := false, false
 			for _, asset := range release.Assets {
-				binary = binary || strings.HasPrefix(asset.Name, "factory-setup-")
+				binary = binary || asset.Name == installerAssetName()
 				checksum = checksum || asset.Name == "checksums.txt"
 			}
 			if !release.Draft && !release.Prerelease && binary && checksum {
@@ -119,3 +120,5 @@ func latestInstallerRelease(data []byte) string {
 	}
 	return ""
 }
+
+func installerAssetName() string { return "factory-setup-" + runtime.GOOS + "-" + runtime.GOARCH }
