@@ -169,6 +169,20 @@ ANTIGRAVITY_FILE = payload(  # Antigravity, Orchestrator: a read outside its wor
     "  ↑/↓ Navigate",
     ANTIGRAVITY_STATUS,
 )
+ANTIGRAVITY_CREATE = payload(  # Antigravity, Orchestrator: creating a file (no home path)
+    "Create file",
+    RULE,
+    "/srv/runs/run/orchestrator/checkin-1.txt",
+    "   1  +  Orchestrator regular quality check-in (initial approach + Coder commits",
+    "         fb57e7e/70a5888 + Tester r2b suite):",
+    "   2  +",
+    "  … 11 more lines (f for full diff)",
+    "Allow creation of this file?",
+    "> 1. Yes, allow creation",
+    "  2. No, deny creation",
+    "  ↑/↓ Navigate · f full diff",
+    ANTIGRAVITY_STATUS,
+)
 CLAUDE_PANEL = payload(  # Claude Code, Validator: a panel that holds the seat's input
     "✻ Cooked for 1m 52s · done 4:15 AM",
     "Background update waiting while this panel is open",
@@ -239,11 +253,12 @@ def test_the_dispatcher_reads_the_seat_watchs_own_patterns():
         (ANTIGRAVITY_TOOL, "permission_prompt"),
         (ANTIGRAVITY_COMMAND, "permission_prompt"),
         (ANTIGRAVITY_FILE, "permission_prompt"),
+        (ANTIGRAVITY_CREATE, "permission_prompt"),
         (CLAUDE_PANEL, "host_panel"),
     ],
     ids=["claude-read-outside", "claude-added-directory", "claude-workspace", "antigravity",
          "cursor-command", "antigravity-tool", "antigravity-command", "antigravity-file",
-         "claude-panel"],
+         "antigravity-create", "claude-panel"],
 )
 def test_each_live_dialog_is_recognized_as_its_kind(text, kind):
     """The dialogs that stopped real seats, each in full. Red if any is missed (the seat waits
@@ -273,6 +288,7 @@ def test_each_live_dialog_is_recognized_as_its_kind(text, kind):
         ("  ↑/↓ Navigate · tab Amend · ctrl+g edit/expand command", "permission_prompt",
          "↑/↓ Navigate · tab Amend · ctrl+g edit/expand command"),
         ("Allow access to this file?", "permission_prompt", "Allow access to this file?"),
+        ("Allow creation of this file?", "permission_prompt", "Allow creation of this file?"),
         ("   Teach auto mode about your environment?", "host_panel",
          "Teach auto mode about your environment?"),
         ("Background update waiting while this panel is open", "host_panel",
@@ -282,7 +298,8 @@ def test_each_live_dialog_is_recognized_as_its_kind(text, kind):
          "add-it-codex-marker", "add-it-ascii-marker", "antigravity-question",
          "cursor-allowlist", "cursor-allowlist-other-commands", "cursor-run-everything",
          "antigravity-tool", "antigravity-command", "antigravity-command-footer",
-         "antigravity-file", "claude-panel-question", "claude-panel-status"],
+         "antigravity-file", "antigravity-create", "claude-panel-question",
+         "claude-panel-status"],
 )
 def test_each_new_recognition_identifies_its_dialog_by_itself(line, kind, reported):
     """Each line this change recognizes, taken verbatim from its live payload, among ordinary
@@ -372,12 +389,16 @@ def test_pre_existing_dialogs_are_still_recognized(text, kind):
         # makes its footer an identifier (stated), so these lines alone are not dialogs.
         "  ↑/↓ Navigate · tab Amend\n",
         "  ↑/↓ Navigate\n",
+        # Antigravity's file-creation approval is identified by its question, not its footer.
+        "If the review passes, we allow creation of this file later.\n",
+        "  ↑/↓ Navigate · f full diff\n",
     ],
     ids=["retries", "upstream", "quota-test", "cache", "usage-errors", "read-explanation",
          "add-it-in-prose", "add-it-quoted", "bare-run-this-command",
          "cursor-question-without-identifiers", "allow-calling-in-prose",
          "requesting-permission-in-prose", "allow-access-in-prose", "allowlist-in-prose",
-         "teach-auto-mode-in-prose", "antigravity-tool-footer", "antigravity-file-footer"],
+         "teach-auto-mode-in-prose", "antigravity-tool-footer", "antigravity-file-footer",
+         "allow-creation-in-prose", "antigravity-create-footer"],
 )
 def test_ordinary_output_that_mentions_dialog_words_is_not_a_dialog(text):
     """Negative control. Red if a seat doing ordinary work is reported as waiting: "Yes, add

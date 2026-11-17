@@ -46,7 +46,9 @@ PATTERNS: dict[str, re.Pattern[str]] = {
         # (seen 2026-11-17 on an Orchestrator, one at a time, through a run). A command's
         # question line sits above the command, so a long command is known by its footer.
         r"Allow calling this tool\?|Requesting permission for:|Allow access to this file\?|"
-        r"ctrl\+g edit/expand command"
+        r"ctrl\+g edit/expand command|"
+        # ... and its approval for creating a file (seen 2026-11-17 on the same Orchestrator).
+        r"Allow creation of this file\?"
     ),
     # A folder-trust dialog: Claude Code's and Codex's first-launch prompt for a workdir,
     # Claude Code's question for an added directory it has not worked in (known by its option
