@@ -27,6 +27,18 @@ factory_load_context() {
   export FACTORY_RUNS_DIR FACTORY_HARNESS_ROOT FACTORY_HARNESS_META FACTORY_SOURCE_ROOT FACTORY_GENERATION
 }
 
+factory_resolve_tmux() {
+  # Pane launchers call this before constructing commands that will change cwd.
+  local selected_tmux
+  selected_tmux=$(type -P -- "${FACTORY_TMUX:-tmux}") || {
+    echo "factory: FACTORY_TMUX executable is unavailable: ${FACTORY_TMUX:-tmux}" >&2
+    return 69
+  }
+  case "$selected_tmux" in /*) ;; *) selected_tmux="$PWD/$selected_tmux" ;; esac
+  FACTORY_TMUX=$selected_tmux
+  export FACTORY_TMUX
+}
+
 # Every shell operation is addressed to this run's private server, including teardown.
 tmux() { command "${FACTORY_TMUX:-tmux}" -L "${FACTORY_TMUX_SOCKET:?load the run before using tmux}" "$@"; }
 

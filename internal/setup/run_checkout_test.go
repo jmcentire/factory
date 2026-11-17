@@ -237,6 +237,12 @@ func TestRunCheckoutLeavesTheHumansCheckoutAlone(t *testing.T) {
 	// list reports and deletes nothing; clean removes only the rebuildable bulk and
 	// keeps the run's evidence.
 	runDir := filepath.Join(human, ".factory", "runs", "r1")
+	// Cleanup needs observed inactivity, not absence of a client or record.
+	inactiveClient := filepath.Join(dir, "inactive-tmux")
+	must(t, os.WriteFile(inactiveClient, []byte("#!/bin/sh\necho 'no server running on fixture' >&2\nexit 1\n"), 0o755))
+	t.Setenv("FACTORY_TMUX", inactiveClient)
+	must(t, os.MkdirAll(runDir, 0o755))
+	write(filepath.Join(runDir, "harness.json"), `{"tmux_socket":"fixture-inactive"}`)
 	must(t, os.MkdirAll(filepath.Join(runDir, "tmux-lanes", "coder-agent-home"), 0o755))
 	write(filepath.Join(runDir, "tmux-lanes", "coder-lane.log"), "keep\n")
 	must(t, os.MkdirAll(filepath.Join(runDir, "validation", "c1"), 0o755))

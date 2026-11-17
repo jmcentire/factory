@@ -25,11 +25,35 @@ bulk() {
     [ ! -e "$d" ] && [ ! -L "$d" ] || printf '%s\n' "$d"
   done
 }
-# A run whose tmux session still answers is in progress, whatever its checkout shows.
+# 0 = live, 1 = confirmed inactive/no run directory, 2 = unknown. Client or
+# metadata failures never grant permission to remove a run's work.
 live() {
-  local sock
-  sock=$(sed -n 's/.*"tmux_socket": *"\([^"]*\)".*/\1/p' "$1/harness.json" 2>/dev/null | head -1)
-  [ -n "$sock" ] && tmux -L "$sock" has-session -t "=$2" 2>/dev/null
+  local sock client diagnostic status
+  [ ! -L "$1" ] || return 2
+  [ -d "$1" ] || return 1
+  [ -f "$1/harness.json" ] && [ ! -L "$1/harness.json" ] || return 2
+  sock=$("${FACTORY_PYTHON:-python3}" -I - "$1/harness.json" 2>/dev/null <<'PY'
+import json, re, sys
+with open(sys.argv[1]) as stream:
+    value = json.load(stream)["tmux_socket"]
+if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", value):
+    raise ValueError("invalid tmux socket")
+print(value)
+PY
+  ) || return 2
+  case "$sock" in '' | *[!A-Za-z0-9._-]*) return 2 ;; esac
+  client=$(type -P -- "${FACTORY_TMUX:-tmux}") || return 2
+  case "$client" in /*) ;; *) client="$PWD/$client" ;; esac
+  status=0
+  diagnostic=$(LC_ALL=C "$client" -L "$sock" has-session -t "=$2" 2>&1) || status=$?
+  [ "$status" -ne 0 ] || return 0
+  [ "$status" -eq 1 ] || return 2
+  case "$diagnostic" in
+    "no server running on "* | "can't find session: "* | \
+    "error connecting to "*" (No such file or directory)" | \
+    "error connecting to "*" (Connection refused)") return 1 ;;
+    *) return 2 ;;
+  esac
 }
 # Every git command on $W first proves $W is its own repository: otherwise git would walk up
 # into the human's .git, or a symlink would point it somewhere else.
@@ -165,7 +189,15 @@ accept)
   ;;
 finish) remove_checkout ;;
 clean)
-  ! live "$R" "$run" || die "run $run still has a live tmux session; keeping it"
+  [ ! -L "$R" ] || die "$R is a symlink; keeping it"
+  [ ! -d "$R" ] || [ "$(cd "$R" && pwd -P)" = "$R" ] || die "$R is not under $T; keeping it"
+  state=0
+  live "$R" "$run" || state=$?
+  case "$state" in
+    0) die "run $run still has a live tmux session; keeping it" ;;
+    1) ;;
+    *) die "run $run tmux liveness is unknown; check FACTORY_TMUX, FACTORY_PYTHON and harness.json; keeping it" ;;
+  esac
   # Deletes only inside the run's own folder under <target>, never through a symlink.
   [ ! -L "$R" ] || die "$R is a symlink; keeping it"
   [ ! -d "$R" ] || [ "$(cd "$R" && pwd -P)" = "$R" ] || die "$R is not under $T; keeping it"
@@ -193,7 +225,13 @@ list)
         state="keep: not the run's own checkout"
       fi
     fi
-    ! live "$R" "$run" || state="keep: live tmux session"
+    liveness=0
+    live "$R" "$run" || liveness=$?
+    case "$liveness" in
+      0) state="keep: live tmux session" ;;
+      1) ;;
+      *) state="keep: tmux liveness unknown" ;;
+    esac
     rb=-
     [ ${#b[@]} -eq 0 ] || rb=$(du -shc -- "${b[@]}" 2>/dev/null | tail -1 | awk '{print $1}' || true)
     echo "$run  checkout ${co:-?}  run bulk ${rb:-?}  $state"

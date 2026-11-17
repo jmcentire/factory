@@ -659,7 +659,12 @@ def _start_locked(runs: Path, run: str) -> None:
     tools = Path(__file__).resolve().parent
     home = tools.parent
     resources = resource_home()
-    tmux = [os.environ.get("FACTORY_TMUX") or "tmux", "-L", doc["tmux_socket"]]
+    selector = os.environ.get("FACTORY_TMUX") or "tmux"
+    executable = shutil.which(selector)
+    if executable is None:
+        raise ValueError(f"FACTORY_TMUX executable is unavailable: {selector}")
+    # Panes change cwd to the target repository; keep the executable selected here.
+    tmux = [str(Path(executable).absolute()), "-L", doc["tmux_socket"]]
     retry = shlex.join([sys.executable, str(tools / "run_record.py"), "start",
                         "--runs", str(root.parent), "--run", run])
     if subprocess.run([*tmux, "has-session", "-t", f"={run}"], capture_output=True).returncode == 0:
@@ -819,7 +824,7 @@ def _start_locked(runs: Path, run: str) -> None:
         env.update(
             TERM=(env["TERM"] if env.get("TERM") not in {None, "", "dumb"} else "xterm-256color"),
             FACTORY_HOME=str(resources),
-            FACTORY_TMUX=os.environ.get("FACTORY_TMUX") or "tmux",
+            FACTORY_TMUX=tmux[0],
             PYTHONPATH=str(home),
             FACTORY_PYTHON=sys.executable,
             FACTORY_RUNS_DIR=str(root.parent),
