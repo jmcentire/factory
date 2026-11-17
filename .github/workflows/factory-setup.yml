@@ -21,6 +21,40 @@ jobs:
       - run: go test ./...
       - run: go vet ./...
       - run: bash -n install.sh
+  online-install:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.14"
+      - uses: DeterminateSystems/nix-installer-action@2559b44fed7d4fc978e8dd0e379661afb8b73590
+      - name: Verify Nix daemon and runtime prerequisites
+        run: |
+          nix-store --add README.md
+          sudo apt-get update
+          sudo apt-get install -y tmux
+      - name: Install startup script fetched from GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FACTORY_SETUP_REF: ${{ github.head_ref || github.ref_name }}
+          FACTORY_SETUP_BIN_DIR: ${{ runner.temp }}/chiron-startup/bin
+        run: |
+          gh auth setup-git
+          gh api --method GET -H 'Accept: application/vnd.github.raw' \
+            "repos/$GITHUB_REPOSITORY/contents/install.sh" \
+            --raw-field "ref=$FACTORY_SETUP_REF" > "$RUNNER_TEMP/chiron-startup.sh"
+          bash "$RUNNER_TEMP/chiron-startup.sh" --version
+      - name: Fresh online Factory install with Python 3.14
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FACTORY_ONLINE_INSTALL_TEST: "1"
+        run: go test -v ./internal/setup -run '^TestOnlineFactoryInstallation$' -timeout 12m
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: check
