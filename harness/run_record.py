@@ -712,7 +712,14 @@ def _start_locked(runs: Path, run: str) -> None:
                 f" Continuously read all lane activity using {tools}/dispatcher.py "
                 f"--run {run} --root {root} --observe --wait-seconds 30 --continue. "
                 "It is the same command every time: it keeps its cursors in the run between calls. "
-                "Keep observing and acting on concrete findings until task completion."
+                "Keep observing and acting on concrete findings until task completion. "
+                # The exact command: on 2026-11-17 an Orchestrator told only "use run_record.py
+                # message" guessed --text, then --root, each a failed call and another approval.
+                # Only the Orchestrator's part changes: a kickoff Validator's retained brief must
+                # still match its prompt when a failed start is retried after an upgrade.
+                f"Message the Validator with {sys.executable} {tools}/run_record.py message "
+                f"--runs {root.parent} --run {run} --to validator --from orchestrator "
+                "--message-file FILE (the message in FILE)."
             )
         if agent == "kickoff" and role == "validator":
             brief = root / role / "BRIEF.md"
