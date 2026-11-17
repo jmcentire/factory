@@ -85,7 +85,9 @@ func (s factoryVenvStep) Apply(ctx context.Context, env *Env) error {
 	if py == "" {
 		return fmt.Errorf("%s", pythonBlocked(tooOld))
 	}
-	return env.Run(ctx, env.Opts.FactoryDir(), "make", "dev", "PY_BOOTSTRAP="+py)
+	// This installer always owns a local venv. An inherited CI flag otherwise
+	// makes the upstream Makefile install into the global interpreter instead.
+	return env.Run(ctx, env.Opts.FactoryDir(), "make", "dev", "CI=", "PY_BOOTSTRAP="+py)
 }
 
 // FactoryPrompt is one lane prompt the installer exposes as a slash command in

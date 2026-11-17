@@ -238,7 +238,7 @@ func TestFactoryVenvBuildsFromAPythonThatMeetsTheFloor(t *testing.T) {
 			makeArgs = args[1:]
 		}
 	}
-	if len(makeArgs) != 2 || makeArgs[0] != "dev" || !strings.HasPrefix(makeArgs[1], "PY_BOOTSTRAP=") || filepath.Base(makeArgs[1]) != "python3.13" {
+	if len(makeArgs) != 3 || makeArgs[0] != "dev" || makeArgs[1] != "CI=" || !strings.HasPrefix(makeArgs[2], "PY_BOOTSTRAP=") || filepath.Base(makeArgs[2]) != "python3.13" {
 		t.Fatalf("make dev not pointed at python3.13: %q", makeArgs)
 	}
 }
