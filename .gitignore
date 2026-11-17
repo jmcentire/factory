@@ -42,3 +42,6 @@ htmlcov/
 # Task-local directive records; only the README travels here
 DIRECTIVES/*
 !DIRECTIVES/README.md
+
+# Local Go installer build
+/factory-setup
