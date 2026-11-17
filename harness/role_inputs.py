@@ -119,22 +119,28 @@ def _named(found: list[str]) -> str:
     return ", ".join(found[:NAMED_PATHS]) + more
 
 
+#: The mode ``prepare`` gives a regular file (materialize_commit's, kept by its copy).
+_PREPARED_MODES = {"100644": 0o644, "100755": 0o755}
+
+
 def unrecorded_changes(receipt: dict, repository: Path, tree: _Tree) -> str:
     """Name what was added, removed or changed since the projection's own first commit.
 
     Nothing extra is kept at preparation: the clone's first commit holds every input file but
-    the no-index marker, so it is compared only when a launch is refused. Content and the
-    executable bit are compared, as Git records them. A directory the commit never had (an
-    install's node_modules) is named once, as ``dir/``, and not read. A path that is now a
-    directory symlink, another non-regular file or unreadable is named in ``tree.problems()``
-    only, and so is what the commit held under it.
+    the no-index marker, so it is compared only when a launch is refused. A file's contents are
+    compared as Git would commit them now (its attributes' filters applied, as at preparation),
+    its mode with the one ``prepare`` gave it. A directory the commit never had (an install's
+    node_modules) is named once, as ``dir/``, and not read; one holding only empty folders is not
+    named, as no input check sees it. A path that is now a directory
+    symlink, another non-regular file or unreadable is named in ``tree.problems()`` only, and
+    so is what the commit held under it. ValueError when the first commit cannot be read.
     """
     initial = str(receipt["initial_commit"])
     try:
         algorithm = run_host_git(repository, ["rev-parse", "--show-object-format"]).decode().strip()
         listing = run_host_git(repository, ["ls-tree", "-r", "-z", "--full-tree", initial])
-    except (HostGitError, OSError, ValueError):
-        return ""
+    except (HostGitError, OSError) as error:
+        raise ValueError(str(error)) from error
     committed: dict[str, tuple[str, str]] = {}
     for row in listing.split(b"\0"):
         if not row:
@@ -142,13 +148,14 @@ def unrecorded_changes(receipt: dict, repository: Path, tree: _Tree) -> str:
         meta, _, listed = row.partition(b"\t")
         mode, kind, oid = meta.decode().split(" ")
         if kind == "blob":
-            committed[listed.decode()] = (mode, oid)
+            committed[os.fsdecode(listed)] = (mode, oid)
     folders = {parent.as_posix() for name in committed for parent in PurePosixPath(name).parents}
     shown = set(tree.links) | set(tree.irregular) | set(tree.unreadable)
-    hidden = set(tree.links) | {name.rstrip("/") for name in tree.unlisted}
+    hidden = shown | {name.rstrip("/") for name in tree.unlisted}
     added: list[str] = []
     changed: list[str] = []
     present: set[str] = set()
+    contents: dict[str, str] = {}  # regular files whose blob is computed below
     for base, directories, files in os.walk(repository, followlinks=False):  # errors: in tree
         here = Path(base)
         kept = []
@@ -158,7 +165,7 @@ def unrecorded_changes(receipt: dict, repository: Path, tree: _Tree) -> str:
                 continue
             if relative in folders:
                 kept.append(directory)
-            else:
+            elif _holds_entries(here / directory):
                 added.append(relative + "/")  # never committed: named once, not read
         directories[:] = kept
         for name in sorted(files):
@@ -167,15 +174,22 @@ def unrecorded_changes(receipt: dict, repository: Path, tree: _Tree) -> str:
             if relative in shown:
                 continue
             present.add(relative)
+            info = path.lstat()
             if relative == NO_INDEX_MARKER:
-                info = path.lstat()
                 if not stat.S_ISREG(info.st_mode) or info.st_size:
                     changed.append(relative)
-                continue
-            if relative not in committed:
+            elif relative not in committed:
                 added.append(relative)
-            elif _differs(path, *committed[relative], algorithm):
+            elif stat.S_ISLNK(info.st_mode) != (committed[relative][0] == "120000"):
+                changed.append(relative)  # a file became a link, or a link a file
+            elif stat.S_ISLNK(info.st_mode):
+                if _blob_id(path, algorithm) != committed[relative][1]:
+                    changed.append(relative)
+            elif stat.S_IMODE(info.st_mode) != _PREPARED_MODES.get(committed[relative][0]):
                 changed.append(relative)
+            else:
+                contents[relative] = committed[relative][1]
+    changed += _changed_contents(repository, contents, algorithm)
     removed = [name for name in [*committed, NO_INDEX_MARKER]
                if name not in present and name not in shown
                and not any(parent.as_posix() in hidden for parent in PurePosixPath(name).parents)]
@@ -183,21 +197,51 @@ def unrecorded_changes(receipt: dict, repository: Path, tree: _Tree) -> str:
     return "; ".join(f"{kind} {_named(found)}" for kind, found in kinds if found)
 
 
-def _differs(path: Path, mode: str, oid: str, algorithm: str) -> bool:
-    """Whether a file differs from its committed blob: type, content or executable bit."""
-    info = path.lstat()
-    if stat.S_ISLNK(info.st_mode):
-        if mode != "120000":
+def _holds_entries(directory: Path) -> bool:
+    """Whether a directory holds anything but plain directories (a file or a link).
+
+    It stops at the first such entry, so an install's node_modules costs one listing. One that
+    cannot be listed holds nothing here: it is named as unreadable, not as added."""
+    for base, directories, files in os.walk(directory, followlinks=False):
+        if files or any((Path(base) / name).is_symlink() for name in directories):
             return True
-        data = os.readlink(path).encode()
-    else:
-        # Git records one executable bit, the owner's; other mode bits are not compared.
-        if mode == "120000" or (mode == "100755") != bool(info.st_mode & stat.S_IXUSR):
-            return True
-        data = path.read_bytes()
+    return False
+
+
+def _changed_contents(repository: Path, expected: dict[str, str], algorithm: str) -> list[str]:
+    """The files Git would now commit as another blob than the first commit's.
+
+    ``git hash-object`` applies the attributes' filters that ``git add`` applied at preparation
+    and streams each file. A name it would read otherwise than as given (a newline in it, or a
+    leading quote) is hashed here, unfiltered."""
+    plain = [name for name in expected if "\n" not in name and not name.startswith('"')]
+    changed = [name for name in expected if name not in plain
+               and _blob_id(repository / name, algorithm) != expected[name]]
+    if plain:
+        try:
+            output = run_host_git(repository, ["hash-object", "--stdin-paths"],
+                                  stdin=b"".join(os.fsencode(name) + b"\n" for name in plain))
+        except (HostGitError, OSError) as error:
+            raise ValueError(str(error)) from error
+        ids = output.decode().split()
+        if len(ids) != len(plain):
+            raise ValueError("git hash-object did not hash every file")
+        changed += [name for name, oid in zip(plain, ids, strict=True) if oid != expected[name]]
+    return changed
+
+
+def _blob_id(path: Path, algorithm: str) -> str:
+    """A link's or file's Git blob id, unfiltered, read in bounded blocks."""
     hasher = hashlib.new("sha256" if algorithm == "sha256" else "sha1")
-    hasher.update(b"blob %d\0" % len(data) + data)
-    return hasher.hexdigest() != oid
+    if path.is_symlink():
+        target = os.fsencode(os.readlink(path))
+        hasher.update(b"blob %d\0" % len(target) + target)
+        return hasher.hexdigest()
+    hasher.update(b"blob %d\0" % path.lstat().st_size)
+    with path.open("rb") as stream:
+        while block := stream.read(1024 * 1024):
+            hasher.update(block)
+    return hasher.hexdigest()
 
 
 def prepare(runs: Path, run: str, role: str, destination: Path,
@@ -334,12 +378,18 @@ def verify(runs: Path, run: str, role: str, repository: Path, *, replacing: bool
     if tree.problems() or tree.digest != receipt["tree_digest"]:
         # Everything to undo, in one refusal: an author clone used before launch usually has
         # several (an install leaves node_modules links and a hook directory).
-        changes = unrecorded_changes(receipt, repository, tree)
+        try:
+            changes, unnamed = unrecorded_changes(receipt, repository, tree), ""
+        except ValueError as error:
+            changes, unnamed = "", f"the projection's first commit could not be read ({error})"
         if tree.problems():
             raise ValueError(f"role inputs contain {tree.problems()}"
-                             + (f"; and unrecorded changes: {changes}" if changes else ""))
+                             + (f"; and unrecorded changes: {changes}" if changes else "")
+                             + (f"; other changes cannot be named: {unnamed}" if unnamed else ""))
         raise ValueError("role inputs have unrecorded changes before first launch: "
-                         + (changes or "permission bits that Git does not record"))
+                         + (changes or (f"none can be named: {unnamed}" if unnamed else
+                                        "none that the projection's first commit can show (line "
+                                        "endings Git normalizes, or the no-index marker's mode)")))
     return receipt
 
 

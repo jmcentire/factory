@@ -8,9 +8,12 @@ keys and `tree_digest` values it had before; the refusal names directory links, 
 files, unreadable files and unlistable directories (in that order), then the changes against
 the projection's first commit as added, removed and changed paths (sorted, at most five per
 kind, then " and N more"); a directory the first commit never had is named once as `dir/`.
-Amended the same day: the executable bit is the owner's, as Git records it; files under an
-unlistable directory or a directory replaced by a link are not reported as removed. Problem
-kinds are joined by "; " (inferred, as the changes are).
+Amended the same day after review: prepare writes files at exactly 0644 or 0755, so any mode
+change of a committed file is named; contents compare as `git add` would commit them now
+(attribute filters included); files under an unlistable directory, or under a directory
+replaced by a link or a non-regular file, are not reported as removed; a new directory is
+named only if it holds more than directories; an unreadable first commit is said to be
+unreadable. Problem kinds are joined by "; " (inferred, as the changes are).
 
 Expected values are direct from that contract unless a comment says "inferred". Digest
 literals were computed once by the module as it stood at ecddf63 (before refusals named
@@ -40,7 +43,9 @@ UNREADABLE = CONTAINS + "a file that cannot be read: "
 UNLISTABLE = CONTAINS + "a directory that cannot be read: "
 CHANGES = "role inputs have unrecorded changes before first launch: "
 BOTH = "; and unrecorded changes: "
-PERMISSIONS = CHANGES + "permission bits that Git does not record"
+UNSHOWN = CHANGES + ("none that the projection's first commit can show "
+                     "(line endings Git normalizes, or the no-index marker's mode)")
+UNREAD_BASELINE = "the projection's first commit could not be read ("
 # The receipt keys harness/role_inputs.py wrote at ecddf63, in its order.
 RECEIPT_KEYS = ["role", "repository", "source_commit", "initial_commit", "includes", "excludes",
                 "files", "omitted_directory_links", "tree_digest"]
@@ -351,6 +356,148 @@ def test_a_committed_directory_replaced_by_a_link_is_named_only_as_a_link(coder,
     assert _refusal(runs, dest) == LINKS + directory
 
 
+@pytest.mark.parametrize("directory", ["docs", "apps/website"])
+def test_a_committed_directory_replaced_by_a_fifo_is_named_only_as_that(coder, directory):
+    # Amendment 4: the committed files under it are not reported as removed.
+    dest, runs, _, _ = coder
+    shutil.rmtree(dest / directory)
+    os.mkfifo(dest / directory)
+    assert _refusal(runs, dest) == ODD + directory
+
+
+def test_a_new_directory_that_cannot_be_listed_is_not_also_added(coder):
+    # Amendment 4: named only as a directory that cannot be read, not also "added new/".
+    dest, runs, _, _ = coder
+    _write(dest / "new/leaked.py", "IMPLEMENTATION")
+    _unlistable(dest / "new")
+    assert _refusal(runs, dest) == UNLISTABLE + "new/"
+
+
+# --- the baseline: Git attributes, odd names, an unreadable first commit --------------------
+
+
+@pytest.fixture
+def normalized(tmp_path):
+    """A Coder projection holding a CRLF file that `*.txt text` normalizes when committed.
+
+    The source commits the CRLF bytes before .gitattributes exists, then adds .gitattributes
+    without renormalizing; the projection's first commit stores the file with LF endings while
+    the clone holds the CRLF bytes.
+    """
+    repo = tmp_path / "source"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    _git(repo, "config", "core.autocrlf", "false")
+    _write(repo / "src/app.py", "IMPLEMENTATION\n")
+    (repo / "api").mkdir()
+    (repo / "api/crlf.txt").write_bytes(b"one\r\ntwo\r\n")
+    _commit(repo, "crlf")
+    (repo / ".gitattributes").write_text("*.txt text\n")
+    _git(repo, "add", ".gitattributes")
+    _git(repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+         "commit", "-q", "-m", "attributes")
+    assert b"\r\n" in subprocess.run(["git", "-C", str(repo), "show", "HEAD:api/crlf.txt"],
+                                     check=True, capture_output=True).stdout
+    runs = tmp_path / "runs"
+    run_record.create(runs, "task", repo, b"Implement public behavior")
+    dest = tmp_path / "coder"
+    result = role_inputs.prepare(runs, "task", "coder", dest, [], [])
+    # Positive control: the clone holds CRLF bytes; its first commit stores them normalized.
+    assert (dest / "api/crlf.txt").read_bytes() == b"one\r\ntwo\r\n"
+    assert subprocess.run(["git", "-C", str(dest), "show", "HEAD:api/crlf.txt"], check=True,
+                          capture_output=True).stdout == b"one\ntwo\n"
+    return dest, runs, result
+
+
+@pytest.mark.parametrize("change,expected", [
+    ("none", None),
+    # Amendment 3: compared as `git add` would commit it now, the CRLF file is unchanged.
+    ("link", LINKS + "src/zz_link"),
+    ("content", CHANGES + "changed api/crlf.txt"),
+    ("link+content", LINKS + "src/zz_link" + BOTH + "changed api/crlf.txt"),
+    # LF bytes commit as the same blob, so nothing can be named; the tree digest differs.
+    ("line endings", UNSHOWN),
+])
+def test_contents_are_compared_as_git_would_commit_them(normalized, change, expected):
+    dest, runs, result = normalized
+    if "link" in change:
+        _link_dir(dest / "src/zz_link", "../api")
+    if "content" in change:
+        (dest / "api/crlf.txt").write_bytes(b"one\r\nTHREE\r\n")
+    if change == "line endings":
+        (dest / "api/crlf.txt").write_bytes(b"one\ntwo\n")
+    if expected is None:
+        assert role_inputs.verify(runs, "task", "coder", dest) == result
+    else:
+        assert _refusal(runs, dest) == expected
+
+
+# From amendment 6: a leading '"' and a newline. Inferred: Git quotes a tab and non-ASCII
+# bytes in its plain output the same way, so those are names of the same kind.
+ODD_NAMES = ['"quoted.txt', "line\nbreak.txt", "tab\tand space.txt", "café.txt"]
+
+
+@pytest.fixture
+def odd(tmp_path):
+    """A Coder projection whose committed names Git quotes or escapes in its plain output."""
+    repo = tmp_path / "source"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    _write(repo / "src/app.py", "IMPLEMENTATION\n")
+    for name in ODD_NAMES:
+        _write(repo / "docs" / name, f"{name}\n")
+    _commit(repo, "odd names")
+    runs = tmp_path / "runs"
+    run_record.create(runs, "task", repo, b"Implement public behavior")
+    dest = tmp_path / "coder"
+    result = role_inputs.prepare(runs, "task", "coder", dest, [], [])
+    assert sorted(result["files"]) == sorted(["src/app.py", *(f"docs/{n}" for n in ODD_NAMES)])
+    return dest, runs, result
+
+
+@pytest.mark.parametrize("name", ODD_NAMES)
+def test_a_committed_odd_name_verifies_and_is_named_when_edited(odd, name):
+    # Amendment 6: unchanged passes; an edit names the path as it is.
+    dest, runs, result = odd
+    assert role_inputs.verify(runs, "task", "coder", dest) == result
+    (dest / "docs" / name).write_text("CHANGED\n")
+    assert _refusal(runs, dest) == CHANGES + "changed docs/" + name
+
+
+def _break_first_commit(dest):
+    """Delete the first commit's root tree object; HEAD still resolves to that commit."""
+    tree = _git(dest, "rev-parse", "HEAD^{tree}")
+    loose = dest / ".git/objects" / tree[:2] / tree[2:]
+    assert loose.is_file()  # positive control: a loose object this test can remove
+    loose.unlink()
+    assert subprocess.run(["git", "-C", str(dest), "cat-file", "-e", tree],
+                          capture_output=True).returncode != 0
+    _git(dest, "rev-parse", "HEAD")  # still resolves
+
+
+def test_an_unreadable_first_commit_is_said_to_be_unreadable(coder):
+    # Amendment 5: with no problem, the refusal says no change can be named, and why.
+    dest, runs, _, _ = coder
+    _break_first_commit(dest)
+    (dest / "src/app.py").write_text("CHANGED\n")
+    message = _refusal(runs, dest)
+    prefix = CHANGES + "none can be named: " + UNREAD_BASELINE
+    assert message.startswith(prefix) and message.endswith(")"), message
+    assert len(message) > len(prefix) + 1  # Git's error is carried
+
+
+def test_an_unreadable_first_commit_still_names_the_problems(coder):
+    # Amendment 5: with a problem, the problems are named and other changes cannot be.
+    dest, runs, _, _ = coder
+    _break_first_commit(dest)
+    _link_dir(dest / "src/zz_link", "../docs")
+    (dest / "src/app.py").write_text("CHANGED\n")
+    message = _refusal(runs, dest)
+    prefix = LINKS + "src/zz_link; other changes cannot be named: " + UNREAD_BASELINE
+    assert message.startswith(prefix) and message.endswith(")"), message
+    assert len(message) > len(prefix) + 1
+
+
 # --- unrecorded changes ---------------------------------------------------------------------
 
 
@@ -499,8 +646,8 @@ def test_git_state_in_the_clone_cannot_hide_a_change(coder, state, expected):
     ("delete", CHANGES + "removed " + MARKER),
     ("rewrite", CHANGES + "changed " + MARKER),
     ("file link", CHANGES + "changed " + MARKER),
-    # Neither non-empty nor irregular: only its permission bits differ.
-    ("chmod", PERMISSIONS),
+    # Neither non-empty nor irregular: only its mode differs, which no commit records.
+    ("chmod", UNSHOWN),
     ("delete+remove", CHANGES + "removed " + MARKER + ", src/mod1.py"),
 ])
 def test_the_no_index_marker_is_named(coder, change, expected):
@@ -520,39 +667,79 @@ def test_the_no_index_marker_is_named(coder, change, expected):
     assert _refusal(runs, dest) == expected
 
 
+def test_prepare_writes_files_at_exactly_0644_or_git_executable_0755(tmp_path, inputs):
+    # Amended contract: whatever the umask, so any other mode is a change it can name.
+    _, runs, _ = inputs
+    dest = tmp_path / "coder"
+    previous = os.umask(0o077)
+    try:
+        result = role_inputs.prepare(runs, "task", "coder", dest, [], ["tests"])
+    finally:
+        os.umask(previous)
+    executable = {line.split("\t", 1)[1] for line
+                  in _git(dest, "ls-tree", "-r", "HEAD").splitlines()
+                  if line.startswith("100755 ")}
+    assert executable == EXECUTABLE  # positive control: Git records the executable files
+    for name in result["files"]:
+        info = (dest / name).lstat()
+        if stat.S_ISREG(info.st_mode):
+            assert stat.S_IMODE(info.st_mode) == (0o755 if name in EXECUTABLE else 0o644), name
+    assert role_inputs.verify(runs, "task", "coder", dest) == result
+
+
 @pytest.mark.parametrize("path,mode", [
-    ("api/spec.txt", 0o664), ("api/spec.txt", 0o600), ("bin/run.sh", 0o775),
-    ("bin/run.sh", 0o700)])
-def test_a_permission_change_git_does_not_record_is_refused_as_such(coder, path, mode):
-    dest, runs, _, _ = coder
-    _chmod(dest / path, mode)
-    assert _refusal(runs, dest) == PERMISSIONS
-
-
-@pytest.mark.parametrize("path,mode,expected", [
-    # Amended contract: the executable bit is the owner's (S_IXUSR), as Git records it.
-    ("api/spec.txt", 0o744, CHANGES + "changed api/spec.txt"),
-    ("api/spec.txt", 0o645, PERMISSIONS),
-    ("api/spec.txt", 0o655, PERMISSIONS),
-    ("bin/run.sh", 0o655, CHANGES + "changed bin/run.sh"),
-    ("bin/run.sh", 0o744, PERMISSIONS),
-    ("bin/run.sh", 0o754, PERMISSIONS),
+    # Amended contract: any mode change of a committed regular file is named, whichever bit.
+    ("api/spec.txt", 0o664), ("api/spec.txt", 0o600), ("api/spec.txt", 0o645),
+    ("api/spec.txt", 0o655), ("api/spec.txt", 0o744), ("api/spec.txt", 0o444),
+    ("bin/run.sh", 0o775), ("bin/run.sh", 0o700), ("bin/run.sh", 0o655),
+    ("bin/run.sh", 0o744), ("bin/run.sh", 0o754), ("bin/run.sh", 0o644),
 ])
-def test_the_executable_bit_is_the_owners(coder, path, mode, expected):
+def test_any_mode_change_of_a_committed_file_is_named(coder, path, mode):
     dest, runs, _, _ = coder
     _chmod(dest / path, mode)
-    assert _refusal(runs, dest) == expected
+    assert _refusal(runs, dest) == CHANGES + "changed " + path
 
 
-def test_an_unrecorded_permission_change_is_not_named_beside_named_causes(coder):
-    # Inferred: a change or a problem that is named explains the refusal by itself.
+def test_a_mode_change_is_named_beside_other_changes_and_problems(coder):
     dest, runs, _, _ = coder
     _chmod(dest / "api/spec.txt", 0o664)
     (dest / "src/app.py").write_text("CHANGED\n")
-    assert _refusal(runs, dest) == CHANGES + "changed src/app.py"
+    assert _refusal(runs, dest) == CHANGES + "changed api/spec.txt, src/app.py"
     (dest / "src/app.py").write_text(SOURCE["src/app.py"])
     _link_dir(dest / "src/zz_link", "../docs")
-    assert _refusal(runs, dest) == LINKS + "src/zz_link"
+    assert _refusal(runs, dest) == LINKS + "src/zz_link" + BOTH + "changed api/spec.txt"
+
+
+@pytest.mark.parametrize("made,expected", [
+    # Amendment 7: a new directory holding nothing, or only directories, is not named.
+    (["build/"], None),
+    (["build/x/y/"], None),
+    (["build/x/"], CHANGES + "changed api/spec.txt"),
+    (["build/x/", "extra/f"], CHANGES + "added extra/; changed api/spec.txt"),
+    # Whatever it holds deeper down counts: a FIFO, or a directory link.
+    (["deep/x/pipe|"], ODD + "deep/x/pipe" + BOTH + "added deep/"),
+    (["deep/x/link@"], LINKS + "deep/x/link" + BOTH + "added deep/"),
+])
+def test_a_new_directory_is_named_only_if_it_holds_more_than_directories(coder, made,
+                                                                          expected):
+    dest, runs, _, result = coder
+    for name in made:
+        path = dest / name.rstrip("/|@")
+        if name.endswith("/"):
+            path.mkdir(parents=True)
+        elif name.endswith("|"):
+            path.parent.mkdir(parents=True)
+            os.mkfifo(path)
+        elif name.endswith("@"):
+            _link_dir(path, "../../src")
+        else:
+            _write(path, "new")
+    if expected is None:
+        assert role_inputs.verify(runs, "task", "coder", dest) == result
+        return
+    if "changed api/spec.txt" in expected:
+        _chmod(dest / "api/spec.txt", 0o664)
+    assert _refusal(runs, dest) == expected
 
 
 def test_problems_and_changes_are_named_in_one_refusal(coder):
