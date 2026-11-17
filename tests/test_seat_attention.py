@@ -107,6 +107,82 @@ ANTIGRAVITY_TRUST = payload(  # Antigravity, Orchestrator: first launch
     "  No, exit",
     "  ↑/↓ Navigate · enter Confirm",
 )
+# Three more hosts' approval dialogs and a Claude Code panel, captured the same way on
+# 2026-11-17. Cursor's home prefix is replaced (T35); the 80-column rule, the panel edge and
+# Antigravity's status line are built to their exact captured characters and widths.
+CURSOR_COMMAND = payload(  # Cursor, Tester lane: a command that is not on its allowlist
+    " $  sha256sum /srv/fixture/factory-lanes/run/tester/.git/factory-brief/testing-standard.md"
+    " && wc -c",
+    "    /srv/fixture/factory-lanes/run/tester/.git/factory-brief/task.txt in .",
+    " Run this command?",
+    " Not in allowlist: sha256sum, wc",
+    "  → Run (once) (y)",
+    "    Add Shell(sha256sum), Shell(wc) to allowlist? (tab)",
+    "    Run Everything (shift+tab)",
+    "    Skip & tell the agent what to do instead (esc or n)",
+    " ←/→ to switch approval",
+)
+RULE = "─" * 80
+ANTIGRAVITY_STATUS = "esc to cancel" + " " * 46 + "Gemini 4 Argon · high"
+ANTIGRAVITY_TOOL = payload(  # Antigravity, Orchestrator: an MCP tool call
+    "● Called 1 MCP tool (kindex/search)",
+    "MCP",
+    RULE,
+    "kindex/search",
+    "Allow calling this tool?",
+    "> 1. Yes, allow tool call",
+    "  2. Yes, and always allow tool 'kindex/search' in this conversation",
+    "  3. Yes, and always allow tool 'kindex/search' (Persist to settings.json)",
+    "  4. No, deny tool call",
+    "  5. No, and always deny tool 'kindex/search' in this conversation",
+    "  6. No, and always deny tool 'kindex/search' (Persist to settings.json)",
+    "  ↑/↓ Navigate · tab Amend",
+    ANTIGRAVITY_STATUS,
+)
+ANTIGRAVITY_COMMAND = payload(  # Antigravity, Orchestrator: a shell command
+    "Command",
+    RULE,
+    "Requesting permission for:",
+    "   /opt/factory/.venv/bin/python /opt/factory/harness/dispatcher.py --run",
+    "run --root /srv/runs/run --observe --wait-seconds 30 --after '{}'",
+    "Run this command?",
+    "> 1. Yes, run command",
+    "  2. Yes, and always allow in this conversation for commands that start with",
+    "'/opt/factory/.venv/bin/python /opt/factory/harness/dispatche...'",
+    "  3. Yes, and always allow for commands that start with",
+    "'/opt/factory/.venv/bin/python /opt/factory/harness/dispatche...' "
+    "(Persist to settings.json)",
+    "  4. No, cancel",
+    "  ↑/↓ Navigate · tab Amend · ctrl+g edit/expand command",
+    ANTIGRAVITY_STATUS,
+)
+ANTIGRAVITY_FILE = payload(  # Antigravity, Orchestrator: a read outside its workspace
+    "○ Exploring 1 file (inbox.jsonl) (ctrl+o to expand)",
+    "File access",
+    RULE,
+    "Read: /opt/factory/prompts/orchestrate.md",
+    "Reason: outside workspace",
+    "Allow access to this file?",
+    "> 1. Yes, allow access",
+    "  2. Yes, and always allow non-workspace access",
+    "  3. No, deny access",
+    "  ↑/↓ Navigate",
+    ANTIGRAVITY_STATUS,
+)
+CLAUDE_PANEL = payload(  # Claude Code, Validator: a panel that holds the seat's input
+    "✻ Cooked for 1m 52s · done 4:15 AM",
+    "Background update waiting while this panel is open",
+    "▔" * 80,
+    "   Teach auto mode about your environment?",
+    "   Claude Code reads this project, your recent Claude sessions, and",
+    "   optionally your shell history and other repositories. Claude analyzes this",
+    "   data and customizes auto mode to make better decisions.",
+    "     How you use Claude here     Mixed",
+    "   ❯ Also scan shell history     on",
+    "     Also scan your other repos  off",
+    "     Continue",
+    "   ←/→ to change · Enter to continue · Esc to cancel",
+)
 # Ordinary seat output, for the lines around an isolated dialog line.
 WORK = payload("Reading TASK.md", "Ran 12 tests in 0.41s", "OK")
 ANTIGRAVITY_QUESTION = "Do you trust the contents of this project?"
@@ -125,7 +201,7 @@ def test_the_stated_bounds_and_dialog_kinds():
     assert seat_attention.INTERVAL_S == 2.0
     assert seat_attention.TAIL_LINES == 15
     assert set(seat_attention.PATTERNS) == {
-        "permission_prompt", "folder_trust", "bypass_permissions", "usage_limit"}
+        "permission_prompt", "folder_trust", "bypass_permissions", "host_panel", "usage_limit"}
     assert all(isinstance(p, re.Pattern) for p in seat_attention.PATTERNS.values())
 
 
@@ -159,13 +235,20 @@ def test_the_dispatcher_reads_the_seat_watchs_own_patterns():
         (ADDED_DIRECTORY, "folder_trust"),
         (WORKSPACE_TRUST, "folder_trust"),
         (ANTIGRAVITY_TRUST, "folder_trust"),
+        (CURSOR_COMMAND, "permission_prompt"),
+        (ANTIGRAVITY_TOOL, "permission_prompt"),
+        (ANTIGRAVITY_COMMAND, "permission_prompt"),
+        (ANTIGRAVITY_FILE, "permission_prompt"),
+        (CLAUDE_PANEL, "host_panel"),
     ],
-    ids=["claude-read-outside", "claude-added-directory", "claude-workspace", "antigravity"],
+    ids=["claude-read-outside", "claude-added-directory", "claude-workspace", "antigravity",
+         "cursor-command", "antigravity-tool", "antigravity-command", "antigravity-file",
+         "claude-panel"],
 )
 def test_each_live_dialog_is_recognized_as_its_kind(text, kind):
-    """The four dialogs that stopped real seats. Red if any is missed (the seat waits unseen)
-    or also reported as another kind (a second, wrong notice). Exactly one kind per dialog is
-    inferred from the contract naming each a permission or a trust dialog."""
+    """The dialogs that stopped real seats, each in full. Red if any is missed (the seat waits
+    unseen) or also reported as another kind (a second, wrong notice). Exactly one kind per
+    dialog is inferred from the contract naming each a permission, trust or panel dialog."""
     assert set(seat_attention.dialogs_in(text)) == {kind}
 
 
@@ -180,9 +263,26 @@ def test_each_live_dialog_is_recognized_as_its_kind(text, kind):
         (" › Yes, add it", "folder_trust", "› Yes, add it"),
         (" > Yes, add it", "folder_trust", "> Yes, add it"),
         (ANTIGRAVITY_QUESTION, "folder_trust", ANTIGRAVITY_QUESTION),
+        (" Not in allowlist: sha256sum, wc", "permission_prompt",
+         "Not in allowlist: sha256sum, wc"),
+        # <commands> is whatever Cursor names: a different command list is the same dialog.
+        (" Not in allowlist: pytest", "permission_prompt", "Not in allowlist: pytest"),
+        ("    Run Everything (shift+tab)", "permission_prompt", "Run Everything (shift+tab)"),
+        ("Allow calling this tool?", "permission_prompt", "Allow calling this tool?"),
+        ("Requesting permission for:", "permission_prompt", "Requesting permission for:"),
+        ("  ↑/↓ Navigate · tab Amend · ctrl+g edit/expand command", "permission_prompt",
+         "↑/↓ Navigate · tab Amend · ctrl+g edit/expand command"),
+        ("Allow access to this file?", "permission_prompt", "Allow access to this file?"),
+        ("   Teach auto mode about your environment?", "host_panel",
+         "Teach auto mode about your environment?"),
+        ("Background update waiting while this panel is open", "host_panel",
+         "Background update waiting while this panel is open"),
     ],
     ids=["read-question", "permission-footer", "add-it", "add-it-claude-marker",
-         "add-it-codex-marker", "add-it-ascii-marker", "antigravity-question"],
+         "add-it-codex-marker", "add-it-ascii-marker", "antigravity-question",
+         "cursor-allowlist", "cursor-allowlist-other-commands", "cursor-run-everything",
+         "antigravity-tool", "antigravity-command", "antigravity-command-footer",
+         "antigravity-file", "claude-panel-question", "claude-panel-status"],
 )
 def test_each_new_recognition_identifies_its_dialog_by_itself(line, kind, reported):
     """Each line this change recognizes, taken verbatim from its live payload, among ordinary
@@ -190,6 +290,21 @@ def test_each_new_recognition_identifies_its_dialog_by_itself(line, kind, report
     recognition exists. Red if one is missing, or if the reported line is not the matching
     line stripped of surrounding whitespace."""
     assert seat_attention.dialogs_in(WORK + line + "\n" + WORK) == {kind: reported}
+
+
+@pytest.mark.parametrize("command_lines", [7, 20])
+def test_an_antigravity_command_of_any_length_is_a_permission_dialog(command_lines):
+    """Finding of 2026-11-17, contract amended the same day: "Requesting permission for:" sits
+    above the command, so a long command pushes it out of the tail; the footer below the
+    command still identifies the dialog. Red if a long command's approval waits unseen."""
+    captured = ANTIGRAVITY_COMMAND.splitlines()
+    # captured[3:5] is the captured command, hard-wrapped by Antigravity onto two lines.
+    command = [captured[3]] + [f"run --root /srv/runs/run --lane lane-{n} --observe"
+                               for n in range(command_lines - 1)]
+    lines = captured[:3] + command + captured[5:]
+    below = len(lines) - lines.index("Requesting permission for:") - 1
+    assert below >= seat_attention.TAIL_LINES, "the old identifier must be out of the tail"
+    assert set(seat_attention.dialogs_in(payload(*lines))) == {"permission_prompt"}
 
 
 def test_a_hard_wrapped_claude_question_is_still_a_permission_dialog():
@@ -244,14 +359,31 @@ def test_pre_existing_dialogs_are_still_recognized(text, kind):
         "".join(READ_OUTSIDE.splitlines(keepends=True)[:9]),
         "Changelog entry drafted. Yes, add it to the release notes as well.\n",
         "The reviewer answered: Yes, add it\n",
+        # "Run this command?" alone is too generic to identify Cursor's dialog (stated).
+        " Run this command?\n",
+        # Cursor's own command and question, without the lines that identify its dialog.
+        "".join(CURSOR_COMMAND.splitlines(keepends=True)[:3]),
+        "Decided to allow calling this tool only for kindex searches.\n",
+        "The coder kept requesting permission for network access, so I stopped it.\n",
+        "Remember to allow access to this file in the sandbox profile.\n",
+        "Commands not in allowlist are refused by the gate.\n",
+        "Release notes: Claude Code can now teach auto mode about your environment.\n",
+        # Antigravity's tool- and file-approval footers: only "ctrl+g edit/expand command"
+        # makes its footer an identifier (stated), so these lines alone are not dialogs.
+        "  ↑/↓ Navigate · tab Amend\n",
+        "  ↑/↓ Navigate\n",
     ],
     ids=["retries", "upstream", "quota-test", "cache", "usage-errors", "read-explanation",
-         "add-it-in-prose", "add-it-quoted"],
+         "add-it-in-prose", "add-it-quoted", "bare-run-this-command",
+         "cursor-question-without-identifiers", "allow-calling-in-prose",
+         "requesting-permission-in-prose", "allow-access-in-prose", "allowlist-in-prose",
+         "teach-auto-mode-in-prose", "antigravity-tool-footer", "antigravity-file-footer"],
 )
 def test_ordinary_output_that_mentions_dialog_words_is_not_a_dialog(text):
     """Negative control. Red if a seat doing ordinary work is reported as waiting: "Yes, add
-    it" counts only on its own line, and prose about reads outside the working directories is
-    not the question."""
+    it" counts only on its own line, prose about reads outside the working directories is not
+    the question, a bare "Run this command?" identifies no host, and prose using the approval
+    or panel phrases is not the dialog."""
     assert seat_attention.dialogs_in("working\n" + text) == {}
 
 
@@ -810,33 +942,45 @@ seat_attention.watch(Path(sys.argv[2]))
 
 
 @needs_tmux
-def test_only_one_watch_records_for_a_run(run):
-    """Two watch processes on one run (a restart racing an old life). Lock-agnostic: each is a
-    real process with shortened timings. Red if both record, doubling every notice. The
-    absence of a second record is read after a window of 5x the persistence."""
+def test_a_second_watch_on_a_run_returns_at_once_and_records_nothing(run):
+    """Stated (2026-11-17): a watch that finds the run's lock already held returns at once, its
+    process exits 0 with nothing on stderr, and it records nothing; only one watch runs per
+    run. Each watch is a real process with shortened timings, so this holds whatever the lock
+    mechanism. The owner has recorded before the second starts, so it holds the lock. Red if
+    the second records (every notice doubled), waits for the lock (it would take over later,
+    unseen), or ends with an error or a traceback."""
     root, config, server = run
-    server.window(config["run_id"], "orchestrator", ANTIGRAVITY_TRUST)
-    persist, interval = 0.5, 0.1
-    watchers = [subprocess.Popen([sys.executable, "-c", DRIVER, str(ROOT), str(root),
-                                  str(persist), str(interval)], cwd=ROOT,
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                for _ in range(2)]
+    session = config["run_id"]
+    server.window(session, "orchestrator", ANTIGRAVITY_TRUST)
+
+    def start_watch() -> subprocess.Popen[str]:
+        return subprocess.Popen([sys.executable, "-c", DRIVER, str(ROOT), str(root), "0.5",
+                                 "0.1"], cwd=ROOT, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True)
+
+    owner, second = start_watch(), None
     try:
-        await_condition(lambda: seat_rows(root), 20, "a recorded dialog")
-        time.sleep(5 * persist)
-        assert server.tmux("kill-session", "-t", f"={config['run_id']}").returncode == 0
-        outputs = [watcher.communicate(timeout=15) for watcher in watchers]
+        await_condition(lambda: seat_rows(root) or owner.poll() is not None, 20,
+                        "the first watch to record the dialog")
+        assert owner.poll() is None, owner.communicate()
+        second = start_watch()
+        _, second_errors = second.communicate(timeout=10)
+        assert second.returncode == 0, second_errors
+        assert second_errors == ""
+        # It returned while its run was still live and owned: it did not wait for the lock.
+        assert server.tmux("has-session", "-t", f"={session}").returncode == 0
+        assert owner.poll() is None
+        assert len(seat_rows(root)) == 1
+        assert len(inbox(root, "validator")) == 1
+        assert server.tmux("kill-session", "-t", f"={session}").returncode == 0
+        _, owner_errors = owner.communicate(timeout=15)
+        assert owner.returncode == 0, owner_errors
     finally:
-        for watcher in watchers:
-            if watcher.poll() is None:
-                watcher.kill()
-                watcher.wait()
-    assert len(seat_rows(root)) == 1, outputs
-    assert len(inbox(root, "validator")) == 1, outputs
-    # The owner returns once the session ends. How a watch that finds the lock taken ends is
-    # not stated (on 2026-11-17 it raised BlockingIOError and exited 1); that is reported to
-    # the Validator as an open question rather than pinned either way here.
-    assert 0 in [watcher.returncode for watcher in watchers], outputs
+        for process in (owner, second):
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait()
+    assert len(seat_rows(root)) == 1
 
 
 def test_the_watch_command_runs_as_a_script(tmp_path, monkeypatch):

@@ -38,7 +38,15 @@ PATTERNS: dict[str, re.Pattern[str]] = {
         r"Would you like to (?:run the following command|make the following edits)|"
         r"Allow command\?|"
         r"Allow this read outside the working directories\?|"
-        r"Esc to cancel \u00b7 Tab to amend"
+        r"Esc to cancel \u00b7 Tab to amend|"
+        # Cursor's per-command approval (seen 2026-11-17 on a Tester lane, which then sat at it
+        # for 30 min until the lane watchdog stopped it as stalled).
+        r"Not in allowlist: |Run Everything \(shift\+tab\)|"
+        # Antigravity's approvals for a tool call, a command and a file outside its workspace
+        # (seen 2026-11-17 on an Orchestrator, one at a time, through a run). A command's
+        # question line sits above the command, so a long command is known by its footer.
+        r"Allow calling this tool\?|Requesting permission for:|Allow access to this file\?|"
+        r"ctrl\+g edit/expand command"
     ),
     # A folder-trust dialog: Claude Code's and Codex's first-launch prompt for a workdir,
     # Claude Code's question for an added directory it has not worked in (known by its option
@@ -51,6 +59,13 @@ PATTERNS: dict[str, re.Pattern[str]] = {
     ),
     # A fresh Claude Code may show this after the user selected bypass permissions.
     "bypass_permissions": re.compile(r"running in Bypass Permissions mode"),
+    # A host panel that takes the seat's input until it is closed: Claude Code's "Teach auto mode
+    # about your environment?" held a Validator for 1 h 43 min on 2026-11-17, with its own
+    # background updates queued behind it ("Background update waiting while this panel is open").
+    "host_panel": re.compile(
+        r"Teach auto mode about your environment\?|"
+        r"Background update waiting while this panel is open"
+    ),
     # A provider usage or quota limit: the seat looks alive and does nothing until it resets.
     # Anchored on each provider's own dialog line, never on words ordinary output also uses
     # ("rate limit reached", "resets in 5 m"): Claude Code and Codex print "You've hit your usage
