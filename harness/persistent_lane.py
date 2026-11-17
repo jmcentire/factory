@@ -70,6 +70,53 @@ def store(path: pathlib.Path, value: dict) -> None:
             os.unlink(temporary)
 
 
+#: How soon a message held behind a host dialog looks at the session's pane again.
+DIALOG_RECHECK_S = 2.0
+
+
+def host_dialog_shown(root: pathlib.Path, slot: str) -> bool:
+    """Whether the session's tmux pane shows a host dialog or panel now (seat_attention).
+
+    Only positive evidence counts: no run record of the tmux socket, no window of exactly that
+    name, a failed capture or no tmux at all is no dialog, and typing goes ahead as before. A
+    coordinator's window is its seat's name; an author lane's is the one its active launch
+    row names.
+    """
+    try:
+        config = read(root / "harness.json")
+        socket_name, run = str(config["tmux_socket"]), str(config["run_id"])
+        if slot in {"validator", "orchestrator"}:
+            window = slot
+        else:
+            rows = (root / "tmux-lanes" / f"{slot}-launch.jsonl").read_text().splitlines()
+            targets = [row.get("tmux_target") for row in map(json.loads, rows)
+                       if isinstance(row, dict) and row.get("status") == "active"]
+            target = str(targets[-1]) if targets and isinstance(targets[-1], str) else ""
+            session, _, window = target.partition(":")
+            if session != run or not window:
+                return False
+
+        def tmux(*arguments: str) -> subprocess.CompletedProcess:
+            return subprocess.run(["tmux", "-L", socket_name, *arguments],
+                                  capture_output=True, text=True, timeout=5)
+
+        listed = tmux("list-windows", "-t", f"={run}", "-F", "#{window_id} #{window_name}")
+        if listed.returncode != 0:
+            return False
+        ids = [line.split(" ", 1)[0] for line in listed.stdout.splitlines()
+               if line.split(" ", 1)[1:] == [window]]
+        if len(ids) != 1:
+            return False
+        shown = tmux("capture-pane", "-pJ", "-t", ids[0], "-S", "-60")
+        if shown.returncode != 0:
+            return False
+    except (OSError, ValueError, KeyError, TypeError, IndexError, subprocess.SubprocessError):
+        return False
+    from seat_attention import dialogs_in
+
+    return bool(dialogs_in(shown.stdout))
+
+
 def state_path(root: pathlib.Path, slot: str) -> pathlib.Path:
     if slot in {"validator", "orchestrator"}:
         if root.is_symlink():
@@ -1352,7 +1399,7 @@ def run_terminal(
 
     def advance():
         """Move the one message being typed a step, or begin the next waiting one."""
-        nonlocal typing
+        nonlocal typing, ready_at
         current = time.monotonic()
         if typing is not None:
             identifier, body, due = typing
@@ -1373,6 +1420,14 @@ def run_terminal(
         if [key for key in outstanding() if key != identifier]:
             return  # one outstanding message at a time, so a report can be attributed
         if inspect(root, slot)["process_state"] != "running":
+            return
+        if queue_command is None and host_dialog_shown(root, slot):
+            # Keys typed now would go to the host's dialog or panel, not to the session, and the
+            # message would stay unaccounted for, holding every later one: on 2026-11-17 an inbox
+            # batch typed into Claude Code's auto-mode panel was lost and the Validator's inbox
+            # delivered nothing more for the rest of the run. It stays queued; the seat watch
+            # reports the dialog.
+            ready_at = current + DIALOG_RECHECK_S
             return
         text = native_session.typed_text(waiting.pop(identifier), journal.parent, slot)
         marker = token_for(identifier)
