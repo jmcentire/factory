@@ -43,77 +43,71 @@ def within(path: PurePosixPath, selected: list[PurePosixPath]) -> bool:
 
 def tree_digest(repository: Path) -> str:
     """Inspect actual inputs, including Git-ignored files and assume-unchanged paths."""
-    digest, unreadable = _tree(repository, entries=None)
-    if unreadable:
-        raise ValueError(f"role inputs contain {unreadable}")
-    return digest
+    tree = _tree(repository)
+    if tree.problems():
+        raise ValueError(f"role inputs contain {tree.problems()}")
+    return tree.digest
 
 
-def tree_entries(repository: Path) -> dict[str, str]:
-    """Each input file's own short digest, so a refusal can name what changed.
+class _Tree:
+    """One read of an input tree: its digest, and what the digest cannot take."""
 
-    Diagnosis only: the tree digest above is what a launch is checked against. Like it, this
-    covers every file but ``.git``, the no-index marker included.
+    def __init__(self) -> None:
+        self.digest = ""
+        self.links: list[str] = []
+        self.irregular: list[str] = []
+        self.unreadable: list[str] = []
+        self.unlisted: list[str] = []
+
+    def problems(self) -> str:
+        """Every directory symlink, non-regular file, unreadable file or directory ("" if none)."""
+        kinds = (("a directory symlink", self.links), ("a non-regular file", self.irregular),
+                 ("a file that cannot be read", self.unreadable),
+                 ("a directory that cannot be read", self.unlisted))
+        return "; ".join(f"{kind}: {_named(sorted(found))}" for kind, found in kinds if found)
+
+
+def _tree(repository: Path) -> _Tree:
+    """The tree digest, read to the end: a refusal names every problem, not the first.
+
+    Directory symlinks and non-regular files are neither followed nor digested; a file or
+    directory (``dir/``) that cannot be read is named and the walk goes on. The digest of a tree
+    with none of them is the digest this module has always computed.
     """
-    entries: dict[str, str] = {}
-    _tree(repository, entries=entries)
-    return entries
+    tree, digest = _Tree(), hashlib.sha256()
 
+    def unlisted(error: OSError) -> None:
+        if error.filename is not None:
+            name = Path(error.filename).relative_to(repository).as_posix()
+            tree.unlisted.append(name + "/")
 
-def _digest_and_entries(repository: Path) -> tuple[str, dict[str, str]]:
-    """Both, from one read of the tree."""
-    entries: dict[str, str] = {}
-    digest, unreadable = _tree(repository, entries=entries)
-    if unreadable:
-        raise ValueError(f"role inputs contain {unreadable}")
-    return digest, entries
-
-
-def _tree(repository: Path, *, entries: dict[str, str] | None) -> tuple[str, str]:
-    """The tree digest, and what it cannot take: directory symlinks and non-regular files.
-
-    Neither is followed or digested. The whole tree is read even when one is found, so a
-    refusal names every one of them ("" when there are none).
-    """
-    digest = hashlib.sha256()
-    links: list[str] = []
-    irregular: list[str] = []
-    for base, directories, files in os.walk(repository, followlinks=False):
+    for base, directories, files in os.walk(repository, onerror=unlisted, followlinks=False):
         directories[:] = sorted(name for name in directories
                                 if not (Path(base) == repository and name == ".git"))
-        links += [(Path(base) / directory).relative_to(repository).as_posix()
-                  for directory in directories if (Path(base) / directory).is_symlink()]
+        tree.links += [(Path(base) / directory).relative_to(repository).as_posix()
+                       for directory in directories if (Path(base) / directory).is_symlink()]
         for name in sorted(files):
             path = Path(base) / name
             relative = path.relative_to(repository).as_posix()
-            mode = path.lstat().st_mode
-            if not (stat.S_ISLNK(mode) or stat.S_ISREG(mode)):
-                irregular.append(relative)
-                continue
-            # The tree digest's bytes are unchanged; an entry digest reads the same bytes.
-            hashers = [digest] if entries is None else [digest, hashlib.sha256()]
-            parts: list[bytes] = [relative.encode() + b"\0",
-                                  str(stat.S_IMODE(mode)).encode() + b"\0"]
-            parts.append(b"link\0" + os.readlink(path).encode() if stat.S_ISLNK(mode)
-                         else b"file\0")
-            for part in parts:
-                for hasher in hashers:
-                    hasher.update(part)
-            if stat.S_ISREG(mode):
-                with path.open("rb") as stream:
-                    while block := stream.read(1024 * 1024):
-                        for hasher in hashers:
-                            hasher.update(block)
-            for hasher in hashers:
-                hasher.update(b"\0")
-            if entries is not None:
-                entries[relative] = hashers[1].hexdigest()[:16]
-    unreadable = []
-    if links:
-        unreadable.append(f"a directory symlink: {_named(sorted(links))}")
-    if irregular:
-        unreadable.append(f"a non-regular file: {_named(sorted(irregular))}")
-    return digest.hexdigest(), "; ".join(unreadable)
+            try:
+                mode = path.lstat().st_mode
+                if not (stat.S_ISLNK(mode) or stat.S_ISREG(mode)):
+                    tree.irregular.append(relative)
+                    continue
+                digest.update(relative.encode() + b"\0")
+                digest.update(str(stat.S_IMODE(mode)).encode() + b"\0")
+                if stat.S_ISLNK(mode):
+                    digest.update(b"link\0" + os.readlink(path).encode())
+                else:
+                    digest.update(b"file\0")
+                    with path.open("rb") as stream:
+                        while block := stream.read(1024 * 1024):
+                            digest.update(block)
+                digest.update(b"\0")
+            except OSError:
+                tree.unreadable.append(relative)  # refused below; the digest no longer matters
+    tree.digest = digest.hexdigest()
+    return tree
 
 
 #: How many paths of each kind a refusal names before it counts the rest.
@@ -125,22 +119,85 @@ def _named(found: list[str]) -> str:
     return ", ".join(found[:NAMED_PATHS]) + more
 
 
-def unrecorded_changes(receipt: dict, repository: Path) -> str:
-    """Name the input files added, removed or changed since the projection was prepared."""
-    recorded = receipt.get("file_digests")
-    current = tree_entries(repository)
-    if isinstance(recorded, dict):
-        before = {str(path): str(value) for path, value in recorded.items()}
-    else:  # a receipt from before file digests: added and removed files only
-        listed = [*receipt.get("files", []), NO_INDEX_MARKER]  # the marker is never listed
-        before = {str(path): current.get(str(path), "") for path in listed}
-        if NO_INDEX_MARKER not in current:
-            before.pop(NO_INDEX_MARKER)  # unknown whether it was there: say nothing about it
-    kinds = (("added", sorted(set(current) - set(before))),
-             ("removed", sorted(set(before) - set(current))),
-             ("changed", sorted(path for path in set(before) & set(current)
-                                if before[path] != current[path])))
+def unrecorded_changes(receipt: dict, repository: Path, tree: _Tree) -> str:
+    """Name what was added, removed or changed since the projection's own first commit.
+
+    Nothing extra is kept at preparation: the clone's first commit holds every input file but
+    the no-index marker, so it is compared only when a launch is refused. Content and the
+    executable bit are compared, as Git records them. A directory the commit never had (an
+    install's node_modules) is named once, as ``dir/``, and not read. A path that is now a
+    directory symlink, another non-regular file or unreadable is named in ``tree.problems()``
+    only, and so is what the commit held under it.
+    """
+    initial = str(receipt["initial_commit"])
+    try:
+        algorithm = run_host_git(repository, ["rev-parse", "--show-object-format"]).decode().strip()
+        listing = run_host_git(repository, ["ls-tree", "-r", "-z", "--full-tree", initial])
+    except (HostGitError, OSError, ValueError):
+        return ""
+    committed: dict[str, tuple[str, str]] = {}
+    for row in listing.split(b"\0"):
+        if not row:
+            continue
+        meta, _, listed = row.partition(b"\t")
+        mode, kind, oid = meta.decode().split(" ")
+        if kind == "blob":
+            committed[listed.decode()] = (mode, oid)
+    folders = {parent.as_posix() for name in committed for parent in PurePosixPath(name).parents}
+    shown = set(tree.links) | set(tree.irregular) | set(tree.unreadable)
+    hidden = set(tree.links) | {name.rstrip("/") for name in tree.unlisted}
+    added: list[str] = []
+    changed: list[str] = []
+    present: set[str] = set()
+    for base, directories, files in os.walk(repository, followlinks=False):  # errors: in tree
+        here = Path(base)
+        kept = []
+        for directory in sorted(directories):
+            relative = (here / directory).relative_to(repository).as_posix()
+            if (here == repository and directory == ".git") or (here / directory).is_symlink():
+                continue
+            if relative in folders:
+                kept.append(directory)
+            else:
+                added.append(relative + "/")  # never committed: named once, not read
+        directories[:] = kept
+        for name in sorted(files):
+            path = here / name
+            relative = path.relative_to(repository).as_posix()
+            if relative in shown:
+                continue
+            present.add(relative)
+            if relative == NO_INDEX_MARKER:
+                info = path.lstat()
+                if not stat.S_ISREG(info.st_mode) or info.st_size:
+                    changed.append(relative)
+                continue
+            if relative not in committed:
+                added.append(relative)
+            elif _differs(path, *committed[relative], algorithm):
+                changed.append(relative)
+    removed = [name for name in [*committed, NO_INDEX_MARKER]
+               if name not in present and name not in shown
+               and not any(parent.as_posix() in hidden for parent in PurePosixPath(name).parents)]
+    kinds = (("added", sorted(added)), ("removed", sorted(removed)), ("changed", sorted(changed)))
     return "; ".join(f"{kind} {_named(found)}" for kind, found in kinds if found)
+
+
+def _differs(path: Path, mode: str, oid: str, algorithm: str) -> bool:
+    """Whether a file differs from its committed blob: type, content or executable bit."""
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode):
+        if mode != "120000":
+            return True
+        data = os.readlink(path).encode()
+    else:
+        # Git records one executable bit, the owner's; other mode bits are not compared.
+        if mode == "120000" or (mode == "100755") != bool(info.st_mode & stat.S_IXUSR):
+            return True
+        data = path.read_bytes()
+    hasher = hashlib.new("sha256" if algorithm == "sha256" else "sha1")
+    hasher.update(b"blob %d\0" % len(data) + data)
+    return hasher.hexdigest() != oid
 
 
 def prepare(runs: Path, run: str, role: str, destination: Path,
@@ -225,7 +282,7 @@ def prepare(runs: Path, run: str, role: str, destination: Path,
     result = dict(role=role, repository=str(destination), source_commit=task["resolved_commit"],
                   initial_commit=initial, includes=includes, excludes=excludes,
                   files=sorted(kept), omitted_directory_links=omitted)
-    result["tree_digest"], result["file_digests"] = _digest_and_entries(destination)
+    result["tree_digest"] = tree_digest(destination)
     record.write_new(receipt_path, (json.dumps(result, indent=2) + "\n").encode())
     return result
 
@@ -273,16 +330,16 @@ def verify(runs: Path, run: str, role: str, repository: Path, *, replacing: bool
     if initial != receipt["initial_commit"]:
         raise ValueError(f"role inputs changed before first launch: HEAD is {initial[:12]}, "
                          f"not the projection's {receipt['initial_commit'][:12]}")
-    digest, unreadable = _tree(repository, entries=None)
-    if unreadable or digest != receipt["tree_digest"]:
+    tree = _tree(repository)
+    if tree.problems() or tree.digest != receipt["tree_digest"]:
         # Everything to undo, in one refusal: an author clone used before launch usually has
         # several (an install leaves node_modules links and a hook directory).
-        changes = unrecorded_changes(receipt, repository)
-        if unreadable:
-            raise ValueError(f"role inputs contain {unreadable}"
+        changes = unrecorded_changes(receipt, repository, tree)
+        if tree.problems():
+            raise ValueError(f"role inputs contain {tree.problems()}"
                              + (f"; and unrecorded changes: {changes}" if changes else ""))
         raise ValueError("role inputs have unrecorded changes before first launch: "
-                         + (changes or "file contents (this receipt has no per-file digests)"))
+                         + (changes or "permission bits that Git does not record"))
     return receipt
 
 

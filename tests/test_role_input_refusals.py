@@ -1,22 +1,28 @@
 """A refused author launch names every path that caused the refusal, in one message.
 
-Authority: normative. Cites the operator incident (2026-11-17): an npm install in a lane
-clone left `node_modules` directory links and husky's `.husky/_`; the refusal named
-neither, finding the cause took ~6 minutes, and fixing the first cause exposed a second
-refusal. The stated contract, as revised the same day: directory links and non-regular
-files are named in sorted string order (at most five each, then " and <N> more");
-unrecorded changes are named as added, removed and changed paths; every cause appears in
-one refusal; receipts carry per-file digests for every file the tree digest covers, the
-`.kindex-no-index` marker included, while `tree_digest` values stay what they were;
-receipts prepared before this change still verify and never name the marker.
+Authority: normative. Cites the operator incident (2026-11-17): an install left
+`apps/website/node_modules/react` (a directory link) and husky's `.husky/_/` in a lane
+clone; the refusal named neither and stopped at the first problem, so the operator needed
+two refusal rounds. The contract, as redesigned the same day: the receipt keeps exactly the
+keys and `tree_digest` values it had before; the refusal names directory links, non-regular
+files, unreadable files and unlistable directories (in that order), then the changes against
+the projection's first commit as added, removed and changed paths (sorted, at most five per
+kind, then " and N more"); a directory the first commit never had is named once as `dir/`.
+Amended the same day: the executable bit is the owner's, as Git records it; files under an
+unlistable directory or a directory replaced by a link are not reported as removed. Problem
+kinds are joined by "; " (inferred, as the changes are).
 
-Expected values are direct from that contract unless a comment says "inferred".
+Expected values are direct from that contract unless a comment says "inferred". Digest
+literals were computed once by the module as it stood at ecddf63 (before refusals named
+paths); nothing here reads Git history at test time.
 """
 
-import importlib.util
 import json
 import os
 import re
+import shutil
+import socket
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -26,21 +32,33 @@ import pytest
 from harness import role_inputs, run_record
 
 REPO = Path(__file__).resolve().parents[1]
-# The last commit before refusals named paths: the oracle for unchanged tree digests and
-# for receipts prepared by the earlier code.
-BEFORE_PATHS = "ecddf63b6d1cfd83fb290c488bed1ca43279ae3d"
 MARKER = ".kindex-no-index"
-LINKS = "role inputs contain a directory symlink: "
-ODD = "role inputs contain a non-regular file: "
-ODD_PART = "; a non-regular file: "
+CONTAINS = "role inputs contain "
+LINKS = CONTAINS + "a directory symlink: "
+ODD = CONTAINS + "a non-regular file: "
+UNREADABLE = CONTAINS + "a file that cannot be read: "
+UNLISTABLE = CONTAINS + "a directory that cannot be read: "
 CHANGES = "role inputs have unrecorded changes before first launch: "
 BOTH = "; and unrecorded changes: "
-NO_DIGESTS = "file contents (this receipt has no per-file digests)"
+PERMISSIONS = CHANGES + "permission bits that Git does not record"
+# The receipt keys harness/role_inputs.py wrote at ecddf63, in its order.
+RECEIPT_KEYS = ["role", "repository", "source_commit", "initial_commit", "includes", "excludes",
+                "files", "omitted_directory_links", "tree_digest"]
 
 MODULES = [f"src/mod{index}.py" for index in range(7)]
 PAGES = [f"docs/page{index}.md" for index in range(7)]
-# The Coder's projection of the fixture source: everything but tests/ and .kin/.
-CODER_FILES = sorted(["api/alias", "api/spec.txt", "src/app.py", *MODULES, *PAGES])
+EXECUTABLE = {"bin/run.sh", ".husky/pre-commit"}
+SOURCE = {"src/app.py": "IMPLEMENTATION\n", "api/spec.txt": "PUBLIC_BEHAVIOR\n",
+          # A regular file whose bytes are a link target: Git stores the same blob for the
+          # link "api/pointer -> spec.txt", so only the kind of entry tells them apart.
+          "api/pointer": "spec.txt",
+          "bin/run.sh": "#!/bin/sh\nexit 0\n", ".husky/pre-commit": "npx lint-staged\n",
+          "apps/website/package.json": "{}\n", ".gitignore": "node_modules/\n*.log\n",
+          "tests/test_app.py": "ORACLE\n", ".kin/knowledge.jsonl": "PRIVATE_MEMORY\n",
+          **{name: f"{name}\n" for name in MODULES + PAGES}}
+# The Coder's projection of SOURCE: everything but tests/ and .kin/.
+CODER_FILES = sorted([*(name for name in SOURCE if not name.startswith(("tests/", ".kin/"))),
+                      "api/alias"])
 
 
 def _git(repo, *args):
@@ -54,20 +72,23 @@ def _commit(repo, message):
          "commit", "-q", "--allow-empty", "-m", message)
 
 
-@pytest.fixture
-def inputs(tmp_path):
-    repo = tmp_path / "source"
+def _source(repo):
+    """The fixture source repository: SOURCE plus the file link api/alias -> spec.txt."""
     repo.mkdir()
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    contents = {"src/app.py": "IMPLEMENTATION\n", "tests/test_app.py": "ORACLE\n",
-                "api/spec.txt": "PUBLIC_BEHAVIOR\n", ".kin/knowledge.jsonl": "PRIVATE_MEMORY\n"}
-    contents.update({name: f"{name}\n" for name in MODULES + PAGES})
-    for name, value in contents.items():
+    for name, value in SOURCE.items():
         path = repo / name
-        path.parent.mkdir(exist_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(value)
+        path.chmod(0o755 if name in EXECUTABLE else 0o644)
     (repo / "api/alias").symlink_to("spec.txt")
     _commit(repo, "source")
+    return repo
+
+
+@pytest.fixture
+def inputs(tmp_path):
+    repo = _source(tmp_path / "source")
     runs = tmp_path / "runs"
     root = run_record.create(runs, "task", repo, b"Implement public behavior")
     return repo, runs, root
@@ -79,8 +100,8 @@ def coder(tmp_path, inputs):
     _, runs, root = inputs
     dest = tmp_path / "coder"
     result = role_inputs.prepare(runs, "task", "coder", dest, [], ["tests"])
-    assert sorted(result["files"]) == CODER_FILES
-    role_inputs.verify(runs, "task", "coder", dest)  # positive control: clean verifies
+    assert result["files"] == CODER_FILES
+    assert role_inputs.verify(runs, "task", "coder", dest) == result  # positive control
     return dest, runs, root, result
 
 
@@ -101,300 +122,56 @@ def _write(path, text):
     path.write_text(text)
 
 
-def _drop_file_digests(root, role="coder"):
-    """Rewrite the receipt as a receipt prepared before per-file digests existed."""
-    path = root / "inputs" / f"{role}.json"
-    receipt = json.loads(path.read_text())
-    receipt.pop("file_digests")
-    path.write_text(json.dumps(receipt, indent=2) + "\n")
+_CHANGED_MODES = []
 
 
-@pytest.fixture(scope="module")
-def before(tmp_path_factory):
-    """harness/role_inputs.py as committed before this change, loaded beside the current one."""
-    source = subprocess.run(["git", "-C", str(REPO), "show",
-                             f"{BEFORE_PATHS}:harness/role_inputs.py"],
-                            check=True, capture_output=True).stdout
-    path = tmp_path_factory.mktemp("before") / "role_inputs_before_paths.py"
-    path.write_bytes(source)
-    # A module under the harness package imports harness.run_record, as the real one does.
-    spec = importlib.util.spec_from_file_location("harness._role_inputs_before_paths", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+@pytest.fixture(autouse=True)
+def _restore_modes():
+    """Restore the original mode of every path a test chmods, whether it passes or fails.
+
+    An unlistable directory left behind stops pytest's basetemp rotation and `rm -rf`.
+    """
+    yield
+    while _CHANGED_MODES:
+        path, mode = _CHANGED_MODES.pop()  # last changed first: a parent before its children
+        os.chmod(path, mode)
 
 
-# --- receipts -------------------------------------------------------------------------------
+def _chmod(path, mode):
+    """chmod a path a test changes, recording its mode so teardown can restore it."""
+    _CHANGED_MODES.append((path, stat.S_IMODE(path.lstat().st_mode)))
+    path.chmod(mode)
 
 
-def test_receipt_has_a_short_digest_for_every_digested_file_marker_included(tmp_path, coder):
-    # Revised contract: file_digests covers every file tree_digest covers, the marker too.
+def _unreadable(path):
+    if os.geteuid() == 0:
+        pytest.skip("root reads files whatever their permission bits")
+    _chmod(path, 0)
+    with pytest.raises(PermissionError):  # positive control: it really cannot be read
+        path.read_bytes()
+
+
+def _unlistable(path):
+    if os.geteuid() == 0:
+        pytest.skip("root lists directories whatever their permission bits")
+    _chmod(path, 0o300)  # writable and searchable, but not readable
+    with pytest.raises(PermissionError):  # positive control: it really cannot be listed
+        os.listdir(path)
+
+
+# --- receipts and tree digests are what they were -------------------------------------------
+
+
+def test_prepare_writes_exactly_the_receipt_main_writes_and_nothing_else(tmp_path, coder):
     dest, runs, root, result = coder
-    assert (dest / MARKER).is_file()  # the marker is really in the projection
-    digests = result["file_digests"]
-    assert sorted(digests) == sorted([*CODER_FILES, MARKER])
-    for value in digests.values():
-        assert re.fullmatch(r"[0-9a-fA-F]{16}", value)
-    on_disk = json.loads((root / "inputs/coder.json").read_text())
-    assert on_disk["file_digests"] == digests
-    empty = role_inputs.prepare(runs, "task", "tester", tmp_path / "tester", [], [])
-    assert empty["files"] == [] and list(empty["file_digests"]) == [MARKER]
-    role_inputs.verify(runs, "task", "tester", tmp_path / "tester")
-
-
-@pytest.mark.parametrize("change,expected", [
-    ("delete", "removed " + MARKER), ("rewrite", "changed " + MARKER)])
-def test_a_deleted_or_rewritten_marker_is_named(coder, change, expected):
-    # `git clean -fdx` in a lane clone deletes the marker: it is listed in .git/info/exclude.
-    dest, runs, _, _ = coder
-    if change == "delete":
-        (dest / MARKER).unlink()
-    else:
-        (dest / MARKER).write_text("rewritten\n")
-    assert _refusal(runs, dest) == CHANGES + expected
-
-
-# --- directory links ------------------------------------------------------------------------
-
-
-def test_every_directory_link_is_named_and_a_link_alone_gives_only_that(coder):
-    dest, runs, _, _ = coder
-    # Created out of order across several directories; the refusal names them sorted.
-    for name in ("src/zz_link", "node_modules/b", "api/link", "node_modules/a"):
-        _link_dir(dest / name, dest / "docs")
-    message = LINKS + "api/link, node_modules/a, node_modules/b, src/zz_link"
-    assert _refusal(runs, dest) == message
-    with pytest.raises(ValueError) as refused:
-        role_inputs.tree_digest(dest)
-    assert str(refused.value) == message
-
-
-@pytest.mark.parametrize("links,named", [
-    # A walk that names a directory's own links before its subdirectories' gives "b, api/link".
-    (["b", "api/link"], "api/link, b"),
-    # A walk that descends into "a" before reaching the entry "a.b" gives "a/x, a.b".
-    (["a/x", "a.b"], "a.b, a/x"),
-])
-def test_directory_links_are_named_in_plain_string_order(coder, links, named):
-    dest, runs, _, _ = coder
-    (dest / "a").mkdir()
-    for name in links:
-        _link_dir(dest / name, dest / "src")
-    assert _refusal(runs, dest) == LINKS + named
-
-
-@pytest.mark.parametrize("count,named,rest", [
-    (5, 5, ""), (6, 5, " and 1 more"), (8, 5, " and 3 more")])
-def test_at_most_five_directory_links_are_named(coder, count, named, rest):
-    dest, runs, _, _ = coder
-    names = [f"node_modules/pkg{index}" for index in range(count)]
-    for name in reversed(names):
-        _link_dir(dest / name, "../src")
-    assert _refusal(runs, dest) == LINKS + ", ".join(names[:named]) + rest
-
-
-# --- unrecorded changes ---------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("change,expected", [
-    ("add", "added api/new.txt, zz_new.txt"),
-    ("remove", "removed docs/page3.md, src/mod1.py"),
-    ("content", "changed src/app.py"),
-    ("mode", "changed api/spec.txt"),
-    ("link target", "changed api/alias"),
-    ("add+content", "added api/new.txt, zz_new.txt; changed src/app.py"),
-    ("remove+mode", "removed docs/page3.md, src/mod1.py; changed api/spec.txt"),
-    ("add+remove+content+mode+link target",
-     "added api/new.txt, zz_new.txt; removed docs/page3.md, src/mod1.py; "
-     "changed api/alias, api/spec.txt, src/app.py"),
-])
-def test_unrecorded_changes_name_each_path_in_its_part(coder, change, expected):
-    dest, runs, _, _ = coder
-    kinds = change.split("+")
-    if "add" in kinds:
-        # A root file is walked before api/, so only sorting puts api/new.txt first.
-        _write(dest / "zz_new.txt", "new")
-        _write(dest / "api/new.txt", "new")
-    if "remove" in kinds:
-        (dest / "src/mod1.py").unlink()
-        (dest / "docs/page3.md").unlink()
-    if "content" in kinds:
-        (dest / "src/app.py").write_text("CHANGED\n")
-    if "mode" in kinds:
-        spec = dest / "api/spec.txt"
-        spec.chmod(spec.stat().st_mode ^ 0o100)
-    if "link target" in kinds:
-        (dest / "api/alias").unlink()
-        (dest / "api/alias").symlink_to("other.txt")
-    assert _refusal(runs, dest) == CHANGES + expected
-
-
-def test_each_part_names_at_most_five_paths(coder):
-    dest, runs, _, _ = coder
-    added = [f"extra/f{index}" for index in range(6)]
-    for name in added:
-        _write(dest / name, "new")
-    for name in PAGES:
-        (dest / name).unlink()
-    for name in MODULES[:5]:
-        (dest / name).write_text("CHANGED\n")
-    assert _refusal(runs, dest) == CHANGES + (
-        "added " + ", ".join(added[:5]) + " and 1 more; "
-        "removed " + ", ".join(PAGES[:5]) + " and 2 more; "
-        "changed " + ", ".join(MODULES[:5]))
-
-
-# --- both at once ---------------------------------------------------------------------------
-
-
-def test_npm_install_leftovers_are_named_in_one_refusal(coder):
-    """The incident: one refusal names the links and the files an install left behind."""
-    dest, runs, _, _ = coder
-    _write(dest / "node_modules/real/cli.js", "cli")
-    (dest / "node_modules/.bin").mkdir()
-    (dest / "node_modules/.bin/tool").symlink_to("../real/cli.js")  # a file link is a file
-    _link_dir(dest / "node_modules/linked", "real")
-    _write(dest / ".husky/_/h", "hook")
-    (dest / "src/app.py").write_text("CHANGED\n")
-    assert _refusal(runs, dest) == (
-        LINKS + "node_modules/linked" + BOTH
-        + "added .husky/_/h, node_modules/.bin/tool, node_modules/real/cli.js; "
-        "changed src/app.py")
-
-
-def test_a_directory_replaced_by_a_link_names_the_link_and_what_it_hid(coder):
-    # Inferred: the files under a directory replaced by a link are no longer in the tree,
-    # so they are removed, an effect beyond the link itself.
-    dest, runs, _, _ = coder
-    for name in PAGES:
-        (dest / name).unlink()
-    (dest / "docs").rmdir()
-    _link_dir(dest / "docs", "src")
-    assert _refusal(runs, dest) == (
-        LINKS + "docs" + BOTH + "removed " + ", ".join(PAGES[:5]) + " and 2 more")
-
-
-# --- HEAD and non-regular files -------------------------------------------------------------
-
-
-def test_a_moved_head_names_both_commits(coder):
-    dest, runs, _, result = coder
-    initial = result["initial_commit"]
-    _commit(dest, "lane commit")
-    head = _git(dest, "rev-parse", "HEAD")
-    assert head != initial
-    message = (f"role inputs changed before first launch: HEAD is {head[:12]}, "
-               f"not the projection's {initial[:12]}")
-    assert _refusal(runs, dest) == message
-    # Inferred: HEAD is the first thing compared, so committed work is reported the same way.
-    (dest / "src/app.py").write_text("CHANGED\n")
-    _commit(dest, "lane work")
-    head = _git(dest, "rev-parse", "HEAD")
-    assert _refusal(runs, dest) == (
-        f"role inputs changed before first launch: HEAD is {head[:12]}, "
-        f"not the projection's {initial[:12]}")
-
-
-def test_a_non_regular_file_alone_is_named(coder):
-    dest, runs, _, _ = coder
-    os.mkfifo(dest / "api/pipe")
-    assert _refusal(runs, dest) == ODD + "api/pipe"
-
-
-@pytest.mark.parametrize("count,named,rest", [
-    (5, 5, ""), (6, 5, " and 1 more"), (8, 5, " and 3 more")])
-def test_at_most_five_non_regular_files_are_named(coder, count, named, rest):
-    dest, runs, _, _ = coder
-    (dest / "run").mkdir()
-    names = [f"run/pipe{index}" for index in range(count)]
-    for name in reversed(names):
-        os.mkfifo(dest / name)
-    assert _refusal(runs, dest) == ODD + ", ".join(names[:named]) + rest
-
-
-@pytest.mark.parametrize("others,expected", [
-    ("link", LINKS + "node_modules/linked" + ODD_PART + "api/pipe, zz_pipe"),
-    ("added", ODD + "api/pipe, zz_pipe" + BOTH + "added .husky/_/h"),
-    ("link+added",
-     LINKS + "node_modules/linked" + ODD_PART + "api/pipe, zz_pipe" + BOTH + "added .husky/_/h"),
-])
-def test_non_regular_files_are_named_with_every_other_cause(coder, others, expected):
-    dest, runs, _, _ = coder
-    # A root FIFO is walked before api/, so only sorting puts api/pipe first. A FIFO is not
-    # an added file: a FIFO alone gives only the non-regular part.
-    os.mkfifo(dest / "zz_pipe")
-    os.mkfifo(dest / "api/pipe")
-    if "link" in others.split("+"):
-        _link_dir(dest / "node_modules/linked", "../src")
-    if "added" in others.split("+"):
-        _write(dest / ".husky/_/h", "hook")
-    assert _refusal(runs, dest) == expected
-    with pytest.raises(ValueError) as refused:
-        role_inputs.tree_digest(dest)
-    assert str(refused.value) == expected.split(BOTH)[0]  # tree_digest names no changes
-
-
-# --- receipts prepared before this change ---------------------------------------------------
-
-
-@pytest.mark.parametrize("change,expected", [
-    ("none", None),
-    ("add", "added leaked.py"),
-    ("remove", "removed src/mod1.py"),
-    ("add+remove", "added leaked.py; removed src/mod1.py"),
-    # The receipt's files list never held the marker, so a missing marker is not named.
-    ("marker+add", "added leaked.py"),
-    ("marker+remove", "removed src/mod1.py"),
-])
-def test_a_receipt_without_file_digests_still_names_added_and_removed(coder, change, expected):
-    dest, runs, root, _ = coder
-    _drop_file_digests(root)
-    assert "file_digests" not in json.loads((root / "inputs/coder.json").read_text())
-    kinds = change.split("+")
-    if "add" in kinds:
-        _write(dest / "leaked.py", "IMPLEMENTATION")
-    if "remove" in kinds:
-        (dest / "src/mod1.py").unlink()
-    if "marker" in kinds:
-        (dest / MARKER).unlink()
-    if expected is None:
-        role_inputs.verify(runs, "task", "coder", dest)
-    else:
-        # Inferred: when added or removed paths explain the change, no contents part follows.
-        assert _refusal(runs, dest) == CHANGES + expected
-
-
-@pytest.mark.parametrize("change", ["content", "marker deleted"])
-def test_a_receipt_without_file_digests_says_only_contents_changed(coder, change):
-    # Inferred for "marker deleted": the tree digest still differs, so the launch is still
-    # refused, and with nothing the receipt can name the refusal is the contents form.
-    dest, runs, root, _ = coder
-    _drop_file_digests(root)
-    if change == "content":
-        (dest / "src/app.py").write_text("CHANGED\n")
-    else:
-        (dest / MARKER).unlink()
-    message = _refusal(runs, dest)
-    assert message.startswith(CHANGES) and message.endswith(NO_DIGESTS)
-    assert MARKER not in message  # the marker is never named from an older receipt
-
-
-def test_a_receipt_prepared_by_the_earlier_code_verifies_and_names_changes(tmp_path, inputs,
-                                                                          before):
-    _, runs, _ = inputs
-    dest = tmp_path / "coder"
-    receipt = before.prepare(runs, "task", "coder", dest, [], ["tests"])
-    assert "file_digests" not in receipt
-    role_inputs.verify(runs, "task", "coder", dest)
-    _write(dest / "node_modules/real/cli.js", "cli")
-    (dest / "src/mod1.py").unlink()
-    _link_dir(dest / "node_modules/linked", "real")
-    assert _refusal(runs, dest) == (
-        LINKS + "node_modules/linked" + BOTH
-        + "added node_modules/real/cli.js; removed src/mod1.py")
-
-
-# --- tree digests are unchanged -------------------------------------------------------------
+    assert list(result) == RECEIPT_KEYS  # no file_digests, no other new key
+    assert json.loads((root / "inputs/coder.json").read_text()) == result
+    tester = role_inputs.prepare(runs, "task", "tester", tmp_path / "tester", [], [])
+    assert list(tester) == RECEIPT_KEYS and tester["files"] == []
+    assert sorted(path.name for path in (root / "inputs").iterdir()) == [
+        "coder.json", "tester.json"]
+    assert (dest / MARKER).is_file() and (dest / MARKER).stat().st_size == 0
+    assert MARKER not in _git(dest, "ls-tree", "-r", "--name-only", "HEAD").splitlines()
 
 
 def _pinned_tree(path):
@@ -409,32 +186,499 @@ def _pinned_tree(path):
     return path
 
 
-def test_tree_digest_is_the_digest_the_earlier_code_computed(tmp_path, coder, before):
-    dest, _, _, result = coder
-    # Positive control: this is the earlier module, whose refusal named no path.
-    link = dest / "node_modules/linked"
-    _link_dir(link, "../src")
-    with pytest.raises(ValueError) as refused:
-        before.tree_digest(dest)
-    assert str(refused.value) == "role inputs contain a directory symlink"
-    link.unlink()
-    (dest / "node_modules").rmdir()
-    assert result["tree_digest"] == before.tree_digest(dest) == role_inputs.tree_digest(dest)
+def test_tree_digest_pin(tmp_path):
+    # Computed by tree_digest at ecddf63. Receipts already written depend on it.
+    tree = _pinned_tree(tmp_path / "tree")
+    assert role_inputs.tree_digest(tree) == (
+        "b11045b9b68357e20ba61e57d18df14d0582be78c28a0d783c6ca640926e015e")
+    _chmod(tree / "README.md", 0o664)  # the digest covers every permission bit
+    assert role_inputs.tree_digest(tree) == (
+        "2c8aae0cc6466d215a9a69c40d48756be6903e21237e5e362d368f049aebd2cd")
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="a link's own mode is 0777 only on Linux")
+def test_tree_digest_pin_with_links(tmp_path):
+    # Computed by tree_digest at ecddf63, on Linux.
     tree = _pinned_tree(tmp_path / "tree")
     (tree / "nested/alias").symlink_to("deep/data.bin")
     (tree / "dangling").symlink_to("missing")
-    first = before.tree_digest(tree)
-    assert role_inputs.tree_digest(tree) == first
+    assert role_inputs.tree_digest(tree) == (
+        "d0374bbd4dbc49b0a926a2d876bacf50f3fad261a917a61f5444bc0cf6fc6ce1")
     (tree / "nested/alias").unlink()
     (tree / "nested/alias").symlink_to("../README.md")
-    assert before.tree_digest(tree) != first  # the comparison is sensitive to a link target
-    assert role_inputs.tree_digest(tree) == before.tree_digest(tree)
+    assert role_inputs.tree_digest(tree) == (
+        "30ca58f5daee3d9879d1cfb4e0ae0e7b24516adeb321a29cbe177e177b58aa29")
 
 
-def test_tree_digest_pin(tmp_path):
-    # Pin (T9): computed by tree_digest at BEFORE_PATHS. Receipts already written depend on it.
-    assert role_inputs.tree_digest(_pinned_tree(tmp_path / "tree")) == (
-        "b11045b9b68357e20ba61e57d18df14d0582be78c28a0d783c6ca640926e015e")
+def test_receipt_tree_digest_pin(tmp_path, inputs):
+    # Computed by prepare at ecddf63 for the same source; the marker is part of the digest.
+    _, runs, _ = inputs
+    public = role_inputs.prepare(runs, "task", "tester", tmp_path / "tester", ["bin", "docs"], [])
+    assert public["files"] == sorted(["bin/run.sh", *PAGES])
+    assert public["tree_digest"] == (
+        "688eaf4e081294c831118e56e0db6c250a12af70b6d6eadbeb3e9c8074fa58a0")
+    assert role_inputs.tree_digest(tmp_path / "tester") == public["tree_digest"]
+    assert role_inputs.verify(runs, "task", "tester", tmp_path / "tester") == public
+
+
+def test_an_empty_projection_digests_only_the_marker(tmp_path, inputs):
+    source, runs, _ = inputs
+    run_record.create(runs, "empty", source, b"Test public behavior")
+    empty = role_inputs.prepare(runs, "empty", "tester", tmp_path / "tester", [], [])
+    assert empty["tree_digest"] == (
+        "21fb0abfd6487e430d4ca1391d9b75108671739061b3616862b38712631f7424")
+    assert role_inputs.verify(runs, "empty", "tester", tmp_path / "tester") == empty
+
+
+# --- problems: directory links, non-regular files, unreadable files -------------------------
+
+
+def test_every_directory_link_is_named_sorted_and_a_link_alone_gives_only_that(coder):
+    dest, runs, _, _ = coder
+    # Created out of order across several committed directories.
+    for name in ("src/zz_link", "docs/b_link", "api/link", "bin/a_link"):
+        _link_dir(dest / name, dest / "docs")
+    assert _refusal(runs, dest) == LINKS + "api/link, bin/a_link, docs/b_link, src/zz_link"
+
+
+def test_directory_links_are_named_in_plain_string_order(coder):
+    # Inferred: "sorted" is plain string order (the earlier contract said so): "api.b" sorts
+    # before "api/x" ('.' < '/'), though a walk or a path-parts sort names api/x first.
+    dest, runs, _, _ = coder
+    for name in ("api/x", "api.b"):
+        _link_dir(dest / name, dest / "src")
+    assert _refusal(runs, dest) == LINKS + "api.b, api/x"
+
+
+@pytest.mark.parametrize("count,rest", [(5, ""), (6, " and 1 more"), (8, " and 3 more")])
+def test_at_most_five_directory_links_are_named(coder, count, rest):
+    # Inferred: the five-and-N-more rule applies to problems as to changes.
+    dest, runs, _, _ = coder
+    names = [f"docs/link{index}" for index in range(count)]
+    for name in reversed(names):
+        _link_dir(dest / name, "../src")
+    assert _refusal(runs, dest) == LINKS + ", ".join(names[:5]) + rest
+
+
+def test_fifos_and_sockets_are_named_as_non_regular_files(coder, monkeypatch):
+    dest, runs, _, _ = coder
+    os.mkfifo(dest / "zz_pipe")  # a root entry: walked before api/, so only sorting orders it
+    os.mkfifo(dest / "api/pipe")
+    monkeypatch.chdir(dest / "src")  # a relative bind keeps the socket path short
+    with socket.socket(socket.AF_UNIX) as server:
+        server.bind("sock")
+    assert (dest / "src/sock").is_socket()
+    assert _refusal(runs, dest) == ODD + "api/pipe, src/sock, zz_pipe"
+
+
+@pytest.mark.parametrize("count,rest", [(5, ""), (6, " and 1 more"), (8, " and 3 more")])
+def test_at_most_five_non_regular_files_are_named(coder, count, rest):
+    dest, runs, _, _ = coder
+    names = [f"docs/pipe{index}" for index in range(count)]
+    for name in reversed(names):
+        os.mkfifo(dest / name)
+    assert _refusal(runs, dest) == ODD + ", ".join(names[:5]) + rest
+
+
+def test_a_file_that_cannot_be_read_is_named(coder):
+    # Inferred: an unreadable committed file whose executable bit is unchanged is named only
+    # as a problem (it is not removed, and its contents cannot be compared).
+    dest, runs, _, _ = coder
+    _unreadable(dest / "src/app.py")
+    assert _refusal(runs, dest) == UNREADABLE + "src/app.py"
+
+
+def test_a_read_error_does_not_hide_the_other_problems_or_changes(coder):
+    dest, runs, _, _ = coder
+    _unreadable(dest / "src/mod3.py")
+    _unreadable(dest / "api/spec.txt")
+    _link_dir(dest / "src/zz_link", "../docs")
+    os.mkfifo(dest / "docs/pipe")
+    _write(dest / "leaked.py", "IMPLEMENTATION")
+    assert _refusal(runs, dest) == (
+        LINKS + "src/zz_link; a non-regular file: docs/pipe; "
+        "a file that cannot be read: api/spec.txt, src/mod3.py" + BOTH + "added leaked.py")
+
+
+@pytest.mark.parametrize("directories,named", [
+    (["docs"], "docs/"),
+    (["apps/website"], "apps/website/"),
+    (["docs", "apps/website"], "apps/website/, docs/"),
+])
+def test_a_directory_that_cannot_be_listed_is_named_and_hides_no_removal(coder, directories,
+                                                                         named):
+    # Amended contract: an unlistable directory is a problem named "dir/"; the committed
+    # files under it are not reported as removed.
+    dest, runs, _, _ = coder
+    for directory in directories:
+        _unlistable(dest / directory)
+    assert _refusal(runs, dest) == UNLISTABLE + named
+
+
+def test_every_problem_kind_is_named_in_the_contract_order(coder):
+    # Amended contract: directory symlink, non-regular file, file that cannot be read,
+    # directory that cannot be read. Inferred: kinds are joined by "; ".
+    dest, runs, _, _ = coder
+    _unlistable(dest / "docs")
+    _unreadable(dest / "src/mod3.py")
+    os.mkfifo(dest / "api/pipe")
+    _link_dir(dest / "src/zz_link", "../bin")
+    _write(dest / "leaked.py", "IMPLEMENTATION")
+    assert _refusal(runs, dest) == (
+        LINKS + "src/zz_link; a non-regular file: api/pipe; "
+        "a file that cannot be read: src/mod3.py; a directory that cannot be read: docs/"
+        + BOTH + "added leaked.py")
+
+
+@pytest.mark.parametrize("replacement,expected", [
+    ("directory link", LINKS + "src/mod0.py"), ("fifo", ODD + "src/mod0.py")])
+def test_a_committed_file_turned_link_or_fifo_is_not_also_removed(coder, replacement, expected):
+    dest, runs, _, _ = coder
+    (dest / "src/mod0.py").unlink()
+    if replacement == "fifo":
+        os.mkfifo(dest / "src/mod0.py")
+    else:
+        _link_dir(dest / "src/mod0.py", "../docs")
+    assert _refusal(runs, dest) == expected
+
+
+@pytest.mark.parametrize("directory", ["docs", "apps/website"])
+def test_a_committed_directory_replaced_by_a_link_is_named_only_as_a_link(coder, directory):
+    # Amended contract: the committed files under it are not reported as removed.
+    dest, runs, _, _ = coder
+    shutil.rmtree(dest / directory)
+    _link_dir(dest / directory, dest / "src")
+    assert _refusal(runs, dest) == LINKS + directory
+
+
+# --- unrecorded changes ---------------------------------------------------------------------
+
+
+def _change(dest, kinds):
+    if "add" in kinds:
+        # A root file is walked before api/, so only sorting puts api/new.txt first.
+        _write(dest / "zz_new.txt", "new")
+        _write(dest / "api/new.txt", "new")
+    if "remove" in kinds:
+        (dest / "src/mod1.py").unlink()
+        (dest / "docs/page3.md").unlink()
+    if "content" in kinds:
+        (dest / "src/app.py").write_text("CHANGED\n")
+    if "exec on" in kinds:
+        _chmod(dest / "api/spec.txt", 0o755)
+    if "exec off" in kinds:
+        _chmod(dest / "bin/run.sh", 0o644)
+    if "file to link" in kinds:
+        (dest / "src/app.py").unlink()
+        (dest / "src/app.py").symlink_to("mod0.py")
+    if "file to same-bytes link" in kinds:
+        pointer = dest / "api/pointer"
+        pointer.unlink()
+        pointer.symlink_to(SOURCE["api/pointer"])
+        # Positive control: Git stores this link as the committed file's very blob, and the
+        # link leads to an existing file.
+        target = subprocess.run(["git", "-C", str(dest), "hash-object", "--stdin"],
+                                input=os.readlink(pointer), check=True, capture_output=True,
+                                text=True).stdout.strip()
+        assert target == _git(dest, "rev-parse", "HEAD:api/pointer")
+        assert pointer.is_symlink() and pointer.is_file()
+    if "link to file" in kinds:
+        # The same bytes Git stores for the link: only the kind of entry differs.
+        (dest / "api/alias").unlink()
+        (dest / "api/alias").write_bytes(b"spec.txt")
+    if "link target" in kinds:
+        (dest / "api/alias").unlink()
+        (dest / "api/alias").symlink_to("../src/app.py")
+
+
+@pytest.mark.parametrize("change,expected", [
+    ("add", "added api/new.txt, zz_new.txt"),
+    ("remove", "removed docs/page3.md, src/mod1.py"),
+    ("content", "changed src/app.py"),
+    ("exec on", "changed api/spec.txt"),
+    ("exec off", "changed bin/run.sh"),
+    ("file to link", "changed src/app.py"),
+    ("file to same-bytes link", "changed api/pointer"),
+    ("link to file", "changed api/alias"),
+    ("link target", "changed api/alias"),
+    ("add+content", "added api/new.txt, zz_new.txt; changed src/app.py"),
+    ("remove+exec on", "removed docs/page3.md, src/mod1.py; changed api/spec.txt"),
+    ("add+remove", "added api/new.txt, zz_new.txt; removed docs/page3.md, src/mod1.py"),
+    ("add+remove+content+exec on+exec off+link target",
+     "added api/new.txt, zz_new.txt; removed docs/page3.md, src/mod1.py; "
+     "changed api/alias, api/spec.txt, bin/run.sh, src/app.py"),
+])
+def test_each_change_is_named_in_its_kind_in_order(coder, change, expected):
+    dest, runs, _, _ = coder
+    _change(dest, change.split("+"))
+    assert _refusal(runs, dest) == CHANGES + expected
+
+
+def test_each_kind_names_at_most_five_paths(coder):
+    dest, runs, _, _ = coder
+    added = [f"src/new{index}.py" for index in range(6)]
+    for name in reversed(added):
+        _write(dest / name, "new")
+    for name in PAGES:
+        (dest / name).unlink()
+    for name in MODULES:
+        (dest / name).write_text("CHANGED\n")
+    assert _refusal(runs, dest) == CHANGES + (
+        "added " + ", ".join(added[:5]) + " and 1 more; "
+        "removed " + ", ".join(PAGES[:5]) + " and 2 more; "
+        "changed " + ", ".join(MODULES[:5]) + " and 2 more")
+
+
+@pytest.mark.parametrize("files,expected", [
+    # A new top-level directory, its nested folders and file links included, is named once.
+    (["node_modules/pkg/index.js", "node_modules/pkg/lib/a.js", "node_modules/.bin/tool"],
+     "added node_modules/"),
+    # A new folder inside a committed one (husky's .husky/_ beside .husky/pre-commit).
+    ([".husky/_/.gitignore", ".husky/_/h"], "added .husky/_/"),
+    (["src/newpkg/x.py", "src/newpkg/sub/y.py", "src/zz.py", "extra/f"],
+     "added extra/, src/newpkg/, src/zz.py"),
+])
+def test_a_directory_the_first_commit_never_had_is_named_once(coder, files, expected):
+    dest, runs, _, _ = coder
+    for name in files:
+        if name.endswith("/tool"):
+            _write(dest / "node_modules/pkg/cli.js", "cli")
+            (dest / name).parent.mkdir(parents=True, exist_ok=True)
+            (dest / name).symlink_to("../pkg/cli.js")
+        else:
+            _write(dest / name, "new")
+    assert _refusal(runs, dest) == CHANGES + expected
+
+
+def test_new_directories_count_once_toward_the_five(coder):
+    # Inferred: a directory named once counts once.
+    dest, runs, _, _ = coder
+    for index in range(6):
+        _write(dest / f"d{index}/inner/f", "new")
+    assert _refusal(runs, dest) == CHANGES + "added d0/, d1/, d2/, d3/, d4/ and 1 more"
+
+
+@pytest.mark.parametrize("state,expected", [
+    ("ignored by the committed .gitignore", "added debug.log, node_modules/"),
+    ("ignored by .git/info/exclude", "added secret.py"),
+    ("staged new file", "added leaked.py"),
+    ("staged content", "changed src/app.py"),
+    ("assume-unchanged", "changed src/app.py"),
+    ("skip-worktree deletion", "removed src/mod1.py"),
+    ("core.fileMode false", "changed api/spec.txt"),
+])
+def test_git_state_in_the_clone_cannot_hide_a_change(coder, state, expected):
+    # The comparison is against the projection's first commit, not Git's view of the clone.
+    dest, runs, _, _ = coder
+    if state.startswith("ignored by the committed"):
+        _write(dest / "node_modules/pkg/index.js", "module")
+        _write(dest / "debug.log", "log")
+    elif state.startswith("ignored by .git"):
+        with (dest / ".git/info/exclude").open("a") as stream:
+            stream.write("secret.py\n")
+        _write(dest / "secret.py", "IMPLEMENTATION")
+    elif state == "staged new file":
+        _write(dest / "leaked.py", "IMPLEMENTATION")
+        _git(dest, "add", "leaked.py")
+    elif state == "staged content":
+        (dest / "src/app.py").write_text("CHANGED\n")
+        _git(dest, "add", "src/app.py")
+    elif state == "assume-unchanged":
+        _git(dest, "update-index", "--assume-unchanged", "src/app.py")
+        (dest / "src/app.py").write_text("CHANGED\n")
+    elif state == "skip-worktree deletion":
+        _git(dest, "update-index", "--skip-worktree", "src/mod1.py")
+        (dest / "src/mod1.py").unlink()
+    else:
+        _git(dest, "config", "core.fileMode", "false")
+        _chmod(dest / "api/spec.txt", 0o755)
+    assert _refusal(runs, dest) == CHANGES + expected
+
+
+@pytest.mark.parametrize("change,expected", [
+    ("delete", CHANGES + "removed " + MARKER),
+    ("rewrite", CHANGES + "changed " + MARKER),
+    ("file link", CHANGES + "changed " + MARKER),
+    # Neither non-empty nor irregular: only its permission bits differ.
+    ("chmod", PERMISSIONS),
+    ("delete+remove", CHANGES + "removed " + MARKER + ", src/mod1.py"),
+])
+def test_the_no_index_marker_is_named(coder, change, expected):
+    # `git clean -fdx` in a lane clone deletes the marker: it is listed in .git/info/exclude.
+    dest, runs, _, _ = coder
+    marker = dest / MARKER
+    if "delete" in change or change == "file link":
+        marker.unlink()
+    if change == "rewrite":
+        marker.write_text("rewritten\n")
+    if change == "file link":
+        marker.symlink_to("api/spec.txt")
+    if change == "chmod":
+        _chmod(marker, 0o644)
+    if "remove" in change:
+        (dest / "src/mod1.py").unlink()
+    assert _refusal(runs, dest) == expected
+
+
+@pytest.mark.parametrize("path,mode", [
+    ("api/spec.txt", 0o664), ("api/spec.txt", 0o600), ("bin/run.sh", 0o775),
+    ("bin/run.sh", 0o700)])
+def test_a_permission_change_git_does_not_record_is_refused_as_such(coder, path, mode):
+    dest, runs, _, _ = coder
+    _chmod(dest / path, mode)
+    assert _refusal(runs, dest) == PERMISSIONS
+
+
+@pytest.mark.parametrize("path,mode,expected", [
+    # Amended contract: the executable bit is the owner's (S_IXUSR), as Git records it.
+    ("api/spec.txt", 0o744, CHANGES + "changed api/spec.txt"),
+    ("api/spec.txt", 0o645, PERMISSIONS),
+    ("api/spec.txt", 0o655, PERMISSIONS),
+    ("bin/run.sh", 0o655, CHANGES + "changed bin/run.sh"),
+    ("bin/run.sh", 0o744, PERMISSIONS),
+    ("bin/run.sh", 0o754, PERMISSIONS),
+])
+def test_the_executable_bit_is_the_owners(coder, path, mode, expected):
+    dest, runs, _, _ = coder
+    _chmod(dest / path, mode)
+    assert _refusal(runs, dest) == expected
+
+
+def test_an_unrecorded_permission_change_is_not_named_beside_named_causes(coder):
+    # Inferred: a change or a problem that is named explains the refusal by itself.
+    dest, runs, _, _ = coder
+    _chmod(dest / "api/spec.txt", 0o664)
+    (dest / "src/app.py").write_text("CHANGED\n")
+    assert _refusal(runs, dest) == CHANGES + "changed src/app.py"
+    (dest / "src/app.py").write_text(SOURCE["src/app.py"])
+    _link_dir(dest / "src/zz_link", "../docs")
+    assert _refusal(runs, dest) == LINKS + "src/zz_link"
+
+
+def test_problems_and_changes_are_named_in_one_refusal(coder):
+    dest, runs, _, _ = coder
+    _link_dir(dest / "src/zz_link", "../docs")
+    os.mkfifo(dest / "api/pipe")
+    _change(dest, ["add", "remove", "content"])
+    (dest / MARKER).unlink()
+    assert _refusal(runs, dest) == (
+        LINKS + "src/zz_link; a non-regular file: api/pipe" + BOTH
+        + "added api/new.txt, zz_new.txt; removed .kindex-no-index, docs/page3.md, src/mod1.py; "
+        "changed src/app.py")
+
+
+# --- unchanged: HEAD and replacement rounds --------------------------------------------------
+
+
+HEAD_MOVED = re.compile(r"role inputs changed before first launch: "
+                        r"HEAD is ([0-9a-f]{7,40}), not the projection's ([0-9a-f]{7,40})")
+
+
+def _head_refusal(runs, dest, initial):
+    match = HEAD_MOVED.fullmatch(_refusal(runs, dest))
+    assert match, "not the moved-HEAD refusal"
+    assert _git(dest, "rev-parse", "HEAD").startswith(match[1])
+    assert initial.startswith(match[2])
+
+
+def test_a_moved_head_still_names_both_commits(coder):
+    dest, runs, _, result = coder
+    _commit(dest, "lane commit")
+    _head_refusal(runs, dest, result["initial_commit"])
+    # Inferred: HEAD is compared first, so a dirty tree on a moved HEAD gives the same refusal.
+    _link_dir(dest / "src/zz_link", "../docs")
+    (dest / "src/app.py").write_text("CHANGED\n")
+    _head_refusal(runs, dest, result["initial_commit"])
+
+
+def _record_launch(root, role, repository):
+    lanes = root / "tmux-lanes"
+    lanes.mkdir(exist_ok=True)
+    row = {"schema_version": "factory-tmux-lane/1", "run_id": "task", "role": role, "slot": role,
+           "lane": role, "repository": str(repository), "status": "active"}
+    with (lanes / f"{role}-launch.jsonl").open("a") as journal:
+        journal.write(json.dumps(row) + "\n")
+
+
+def test_a_replacement_round_does_not_compare_the_tree(coder):
+    dest, runs, root, result = coder
+    _commit(dest, "lane work")
+    _link_dir(dest / "node_modules/react", "../src")
+    _write(dest / ".husky/_/h", "hook")
+    with pytest.raises(ValueError, match="no recorded launch"):
+        role_inputs.verify(runs, "task", "coder", dest, replacing=True)
+    _record_launch(root, "coder", dest)
+    assert role_inputs.verify(runs, "task", "coder", dest, replacing=True) == result
+
+
+# --- a receipt and clone written by the code before this change -----------------------------
+
+
+def test_a_projection_shaped_by_the_earlier_prepare_verifies_and_names_changes(coder):
+    """Nothing new is stored, so a clone and receipt as ecddf63 made them work the same."""
+    dest, runs, root, result = coder
+    # Rebuild the clone's Git state exactly as ecddf63's prepare did, so nothing the current
+    # prepare might keep in .git is there, and write the receipt with its keys alone.
+    shutil.rmtree(dest / ".git")
+    _git(dest, "init", "-q", "-b", "lane/coder")
+    with (dest / ".git/info/exclude").open("a", encoding="utf-8") as stream:
+        stream.write(f"\n/{MARKER}\n")
+    _git(dest, "add", "-f", "--", ".", f":(top,exclude){MARKER}")
+    _git(dest, "-c", "user.name=Factory", "-c", "user.email=factory@local", "commit",
+         "--allow-empty", "-qm", "coder input projection")
+    receipt = {key: result[key] for key in RECEIPT_KEYS}
+    receipt["initial_commit"] = _git(dest, "rev-parse", "HEAD")
+    (root / "inputs/coder.json").write_text(json.dumps(receipt, indent=2) + "\n")
+    assert role_inputs.verify(runs, "task", "coder", dest) == receipt
+    _link_dir(dest / "apps/website/node_modules/react", "../../../src")
+    _write(dest / ".husky/_/h", "hook")
+    _change(dest, ["remove", "content"])
+    (dest / MARKER).unlink()
+    assert _refusal(runs, dest) == (
+        LINKS + "apps/website/node_modules/react" + BOTH
+        + "added .husky/_/, apps/website/node_modules/; "
+        "removed .kindex-no-index, docs/page3.md, src/mod1.py; changed src/app.py")
+
+
+# --- the incident ----------------------------------------------------------------------------
+
+
+INCIDENT = (LINKS + "apps/website/node_modules/react" + BOTH
+            + "added .husky/_/, apps/website/node_modules/")
+
+
+def _incident(dest):
+    """What the 2026-11-17 install left: a package link and husky's generated folder."""
+    _link_dir(dest / "apps/website/node_modules/react", "../../../src")
+    _write(dest / ".husky/_/.gitignore", "*\n")
+    _write(dest / ".husky/_/h", "#!/usr/bin/env sh\n")
+
+
+def _named(message):
+    """Every path a refusal names, from its "<problem>: a, b" and "<change kind> a, b" parts."""
+    names = []
+    for prefix in (CONTAINS, CHANGES):
+        message = message.removeprefix(prefix)
+    for part in re.split(r"; and unrecorded changes: |; ", message):
+        listed = part.split(": ", 1)[1] if ": " in part else part.split(" ", 1)[1]
+        assert not re.search(r" and \d+ more$", listed), "every path must be named to remove it"
+        names += listed.split(", ")
+    return names
+
+
+def test_the_incident_is_refused_once_and_passes_after_removing_what_is_named(coder):
+    dest, runs, _, result = coder
+    _incident(dest)
+    message = _refusal(runs, dest)
+    assert message == INCIDENT
+    # The operator removes exactly the named paths and nothing else.
+    for name in _named(message):
+        path = dest / name.rstrip("/")
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
+    assert role_inputs.verify(runs, "task", "coder", dest) == result
 
 
 # --- what the operator sees -----------------------------------------------------------------
@@ -449,23 +693,22 @@ def _environment(tmp_path):
 
 
 def test_verify_command_exits_70_with_the_named_paths(tmp_path, coder):
-    dest, runs, _, _ = coder
+    dest, runs, _, result = coder
     command = [sys.executable, str(REPO / "harness/role_inputs.py"), "verify", "--runs",
                str(runs), "--run", "task", "--role", "coder", "--repo", str(dest)]
     clean = subprocess.run(command, env=_environment(tmp_path), capture_output=True, text=True)
     assert clean.returncode == 0, clean.stderr
-    _link_dir(dest / "node_modules/linked", "../src")
-    _write(dest / ".husky/_/h", "hook")
+    assert json.loads(clean.stdout) == result
+    _incident(dest)
     refused = subprocess.run(command, env=_environment(tmp_path), capture_output=True,
                              text=True)
     assert refused.returncode == 70
-    assert ("role inputs: " + LINKS + "node_modules/linked" + BOTH + "added .husky/_/h"
-            in refused.stderr.splitlines())
+    assert "role inputs: " + INCIDENT in refused.stderr.splitlines()
 
 
-def test_the_launcher_shows_the_named_paths(tmp_path, coder):
-    dest, runs, _, _ = coder
-    _link_dir(dest / "node_modules/linked", "../src")
+def test_a_refused_launch_records_and_shows_the_named_paths(tmp_path, coder):
+    dest, runs, root, _ = coder
+    _incident(dest)
     brief = tmp_path / "brief"
     brief.write_text("Implement behavior")
     result = subprocess.run(["bash", str(REPO / "harness/tmux_lane.sh"), "task", "coder",
@@ -473,5 +716,9 @@ def test_the_launcher_shows_the_named_paths(tmp_path, coder):
                              str(brief)], env=_environment(tmp_path), capture_output=True,
                             text=True)
     assert result.returncode != 0
-    assert "role inputs: " + LINKS + "node_modules/linked" in result.stderr.splitlines()
+    assert INCIDENT in result.stderr
     assert "prepared role projection" in result.stderr
+    events = [json.loads(line) for line in (root / "events.jsonl").read_text().splitlines()]
+    [refusal] = [row for row in events if row.get("kind") == "refusal-tmux-lane"]
+    assert INCIDENT in str(refusal["detail"])
+    assert refusal["exit_code"] == result.returncode

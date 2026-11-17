@@ -609,10 +609,11 @@ PY
     # .muse/hooks.json or .agents/plugins/lane is no obstacle and is not looked for.
   fi
   if [ "$ACTION" = launch ]; then
-    PYTHONPATH="$PYTHONPATH:$REPO_ROOT" "$FACTORY_PYTHON" "$D/role_inputs.py" verify \
+    # The refusal names what to undo, in the run's events as well as on stderr.
+    INPUTS_REFUSED=$(PYTHONPATH="$PYTHONPATH:$REPO_ROOT" "$FACTORY_PYTHON" "$D/role_inputs.py" verify \
       --runs "$RUNS_ARG" --run "$RUN" --role "$ROLE" --repo "$REPOSITORY" \
-      ${REPLACE_REASON:+--replacing} >/dev/null || \
-      refuse 70 "author inputs are not the prepared role projection" \
+      ${REPLACE_REASON:+--replacing} 2>&1 >/dev/null) || \
+      refuse 70 "author inputs are not the prepared role projection: ${INPUTS_REFUSED#role inputs: }" \
         "use role_inputs.py prepare: Coder gets source minus tests; Tester gets selected public interfaces and specification, never a full clone"
   fi
   "$FACTORY_PYTHON" - "$ROOT" "$REPOSITORY" <<'PY'
