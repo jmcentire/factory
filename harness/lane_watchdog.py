@@ -24,11 +24,18 @@ Validator's attention has no control at all, so the watcher, not a person, does 
   (``refusal-lane-cap``) when the estimate reaches the cap or the declared wall-clock cap
   passes, whichever comes first.
 - **Turn-end wake.** A persistent lane's session reports each turn's end (a terminal session's
-  stop report, a stream session's completed turn). Each one is told to the Validator through its
-  inbox (``lane-turn-ended``), whether or not a done line was seen: Cursor's stop report carries
-  no text, so a Cursor Tester that finished was told to nobody (2026-11-17: the Validator sat
-  idle 20.6 min until its own monitor timed out). A session that reports it is waiting for input
-  is waiting for the Validator, not stalled, so the stall rule does not stop it; the caps do.
+  stop report, a stream session's completed or failed turn). Each one is told to the Validator
+  through its inbox (``lane-turn-ended``), whether or not a done line was seen: Cursor's stop
+  report carries no text, so a Cursor Tester that finished was told to nobody (2026-11-17: the
+  Validator sat idle 20.6 min until its own monitor timed out). The notice waits until the
+  session's phase says the turn ended, and one that cannot be written is retried at each check.
+  A turn's end also restarts the stall window. A session that says it is waiting for input
+  (Claude Code's idle prompt, a stream session's idle), while its processes still run, is
+  waiting for the Validator, not stalled: the stall rule, review pause and wrap-up leave it
+  alone; the caps do not. A stop report alone is not that word (the session may continue past
+  it), and Cursor, Codex and Antigravity sessions send no other, so such a lane is stall-stopped
+  a full window after its last stop report unless it printed a done line in that turn, and its
+  notice says so.
 - **Completion wake.** An agent response may claim ``__LANE_DONE__ <slot> commits=<n>``.
   Only a matching successful wrapper exit receipt, a confirmed dead pane and absence of the
   observed process tree make that claim terminal. Tool output is not a response, and an exit
@@ -182,9 +189,15 @@ def read_commits(repository: pathlib.Path, since: float) -> list[dict[str, Any]]
     return commits
 
 
-#: A persistent session's phases at its input boundary: waiting for whoever gives it the next
-#: message (persistent_lane.py). ``idle`` is a stream session's; the others a terminal session's.
-WAITING_PHASES = ("idle", "stop-reported", "waiting-for-input")
+#: The phases that are a persistent session's own word that it waits for input
+#: (persistent_lane.py): a stream session's ``idle``, a terminal session's idle prompt.
+WAITING_PHASES = ("idle", "waiting-for-input")
+#: ... and with a terminal session's stop report, the phases at which a turn ended. A stop report
+#: alone is not proof that the session waits: it may continue past it (tmux_lane_message.sh
+#: does not take it for idle either).
+STOPPED_PHASES = (*WAITING_PHASES, "stop-reported")
+#: Every phase a reported turn end leaves: a stream session's failed turn ends one too.
+TURN_END_PHASES = (*STOPPED_PHASES, "failed")
 
 
 def _turn_ends(native: Mapping[str, Any]) -> int | None:
@@ -683,7 +696,14 @@ class LaneWatch:
 
     def _notice_turn_end(self, launch: Mapping[str, Any], state: dict[str, Any],
                          native: Mapping[str, Any], summary: str) -> None:
-        """Tell the Validator, once, each turn end a persistent lane's session reported."""
+        """Tell the Validator each turn end a persistent lane's session reported.
+
+        One notice per new count of turn ends, sent once the session's phase says the turn
+        ended; a count seen while the session is in another phase waits for that. The count is
+        noticed only when the notice is made, and an inbox message that could not be written is
+        retried on each check.
+        """
+        self._deliver_turn_notice(state)
         reported = _turn_ends(native)
         if reported is None:
             return
@@ -691,34 +711,65 @@ class LaneWatch:
         if type(noticed) is not int or reported < noticed:
             state["turn_ends_noticed"] = reported  # an older watch record, or a new session
             return
-        if reported == noticed:
+        phase = native.get("phase")
+        if reported == noticed or phase not in TURN_END_PHASES:
             return
         state["turn_ends_noticed"] = reported
-        if native.get("phase") not in WAITING_PHASES:
-            return  # a new turn has already started: the lane is not waiting on anyone
         lane = str(launch.get("lane") or self.slot)
-        done = ("its done line was seen" if state.get("completion_claim") else
+        claimed = self._claim_fresh(state, native)
+        done = ("its done line was seen" if claimed else
                 "no done line was seen in what its session reported (a Cursor stop report "
                 "carries no text): read its window")
-        detail = ("the session reported the end of a turn and is waiting for input; "
-                  f"{done}; {summary}")
+        ended = ("its session reported it is waiting for input" if phase in WAITING_PHASES else
+                 "its session reported the turn failed" if phase == "failed" else
+                 "its session reported the end of a response and may still continue on its own")
+        detail = f"{ended}; {done}; {summary}"
+        if phase not in WAITING_PHASES and not claimed:
+            window = float((launch.get("watch") or {}).get("stall_window_s",
+                                                           DEFAULT_STALL_WINDOW_S))
+            detail += (f"; unless it commits or is continued, it is stopped as stalled "
+                       f"{window / 60:.0f} min after this turn end")
         self._wake(launch, "lane-turn-ended", detail, refusal=False)
+        state["turn_notice"] = {
+            "text": (f"FACTORY_LANE_TURN_ENDED {lane}: {detail}. A turn's end is not acceptance "
+                     "of its work. Evaluate it, then continue the lane or close it."),
+            "lane": lane, "failed": False}
+        self._deliver_turn_notice(state)
+
+    def _deliver_turn_notice(self, state: dict[str, Any]) -> None:
+        """Write a pending turn-end notice to the Validator's inbox; keep it if that fails."""
+        notice = state.get("turn_notice")
+        if not isinstance(notice, dict):
+            return
         harness = str(pathlib.Path(__file__).resolve().parent)
         if harness not in sys.path:
             sys.path.insert(0, harness)
         import run_record
 
         try:
-            run_record.message(self.root, "validator", "host", (
-                f"FACTORY_LANE_TURN_ENDED {lane}: {detail}. A turn's end is the session's word "
-                "that it stopped, not acceptance of its work. Evaluate it, then continue the lane "
-                "with tmux_lane_message.sh or close it."))
+            run_record.message(self.root, "validator", "host", str(notice.get("text")))
         except (OSError, ValueError) as error:
-            # Degraded: the wake above is recorded; the Validator's monitor can still see it.
-            _append_row(self.root / "events.jsonl", {
-                "ts": _iso(self.now()), "kind": "lane-turn-notice-undelivered", "class": "lane",
-                "source": "watchdog.py lane", "detail": f"{lane}: {error}"[:500], "wake": False,
-            })
+            # Degraded: the wake is recorded; the notice is retried at the next check.
+            if not notice.get("failed"):
+                notice["failed"] = True
+                _append_row(self.root / "events.jsonl", {
+                    "ts": _iso(self.now()), "kind": "lane-turn-notice-undelivered",
+                    "class": "lane", "source": "watchdog.py lane",
+                    "detail": f"{notice.get('lane')}: {error}"[:500], "wake": False,
+                })
+            return
+        state.pop("turn_notice", None)
+
+    @staticmethod
+    def _claim_fresh(state: Mapping[str, Any], native: Mapping[str, Any]) -> bool:
+        """A done line counts for the turn it was printed in, not for the session's later turns."""
+        return bool(state.get("completion_claim")) and (
+            state.get("claim_turn_started_at") == native.get("turn_started_at"))
+
+    def _session_alive(self, state: Mapping[str, Any]) -> bool:
+        """Positive evidence from this check that the lane's processes still run."""
+        return (state.get("process_observation") == "observed"
+                and bool(state.get("surviving_processes")))
 
     def _resumable(self, launch: Mapping[str, Any]) -> bool:
         """A turn this watcher ends can be continued: a session was retained (a Codex thread, or
@@ -794,13 +845,22 @@ class LaneWatch:
             "wrapup_sent": bool(prior.get("wrapup_sent", False)),
             "continued": continued,
             "completion_claim": False,
-            # Turn ends already reported when this life starts are not this life's to tell.
-            "turn_ends_noticed": _turn_ends(self._native_turn()) or 0,
+            # Turn ends already reported when this life starts are not this life's to tell,
+            # except on a first launch, whose session can end a turn before this watcher arms.
+            "turn_ends_noticed": self._turn_end_baseline(launch, fresh=not (new_life or prior)),
             "stall_carry_s": float(prior.get("stall_carry_s", 0.0)) if continued else 0.0,
             "status": "watching",
         }
         self._write_state(state)
         return state
+
+    def _turn_end_baseline(self, launch: Mapping[str, Any], *, fresh: bool) -> int:
+        native = self._native_turn()
+        started = native.get("turn_started_at")
+        if (fresh and isinstance(started, (int, float))
+                and float(started) >= _epoch(launch["ts"])):
+            return 0  # this launch's own session: every turn end it reported is still to tell
+        return _turn_ends(native) or 0
 
     # -- effects -----------------------------------------------------------------------------
 
@@ -992,8 +1052,11 @@ class LaneWatch:
         if pending:
             state["hold_ts"] = current
         claimed = self._scan_output(launch, state)
+        native = self._native_turn()
         if claimed is not None:
             state["completion_claim"] = claimed
+            if claimed:
+                state["claim_turn_started_at"] = native.get("turn_started_at")
         exits = [row for row in self._exits(launch)[int(state["exits_baseline"]):]
                  if row.get("schema_version") == "factory-lane-exit/1"
                  and row.get("slot") == self.slot and type(row.get("rc")) is int
@@ -1026,19 +1089,27 @@ class LaneWatch:
         # commit or the last pending question, plus what a pause carried over from before it.
         last_commit = max((float(c["ts"]) for c in state["commits"]), default=0.0)
         anchor = float(state["life_started"]) + (0.0 if state.get("continued") else allowance)
-        # A persistent lane's new native turn starts its own window (persistent_lane.py).
-        native = self._native_turn()
+        # A persistent lane's new native turn starts its own window, and so does its report of
+        # a turn's end (persistent_lane.py): the Validator is told of it and has a full window.
         self._notice_turn_end(launch, state, native, summary)
-        started = native.get("turn_started_at")
-        turn = float(started) if isinstance(started, (int, float)) else 0.0
+        marks = [native.get(key) for key in ("turn_started_at", "stop_reported_at",
+                                             "turn_completed_at")]
+        turn = max((float(mark) for mark in marks if isinstance(mark, (int, float))), default=0.0)
         clock = max(anchor, last_commit, float(state["hold_ts"] or 0.0), turn)
         idle = current - clock + (float(state.get("stall_carry_s", 0.0)) if clock == anchor
                                   else 0.0)
 
+        # A persistent lane at its input boundary is waiting for the Validator, not stalled:
+        # stopping it would only lose its session. The done line it printed in this turn says so
+        # (as before); so does its session's own report that it waits, while its processes
+        # still run. A stop report alone does not: the session may continue past it, so it only
+        # restarts the window above. A pause or wrap-up has nothing to interrupt while it waits.
+        waiting = ((self._claim_fresh(state, native) and native.get("phase") in STOPPED_PHASES)
+                   or (native.get("phase") in WAITING_PHASES and self._session_alive(state)))
         wall_cap = caps.get("wall_cap_s")
         wrap_s = float(watch.get("wrap_s") or 0)
         review_s = float(watch.get("review_every_s") or 0)
-        resumable = self._resumable(launch)
+        resumable = self._resumable(launch) and not waiting
         if (
             resumable and wall_cap is not None and wrap_s > 0 and not state.get("wrapup_sent")
             and float(wall_cap) - wrap_s <= active < float(wall_cap)
@@ -1064,11 +1135,6 @@ class LaneWatch:
             return self._request_end(launch, state, "capped", "refusal-lane-cap",
                                      f"{reason}; {summary}")
 
-        # A persistent lane idle at its input boundary is waiting for the Validator, who was told
-        # when its turn ended, not stalled: stopping it would only lose its session. Whether its
-        # done line could be read does not matter (Cursor's stop report has no text). Once a new
-        # turn starts it is watched again.
-        waiting = native.get("phase") in WAITING_PHASES
         if not pending and not waiting and idle > window:
             return self._request_end(
                 launch, state, "stalled", "refusal-lane-stall",
