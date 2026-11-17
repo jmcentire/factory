@@ -6,10 +6,31 @@ The current workflow is [docs/SOFTWARE-FACTORY.md](docs/SOFTWARE-FACTORY.md).
 
 ## Install
 
+For Wander machines, the local provisioning installer now ships in this repository:
+
+```bash
+gh api -H "Accept: application/vnd.github.raw" repos/wandercom/chiron/contents/install.sh | bash
+```
+
+It downloads a checksummed `factory-setup` release binary, or builds the Go installer
+from this repository when no matching release asset exists. The source fallback
+requires Go. It provisions the pinned Factory checkout from `wandercom/chiron` and
+writes machine-specific agent commands. Run `factory-setup --dry-run` to inspect its
+plan, or build locally with `go build ./cmd/factory-setup`. The Go installer lives in
+`cmd/factory-setup` and `internal/setup`; the Python runtime and its `make install`
+workflow remain available below.
+
+For an existing checkout from the old repository, update its origin before
+running the provisioning installer:
+
+```bash
+git -C ~/Code/factory remote set-url origin https://github.com/wandercom/chiron.git
+```
+
 Needs git, Python 3.12+, tmux and the selected agent CLIs. Claude Code is needed only for its slash commands.
 
 ```bash
-git clone https://github.com/jmcentire/factory.git ~/Code/factory
+git clone https://github.com/wandercom/chiron.git ~/Code/factory
 cd ~/Code/factory
 make install
 ```
