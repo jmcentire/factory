@@ -323,3 +323,20 @@ shared Git worktrees are not a drop-in replacement for those lanes.
 Storage inventory reports run-directory bytes, compressed archive bytes, and their
 combined local footprint separately. Archives on another volume and externally
 referenced lane repositories are not included in that combined total.
+
+### Publishing the provisioning installer
+
+The Go installer and the Nix setup both use the publishing procedure in
+[docs/FACTORY-PUBLISHING.md](docs/FACTORY-PUBLISHING.md). The Nix setup selects its
+retained launcher when executing the same harness steps.
+
+For a new installer binary release, first merge the tested source, then create
+and push the intended `v*` tag and publish its GitHub release with the Factory
+wheel/sdist assets through the existing release process. The Factory setup
+workflow runs on the published release and attaches its four installer binaries
+and `checksums.txt` to that existing release. It never creates a competing release.
+Check that workflow succeeds before announcing the installer. Runtime-only
+releases without installer assets are ignored by installer update notices.
+`FACTORY_SETUP_FORCE_SOURCE=1` forces the startup script to build the selected
+`FACTORY_SETUP_REF` from source; online PR CI uses this so an older released
+binary cannot mask a broken source fallback.

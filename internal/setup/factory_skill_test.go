@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/wandercom/chiron/docs"
 )
 
 func renderedSkill(t *testing.T) string {
@@ -145,4 +147,10 @@ func slicesCount(list []string, v string) int {
 		}
 	}
 	return n
+}
+
+func TestGeneratedSkillUsesSharedPublishingProcedure(t *testing.T) {
+	if !strings.Contains(renderedSkill(t), docs.FactoryPublishing) {
+		t.Fatal("generated skill lost the canonical publishing procedure")
+	}
 }

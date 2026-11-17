@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -39,7 +40,7 @@ func latestRelease() string {
 	if err != nil {
 		return ""
 	}
-	cache := filepath.Join(dir, "factory-setup", "latest-release")
+	cache := filepath.Join(dir, "factory-setup", "latest-installer-release")
 	b, _ := os.ReadFile(cache)
 	known := strings.TrimSpace(string(b))
 	if info, err := os.Stat(cache); err == nil && time.Since(info.ModTime()) < 24*time.Hour {
@@ -47,8 +48,8 @@ func latestRelease() string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "gh", "api", "repos/wandercom/chiron/releases/latest", "--jq", ".tag_name").Output()
-	if tag := strings.TrimSpace(string(out)); err == nil && strings.HasPrefix(tag, "v") {
+	out, err := exec.CommandContext(ctx, "gh", "api", "repos/wandercom/chiron/releases?per_page=100", "--paginate", "--slurp").Output()
+	if tag := latestInstallerRelease(out); err == nil && strings.HasPrefix(tag, "v") {
 		known = tag
 	}
 	// Written on failure too, so an offline or rate-limited machine waits a
@@ -89,4 +90,32 @@ func semver(tag string) (nums []int, prerelease bool) {
 		nums[i] = n
 	}
 	return nums, pre != ""
+}
+
+// Ignore runtime-only releases: their tags say nothing about installed setup binaries.
+func latestInstallerRelease(data []byte) string {
+	var pages [][]struct {
+		Tag        string `json:"tag_name"`
+		Draft      bool   `json:"draft"`
+		Prerelease bool   `json:"prerelease"`
+		Assets     []struct {
+			Name string `json:"name"`
+		} `json:"assets"`
+	}
+	if json.Unmarshal(data, &pages) != nil {
+		return ""
+	}
+	for _, page := range pages {
+		for _, release := range page {
+			binary, checksum := false, false
+			for _, asset := range release.Assets {
+				binary = binary || strings.HasPrefix(asset.Name, "factory-setup-")
+				checksum = checksum || asset.Name == "checksums.txt"
+			}
+			if !release.Draft && !release.Prerelease && binary && checksum {
+				return release.Tag
+			}
+		}
+	}
+	return ""
 }

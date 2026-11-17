@@ -359,15 +359,3 @@ func nonEmpty(path string) bool {
 	st, err := os.Stat(path)
 	return err == nil && st.Size() > 0
 }
-
-func firstLine(s string) string {
-	s, _, _ = strings.Cut(strings.TrimSpace(s), "\n")
-	return s
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
-}

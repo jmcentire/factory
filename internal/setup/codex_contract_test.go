@@ -147,7 +147,12 @@ func TestSeatPreflightChecksEachSeatAgentOnce(t *testing.T) {
 func TestPreflightLeavesAnAbsentAgentToItsInstallLine(t *testing.T) {
 	sb := newSandbox(t, "codex", "opt/codex/codex", false, false)
 	must(t, os.Remove(filepath.Join(sb.bin, "codex")))
-	out, _ := sb.run(t, contractPreflight("codex"))
+	bash, err := exec.LookPath("bash")
+	must(t, err)
+	cmd := exec.Command(bash, "-euo", "pipefail", "-c", contractPreflight("codex"))
+	cmd.Env = []string{"PATH=" + sb.bin, "FACTORY_HOME=" + sb.factory}
+	output, _ := cmd.CombinedOutput()
+	out := string(output)
 	if strings.TrimSpace(out) != "" || sb.calls() != "" {
 		t.Fatalf("calls %q; an absent codex printed:\n%s", sb.calls(), out)
 	}

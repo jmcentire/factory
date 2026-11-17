@@ -44,7 +44,7 @@ func DefaultSeats() Seats {
 	return Seats{
 		Validator:    Seat{Agent: "claude", Model: "claude-opus-5-5"},
 		Orchestrator: Seat{Agent: "agy", Model: "gemini-4-carbon-high"},
-		Coder:        Seat{Agent: "codex", Model: "gpt-6.1-sol"},
+		Coder:        Seat{Agent: "codex", Model: "gpt-6.2-sol"},
 		Tester:       Seat{Agent: "cursor-agent", Model: "grok-4.7-high"},
 	}
 }
@@ -166,7 +166,7 @@ func MissingSeatTools(env *Env) []NextStep {
 		}
 		path, ok := env.Have(bin)
 		if ok && bin == "agent" && !isCursorAgent(path) {
-			text := path + " is another tool named agent; the " + c.role + " seat runs agent and needs Cursor's command-line agent. Install it, or give the seat to another agent (for example --tester codex:gpt-6.1-sol)."
+			text := path + " is another tool named agent; the " + c.role + " seat runs agent and needs Cursor's command-line agent. Install it, or give the seat to another agent (for example --tester codex:gpt-6.2-sol)."
 			if path == env.Opts.LocalBin("agent") {
 				text += " Cursor's installer replaces " + path + "."
 			}

@@ -48,7 +48,7 @@ func TestLatestReleaseCachesAndBacksOff(t *testing.T) {
 		return strings.Count(string(b), "x")
 	}
 
-	gh("echo v0.1.20")
+	gh(`echo '[[{"tag_name":"v0.1.20","assets":[{"name":"factory-setup-linux-amd64"},{"name":"checksums.txt"}]}]]'`)
 	if got := latestRelease(); got != "v0.1.20" || count() != 1 {
 		t.Fatalf("first check: %q after %d calls", got, count())
 	}
@@ -57,7 +57,7 @@ func TestLatestReleaseCachesAndBacksOff(t *testing.T) {
 	}
 
 	dir, _ := os.UserCacheDir()
-	cache := filepath.Join(dir, "factory-setup", "latest-release")
+	cache := filepath.Join(dir, "factory-setup", "latest-installer-release")
 	old := time.Now().Add(-48 * time.Hour)
 	if err := os.Chtimes(cache, old, old); err != nil {
 		t.Fatal(err)
@@ -79,5 +79,19 @@ func TestADevBuildSaysItGetsNoUpdateNotices(t *testing.T) {
 	checkUpdateTo(&out)
 	if !strings.Contains(out.String(), "dev build") || !strings.Contains(out.String(), updateCommand) {
 		t.Fatalf("a dev build stayed silent or gave no install command: %q", out.String())
+	}
+}
+
+func TestLatestInstallerReleaseSkipsRuntimeOnlyAndIncompleteAssets(t *testing.T) {
+	data := []byte(`[[
+        {"tag_name":"v9.0.0","assets":[{"name":"factory_core.whl"}]},
+        {"tag_name":"v8.0.0","assets":[{"name":"checksums.txt"}]},
+        {"tag_name":"v7.0.0","draft":true,"assets":[{"name":"factory-setup-linux-amd64"},{"name":"checksums.txt"}]}
+    ],[{"tag_name":"v1.0.0","assets":[{"name":"factory-setup-linux-amd64"},{"name":"checksums.txt"}]}]]`)
+	if got := latestInstallerRelease(data); got != "v1.0.0" {
+		t.Fatalf("got %q", got)
+	}
+	if got := latestInstallerRelease([]byte(`[[{"tag_name":"v9.0.0","assets":[]}]]`)); got != "" {
+		t.Fatalf("runtime-only release: %q", got)
 	}
 }

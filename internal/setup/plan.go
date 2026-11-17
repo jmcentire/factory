@@ -98,7 +98,8 @@ const (
 	// main, which keeps the agy adapter fix and drops the GitHub identity guard that blocked everyone
 	// but its author from git and gh. Also kinbase 0.1.2 and kindex 0.50.1 (#106).
 	PinnedDevshellRev = "cef6c1a9fc25e050e3f08e48eaffaace4937bee7"
-	// wandercom/chiron main, 2026-11-16: consolidated ordinary and hardened startup.
+	// wandercom/chiron main, 2026-11-16 ("Merge pull request #119"): Factory 0.8.30,
+	// consolidated ordinary and hardened startup.
 	PinnedFactoryRev = "ecddf63b6d1cfd83fb290c488bed1ca43279ae3d"
 )
 

@@ -21,6 +21,8 @@ func testEnv(t *testing.T, o Options) *Env {
 	// CodeDir with the real ~/Code, and a test must never write there.
 	o.CodeDir = filepath.Join(home, "Code")
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, ".local", "state"))
 	// A developer's shell may point Claude Code at another config dir; tests
 	// must stay inside the temporary home.
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
@@ -310,13 +312,13 @@ func TestFactorySkillRendersBindingsAndIsIdempotent(t *testing.T) {
 		"is an impasse only the human can clear",
 		"| Validator seat | you, the agent your `/factory` loader names (setup's default: `claude` on `claude-opus-5-5`)",
 		"| Orchestrator | `agy` on `gemini-4-carbon-high` |",
-		"| Coder lane | `codex` on `gpt-6.1-sol` |",
+		"| Coder lane | `codex` on `gpt-6.2-sol` |",
 		"| Tester lane | `cursor-agent` on `grok-4.7-high` |",
 		"not a fixed rule",
-		`FACTORY_CODER_AGENT="codex" FACTORY_CODER_MODEL="gpt-6.1-sol"`,
+		`FACTORY_CODER_AGENT="codex" FACTORY_CODER_MODEL="gpt-6.2-sol"`,
 		`FACTORY_TESTER_AGENT="cursor-agent" FACTORY_TESTER_MODEL="grok-4.7-high"`,
 		`FACTORY_ORCHESTRATOR_AGENT="agy" FACTORY_ORCHESTRATOR_MODEL="gemini-4-carbon-high"`,
-		"coder  launch --repo <coder tree>  --prompt coder-brief.md  --agent codex --model gpt-6.1-sol",
+		"coder  launch --repo <coder tree>  --prompt coder-brief.md  --agent codex --model gpt-6.2-sol",
 		"tester launch --repo <tester tree> --prompt tester-brief.md --agent cursor-agent --model grok-4.7-high",
 		"command -v agent && agent --version",
 		"never post, comment or send\n  anything as them",
@@ -360,7 +362,7 @@ func TestFactorySkillRendersBindingsAndIsIdempotent(t *testing.T) {
 		t.Fatalf("seat change must re-render, got %v", st)
 	}
 	// An agent the harness cannot launch blocks with the reason.
-	env.Opts.Seats.Coder = ParseSeat("gpt:gpt-6.1-sol")
+	env.Opts.Seats.Coder = ParseSeat("gpt:gpt-6.2-sol")
 	if st, detail, _ := s.Check(context.Background(), env); st != StatusBlocked || !strings.Contains(detail, "coder agent") {
 		t.Fatalf("expected blocked on bad seat, got %v %q", st, detail)
 	}

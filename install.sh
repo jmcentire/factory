@@ -15,7 +15,7 @@
 set -euo pipefail
 
 REPO="${FACTORY_SETUP_REPO:-wandercom/chiron}"
-TAG="${FACTORY_SETUP_VERSION:-}"          # empty = latest release
+TAG="${FACTORY_SETUP_VERSION:-}"          # empty = latest release carrying this installer
 BIN_DIR="${FACTORY_SETUP_BIN_DIR:-$HOME/.local/bin}"
 NAME="factory-setup"
 
@@ -40,7 +40,7 @@ asset="${NAME}-${os}-${arch}"
 need_gh() {
   cat >&2 <<EOF
 
-factory-setup lives in the private repository ${REPO}, so the download goes
+factory-setup lives in ${REPO}, so the download goes
 through the GitHub CLI using your org login.
 
   macOS:  brew install gh
@@ -64,6 +64,13 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 download_release() {
+  [[ "${FACTORY_SETUP_FORCE_SOURCE:-0}" != 1 ]] || return 1
+  if [[ -z "$TAG" ]]; then
+    local releases
+    releases="$(gh api "repos/$REPO/releases" --paginate --jq ".[] | select(.draft == false and .prerelease == false and any(.assets[]; .name == \"$asset\") and any(.assets[]; .name == \"checksums.txt\")) | .tag_name" 2>/dev/null)" || return 1
+    TAG="${releases%%$'\n'*}"
+    [[ -n "$TAG" ]] || return 1
+  fi
   local args=(release download --repo "$REPO" --dir "$tmp" --pattern "$asset" --pattern checksums.txt)
   [[ -n "$TAG" ]] && args+=("$TAG")
   gh "${args[@]}" 2>"$tmp/gh.err" || return 1
@@ -79,11 +86,12 @@ download_release() {
 build_from_source() {
   if ! command -v go >/dev/null 2>&1; then
     die "Could not download a release of ${REPO} for ${os}/${arch}, and Go is not installed to build one.
-Ask a maintainer to publish a release (push a v* tag), or install Go (https://go.dev/dl/) and re-run."
+Ask a maintainer to publish a GitHub release for a v* tag, or install Go (https://go.dev/dl/) and re-run."
   fi
   dim "no matching release; building from source with $(go version | awk '{print $3}')"
   local src="$tmp/src"
-  gh repo clone "$REPO" "$src" -- --quiet --depth 1 ${FACTORY_SETUP_REF:+--branch "$FACTORY_SETUP_REF"} 2>/dev/null \
+  local source_ref="${FACTORY_SETUP_REF:-$TAG}"
+  gh repo clone "$REPO" "$src" -- --quiet --depth 1 ${source_ref:+--branch "$source_ref"} 2>/dev/null \
     || die "could not clone ${REPO}${FACTORY_SETUP_REF:+ at $FACTORY_SETUP_REF}"
   [[ -f "$src/go.mod" && -d "$src/cmd/factory-setup" ]] \
     || die "${REPO}${FACTORY_SETUP_REF:+@$FACTORY_SETUP_REF} has no cmd/factory-setup to build.
