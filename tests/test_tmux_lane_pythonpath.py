@@ -56,3 +56,17 @@ def test_each_helper_path_reaches_the_package():
             cwd="/", capture_output=True, text=True, timeout=60,
         )
         assert result.returncode == 0, f"{launcher} {expression}: {result.stderr[-400:]}"
+
+
+def test_no_launcher_helper_path_reaches_the_agent():
+    # The agent's environment drops the helpers' start-up isolation only when it is exactly
+    # trusted_start.TRUSTED_STARTUP; a launcher value that differs would leak Factory's
+    # import path into every python the agent runs in the user's repository.
+    from harness import trusted_start
+
+    for launcher, expression, value in helper_paths():
+        given = trusted_start.provider_environment(
+            {"PYTHONSAFEPATH": "1", "PYTHONPATH": value, "HOME": "/home/operator"})
+        assert "PYTHONPATH" not in given and "PYTHONSAFEPATH" not in given, (
+            launcher, expression, value, trusted_start.TRUSTED_STARTUP)
+        assert given["HOME"] == "/home/operator"
