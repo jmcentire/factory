@@ -153,6 +153,8 @@ show-python: ## report which interpreter the gates will use, and why
 	@echo "version       = $$($(PY) -V 2>/dev/null || echo 'not runnable')"
 	@echo "venv managed  = $(if $(strip $(VENV_PREREQ)),yes ($(VENV)),no)"
 
+# Extra pytest flags, e.g. PYTEST_ARGS="-n auto" to spread the suite across cores (pytest-xdist).
+PYTEST_ARGS ?=
 test: check-python ## run the pytest suite
 	env -u TYPESAFE_API_KEY -u JMC_JEV_API_KEY -u FACTORY_SYSTEM_ONE_PROFILE $(PY) -m pytest $(PYTEST_ARGS) tests/
 

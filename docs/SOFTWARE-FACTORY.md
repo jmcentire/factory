@@ -137,6 +137,8 @@ User direction for signatures: “no signatures that aren't automated verified b
 
 The human-gate wording check is a heuristic. Tune it with `make HUMAN_GATES_ARGS='--mode warn --max-findings 5' check-human-gates`, `--mode off`, or repeatable `--exclude` repository-relative path patterns. The report distinguishes warnings and disabled checks from a clean scan. Existing local `gate-exempt` explanations remain available.
 
+`make test` (and `make ship`) runs the suite serially; pass `PYTEST_ARGS='-n auto'` to spread it across cores with pytest-xdist, as CI does.
+
 The authority check supports explicit user overrides, for example `make AUTHORITY_ARGS='--allow-symbol TesseraSeal --allow-module exemplar' check-authority`. Each overridden finding is reported; other findings and unreadable/invalid source still fail. These options change a local release lint, not platform permissions, and do not validate an unsafe helper. Agents use overrides only within the user's actual direction.
 
 The testing standard is supplied to Tester lanes; instruction delivery is not proof of compliance. The former literal-prose `check-doctrine` gate and its tests were removed: they established only the behavior of their lint rules, not that agents follow instructions or that runtime controls work. Never rebuild them as behavioral acceptance. Validator and Orchestrator own semantic review of the actual evidence.
