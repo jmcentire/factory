@@ -23,8 +23,13 @@ literals were computed once by the module as it stood at ecddf63 (before refusal
 paths); nothing here reads Git history at test time.
 """
 
+import builtins
+import errno
+import hashlib
+import io
 import json
 import os
+import pathlib
 import re
 import shutil
 import socket
@@ -156,12 +161,90 @@ def _unreadable(path):
         path.read_bytes()
 
 
-def _unlistable(path):
+def _unlistable(path, mode=0o300):
+    """chmod path so it cannot be listed: by default writable and searchable, not readable."""
     if os.geteuid() == 0:
         pytest.skip("root lists directories whatever their permission bits")
-    _chmod(path, 0o300)  # writable and searchable, but not readable
+    _chmod(path, mode)
     with pytest.raises(PermissionError):  # positive control: it really cannot be listed
         os.listdir(path)
+
+
+def _fail_reads(monkeypatch, path):
+    """Make every Python-level read of path's file fail with EIO, though opening it succeeds.
+
+    The file is recognised by device and inode, so it is caught however it is opened:
+    builtins.open, io.open, Path.open (and so read_bytes), os.fdopen, or os.open with
+    os.read/pread/readv/preadv. A read by another process is not covered.
+    """
+    target = path.lstat()
+
+    def matches(fd):
+        try:
+            info = os.fstat(fd)
+        except (OSError, TypeError, ValueError):
+            return False
+        return (info.st_dev, info.st_ino) == (target.st_dev, target.st_ino)
+
+    def eio(*_args, **_kwargs):
+        raise OSError(errno.EIO, os.strerror(errno.EIO), str(path))
+
+    class Failing:
+        """A stream of the poisoned file: everything but reading is the real stream's."""
+
+        def __init__(self, stream):
+            self._stream = stream
+
+        def __getattr__(self, name):
+            return getattr(self._stream, name)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            self._stream.close()
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            eio()
+
+        read = read1 = readall = readinto = readinto1 = readline = readlines = staticmethod(eio)
+
+    def wrap(stream):
+        try:
+            fd = stream.fileno()
+        except (OSError, ValueError, AttributeError):
+            return stream
+        return Failing(stream) if matches(fd) else stream
+
+    real_open, real_io_open, real_path_open = builtins.open, io.open, pathlib.Path.open
+    monkeypatch.setattr(builtins, "open", lambda *a, **k: wrap(real_open(*a, **k)))
+    monkeypatch.setattr(io, "open", lambda *a, **k: wrap(real_io_open(*a, **k)))
+    monkeypatch.setattr(pathlib.Path, "open",
+                        lambda self, *a, **k: wrap(real_path_open(self, *a, **k)))
+    for name in ("read", "pread", "readv", "preadv"):
+        if hasattr(os, name):
+            real = getattr(os, name)
+            monkeypatch.setattr(os, name, lambda fd, *a, _real=real: (
+                eio() if matches(fd) else _real(fd, *a)))
+    # Positive control: it opens, every way of reading it fails, and other files still read.
+    for read in (lambda: path.read_bytes(), lambda: open(path, "rb").read(),
+                 lambda: hashlib.file_digest(open(path, "rb"), "sha256"),
+                 lambda: os.fdopen(os.open(path, os.O_RDONLY), "rb").read()):
+        with pytest.raises(OSError) as raised:
+            read()
+        assert raised.value.errno == errno.EIO
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        with pytest.raises(OSError):
+            os.read(descriptor, 1)
+        with pytest.raises(OSError):
+            os.pread(descriptor, 1, 0)
+    finally:
+        os.close(descriptor)
+    assert (path.parent / "app.py").read_bytes()
 
 
 # --- receipts and tree digests are what they were -------------------------------------------
@@ -363,6 +446,49 @@ def test_a_committed_directory_replaced_by_a_fifo_is_named_only_as_that(coder, d
     shutil.rmtree(dest / directory)
     os.mkfifo(dest / directory)
     assert _refusal(runs, dest) == ODD + directory
+
+
+@pytest.mark.parametrize("with_denied", [False, True])
+def test_a_file_whose_read_fails_is_named_beside_every_other_cause(coder, monkeypatch,
+                                                                   with_denied):
+    # Round-4 review: a prepared file that opens but whose read fails (EIO) is a problem,
+    # sorted with the other unreadable files; it is not also changed or removed, and the
+    # other causes are all still named. A bare OSError never escapes.
+    dest, runs, _, _ = coder
+    unreadable = "src/mod3.py"
+    if with_denied:
+        _unreadable(dest / "api/spec.txt")  # EACCES: sorted before the EIO file
+        unreadable = "api/spec.txt, src/mod3.py"
+    _link_dir(dest / "zz_link", "src")
+    _write(dest / "leaked.py", "IMPLEMENTATION")
+    (dest / "src/mod1.py").unlink()
+    (dest / "src/app.py").write_text("CHANGED\n")
+    _fail_reads(monkeypatch, dest / "src/mod3.py")
+    assert _refusal(runs, dest) == (
+        LINKS + "zz_link; a file that cannot be read: " + unreadable + BOTH
+        + "added leaked.py; removed src/mod1.py; changed src/app.py")
+
+
+def test_a_file_whose_read_fails_alone_is_named(coder, monkeypatch):
+    dest, runs, _, _ = coder
+    _fail_reads(monkeypatch, dest / "src/mod3.py")
+    assert _refusal(runs, dest) == UNREADABLE + "src/mod3.py"
+
+
+@pytest.mark.parametrize("others", [False, True])
+def test_a_prepared_file_replaced_by_an_unlistable_directory_is_named_once(coder, others):
+    # Round-4 review: named only as a directory that cannot be read, never also removed.
+    dest, runs, _, _ = coder
+    (dest / "src/mod0.py").unlink()
+    _write(dest / "src/mod0.py/inner.py", "IMPLEMENTATION")
+    _unlistable(dest / "src/mod0.py", 0)
+    tail = ""
+    if others:
+        _write(dest / "leaked.py", "IMPLEMENTATION")
+        (dest / "src/mod1.py").unlink()
+        (dest / "src/app.py").write_text("CHANGED\n")
+        tail = BOTH + "added leaked.py; removed src/mod1.py; changed src/app.py"
+    assert _refusal(runs, dest) == UNLISTABLE + "src/mod0.py/" + tail
 
 
 def test_a_new_folder_holding_only_an_unlistable_folder_is_added(coder):

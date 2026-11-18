@@ -166,9 +166,10 @@ def unrecorded_changes(receipt: dict, repository: Path, tree: _Tree,
     one ``prepare`` gave it. A directory the projection never had (an install's node_modules) is
     named once, as ``dir/``, and not read; one holding only empty folders is not named, as no
     input check sees it. A path that is now a directory symlink, another non-regular file or
-    unreadable is named in ``tree.problems()`` only, and so is what was prepared under it.
-    When the source commit cannot be read, what was added or removed is still named, and the
-    second value says why the rest is not.
+    unreadable is named in ``tree.problems()`` only, and so is what was prepared under it; a
+    file the walk could open but this comparison cannot read is added to those, beside
+    everything else found. When the source commit cannot be read, what was added or removed is
+    still named, and the second value says why the rest is not.
     """
     expected = set(receipt["files"])
     try:
@@ -201,24 +202,27 @@ def unrecorded_changes(receipt: dict, repository: Path, tree: _Tree,
             if relative in shown:
                 continue
             present.add(relative)
-            info = path.lstat()
-            if relative == NO_INDEX_MARKER:
-                if (not stat.S_ISREG(info.st_mode) or info.st_size
-                        or stat.S_IMODE(info.st_mode) != _MARKER_MODE):
+            try:
+                info = path.lstat()
+                if relative == NO_INDEX_MARKER:
+                    if (not stat.S_ISREG(info.st_mode) or info.st_size
+                            or stat.S_IMODE(info.st_mode) != _MARKER_MODE):
+                        changed.append(relative)
+                elif relative not in expected:
+                    added.append(relative)
+                elif relative not in prepared:
+                    continue  # the source commit could not be read: said in ``unnamed``
+                elif stat.S_ISLNK(info.st_mode) != (prepared[relative][0] == "120000"):
+                    changed.append(relative)  # a file became a link, or a link a file
+                elif (not stat.S_ISLNK(info.st_mode) and stat.S_IMODE(info.st_mode)
+                      != _PREPARED_MODES.get(prepared[relative][0])):
                     changed.append(relative)
-            elif relative not in expected:
-                added.append(relative)
-            elif relative not in prepared:
-                continue  # the source commit could not be read: said in ``unnamed``
-            elif stat.S_ISLNK(info.st_mode) != (prepared[relative][0] == "120000"):
-                changed.append(relative)  # a file became a link, or a link a file
-            elif (not stat.S_ISLNK(info.st_mode)
-                  and stat.S_IMODE(info.st_mode) != _PREPARED_MODES.get(prepared[relative][0])):
-                changed.append(relative)
-            elif _blob_id(path, algorithm) != prepared[relative][1]:
-                changed.append(relative)
+                elif _blob_id(path, algorithm) != prepared[relative][1]:
+                    changed.append(relative)
+            except OSError:
+                tree.unreadable.append(relative)  # opened by the walk, but not readable here
     removed = [name for name in [*expected, NO_INDEX_MARKER]
-               if name not in present and name not in shown
+               if name not in present and name not in hidden
                and not any(parent.as_posix() in hidden for parent in PurePosixPath(name).parents)]
     kinds = (("added", sorted(added)), ("removed", sorted(removed)), ("changed", sorted(changed)))
     return "; ".join(f"{kind} {_named(found)}" for kind, found in kinds if found), unnamed
