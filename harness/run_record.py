@@ -429,7 +429,8 @@ def append_record(path: Path, payload: bytes, *, wait_s: float | None = None,
         start = os.fstat(fd).st_size
         interrupted = start and os.pread(fd, 1, start - 1) != b"\n"
         if once is not None:
-            begin = since if since is not None and 0 <= since <= start else max(0, start - 65536)
+            begin = (_row_start(fd, since) if since is not None and 0 <= since <= start
+                     else max(0, start - 65536))
             complete, _, tail = os.pread(fd, start - begin, begin).rpartition(b"\n")
             if once(complete):
                 return False
@@ -563,13 +564,30 @@ def delivered(root: Path, recipient: str, sender: str, text: str, *,
         if not stat.S_ISREG(metadata.st_mode):
             return False
         end = metadata.st_size
-        start = since if since is not None and 0 <= since <= end else max(0, end - 65536)
+        start = (_row_start(fd, since) if since is not None and 0 <= since <= end
+                 else max(0, end - 65536))
         tail = os.pread(fd, end - start, start)
     except OSError:
         return False
     finally:
         os.close(fd)
     return _holds(tail.rpartition(b"\n")[0], sender, text, digest)
+
+
+def _row_start(fd: int, offset: int) -> int:
+    """Where the row holding byte ``offset`` starts: ``offset`` itself at a row's start.
+
+    An offset is taken without the inbox's lock (``inbox_end``), so it can count another
+    writer's append that is then rolled back; a row written next starts before it. A read from
+    the offset starts at that row, which was written after the offset was taken."""
+    position = offset
+    while position > 0:
+        size = min(4096, position)
+        newline = os.pread(fd, size, position - size).rfind(b"\n")
+        if newline >= 0:
+            return position - size + newline + 1
+        position -= size
+    return 0
 
 
 def _holds(rows: bytes, sender: str, text: str, digest: str | None = None) -> bool:

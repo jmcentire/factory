@@ -2645,6 +2645,73 @@ def test_two_retriers_waiting_on_a_held_inbox_write_the_message_once(tmp_path: P
     assert [retrier.wait(timeout=60) for retrier in retriers] == [0, 0]
     assert _read_rows(root) == [("coder", "a foreign message"), ("host", "the notice")]
 
+NOTICE = "the turn-end notice, longer than the short row another writer rolled back"
+
+
+def _rolled_back_offset(root: Path, first: bool = False) -> tuple[int, int]:
+    """Codex's interleaving: another writer appends a short row, the offset is taken (as
+    ``inbox_end`` takes it, without the lock), and that write is rolled back. With ``first``
+    the inbox was absent before it, so the rollback leaves it empty. Returns the offset and
+    the restored end."""
+    if not first:
+        run_record.message(root, "validator", "coder", "a foreign message")
+    inbox = root / "validator" / "inbox.jsonl"
+    inbox.parent.mkdir(parents=True, exist_ok=True)
+    inbox.touch()
+    restored = inbox.stat().st_size
+    run_record.message(root, "validator", "coder", "short")
+    offset = run_record.inbox_end(root, "validator")
+    os.truncate(inbox, restored)  # the rollback
+    return offset, restored
+
+
+@pytest.mark.parametrize("first", [False, True], ids=["after-a-row", "as-the-first-row"])
+def test_a_read_from_an_offset_a_rolled_back_append_counted_starts_at_the_row_holding_it(
+    tmp_path: Path, first: bool,
+) -> None:
+    """Codex's case: the notice is committed at the restored end, so the saved offset points
+    inside its row; as the inbox's first row, with no newline before the offset. Falsifier:
+    ``delivered(since=)`` or the once-only write reading from mid-row (or, finding no newline
+    before the offset, from the offset instead of the file's start), missing the row, and
+    writing the message again (two rows)."""
+
+    root = tmp_path / "run"
+    root.mkdir()
+    offset, restored = _rolled_back_offset(root, first)
+    assert restored == 0 if first else restored > 0
+    run_record.message(root, "validator", "host", NOTICE)  # committed at the restored end
+    inbox = root / "validator" / "inbox.jsonl"
+    assert restored < offset < inbox.stat().st_size  # inside the notice's row
+    assert run_record.delivered(root, "validator", "host", NOTICE, since=offset) is True
+    before = inbox.read_bytes()
+    run_record.message(root, "validator", "host", NOTICE, once_since=offset)
+    assert inbox.read_bytes() == before
+    assert _read_rows(root) == ([] if first else [("coder", "a foreign message")]) + [
+        ("host", NOTICE)]
+    held = run_record.append_record(inbox, b'{"other": 1}\n', since=offset,
+                                    once=lambda rows: NOTICE.encode() in rows)
+    assert held is False and inbox.read_bytes() == before
+
+
+def test_a_copy_wholly_before_the_row_holding_the_offset_does_not_count(tmp_path: Path) -> None:
+    """At a row's start (the normal case) the read starts at the offset itself; inside a later
+    row it starts at that row. Falsifier: reading back past the row holding the offset, so an
+    earlier copy of the message is taken for this attempt's."""
+
+    root = tmp_path / "run"
+    root.mkdir()
+    inbox = root / "validator" / "inbox.jsonl"
+    run_record.message(root, "validator", "host", NOTICE)
+    boundary = run_record.inbox_end(root, "validator")
+    run_record.message(root, "validator", "coder", "a later foreign message")
+    inside = boundary + 5  # inside the foreign row after the copy
+    for offset in (boundary, inside):
+        assert run_record.delivered(root, "validator", "host", NOTICE, since=offset) is False
+    run_record.message(root, "validator", "host", NOTICE, once_since=inside)
+    assert _read_rows(root).count(("host", NOTICE)) == 2
+    assert run_record.append_record(inbox, b'{"other": 1}\n', since=boundary,
+                                    once=lambda rows: b"a later foreign" in rows) is False
+
 def test_delivered_since_an_offset_finds_the_message_however_much_follows(
     tmp_path: Path,
 ) -> None:
@@ -3654,6 +3721,53 @@ def test_two_watchers_retrying_one_notice_at_once_give_it_once(tmp_path: Path) -
         assert lane.at(150) in ("exited", "watching")
         assert _watch_record(lane)["turn_notices"] == []
     assert _read_rows(r1.root) == [("host", owed["text"])]
+
+@pytest.mark.parametrize("first", [False, True], ids=["after-a-row", "as-the-first-row"])
+@pytest.mark.parametrize("taker", ["restart", "next-round"])
+def test_a_notice_whose_offset_counted_a_rolled_back_append_is_given_once(
+    tmp_path: Path, taker: str, first: bool,
+) -> None:
+    """Codex's case at the watcher: another writer has appended a short row and holds the
+    inbox's lock when r1 announces a turn end, so r1's notice saves an offset past that row
+    and stays owed; the write is rolled back, r1's notice is committed at the restored end
+    (r1 dies before recording it), and a restart of r1's watcher or the next round retries it.
+    With ``first`` the inbox was empty before the other writer's row, so the notice is its
+    first row. Falsifier: the retry reading from inside the notice's row (or from the offset
+    when no newline precedes it), missing it, and writing it again."""
+
+    r1 = _round(tmp_path, "tester.r1")
+    root = r1.root
+    inbox = root / "validator" / "inbox.jsonl"
+    inbox.parent.mkdir()
+    inbox.touch()
+    if not first:
+        run_record.message(root, "validator", "coder", "a foreign message")
+    restored = inbox.stat().st_size
+    run_record.message(root, "validator", "coder", "short")
+    assert r1.at(30) == "watching"
+    _ends_turn(r1, CLAUDE, "stop-reported", 1, at=40)
+    holder = HeldLock(inbox, hold_s=60)  # the other writer, mid-append
+    try:
+        assert r1.at(60) == "watching"
+    finally:
+        holder.release()
+    [notice] = _watch_record(r1)["turn_notices"]
+    assert notice["inbox_from"] == inbox.stat().st_size > restored
+    os.truncate(inbox, restored)  # the rollback
+    run_record.message(root, "validator", "host", notice["text"])  # r1's write, committed
+    assert restored < notice["inbox_from"] < inbox.stat().st_size
+    if taker == "restart":
+        r1.clock.value = T0 + 80
+        r1.restart()
+        taking = r1
+    else:
+        _close(root, "tester", "tester.r2")
+        taking = _round(tmp_path, "tester.r2", root=root)
+    for seconds in (90, 120):
+        assert taking.at(seconds) == "watching"
+    assert _read_rows(root) == ([] if first else [("coder", "a foreign message")]) + [
+        ("host", notice["text"])]
+    assert _watch_record(taking)["turn_notices"] == []
 
 def test_a_new_round_takes_the_notice_of_a_round_whose_watcher_died_before_its_verdict(
     tmp_path: Path,
