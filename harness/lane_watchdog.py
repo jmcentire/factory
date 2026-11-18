@@ -1242,6 +1242,13 @@ class LaneWatch:
             state["hold_ts"] = current
         claimed, response, marked = self._scan_output(launch, state)
         native = self._native_turn()
+        # Waiting at the last check holds the time since only if the session did no turn in
+        # between: a turn begun or ended since is work, though this check may see it waiting
+        # again. Settled here, before any reason holding the lane at this check adds that time.
+        turn_marker = [native.get("turn_started_at"), _turn_ends(native)]
+        if state.get("review_waiting_turn") != turn_marker:
+            (state.get("review_held_by") or {}).pop("waiting", None)
+        state["review_waiting_turn"] = turn_marker
         if claimed is not None:
             state["completion_claim"] = claimed
             if claimed:
@@ -1303,12 +1310,6 @@ class LaneWatch:
         wall_cap = caps.get("wall_cap_s")
         wrap_s = float(watch.get("wrap_s") or 0)
         review_s = float(watch.get("review_every_s") or 0)
-        # Waiting at the last check holds the time since only if the session did no turn in
-        # between: a turn begun or ended since is work, though this check sees it waiting again.
-        turn_marker = [native.get("turn_started_at"), _turn_ends(native)]
-        if state.get("review_waiting_turn") != turn_marker:
-            (state.get("review_held_by") or {}).pop("waiting", None)
-        state["review_waiting_turn"] = turn_marker
         self._held_for_reviews(state, active, "waiting", waiting)
         resumable = self._resumable(launch) and not waiting
         if (
