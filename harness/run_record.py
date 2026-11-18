@@ -18,6 +18,7 @@ import secrets
 import shlex
 import stat
 import sys
+import time
 from io import BufferedReader
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -387,15 +388,36 @@ def context(runs: Path, run: str) -> None:
         sys.stdout.buffer.write(value.encode() + b"\0")
 
 
-def append_record(path: Path, payload: bytes) -> None:
-    """Serialize appends; retain a killed writer's fragment separately from later rows."""
+#: How long a supervisor (a lane watchdog) waits for another writer's lock on an inbox; then it
+#: gives up and retries at its next check rather than block its supervision.
+SUPERVISOR_WAIT_S = 5.0
+
+
+def append_record(path: Path, payload: bytes, *, wait_s: float | None = None) -> None:
+    """Serialize appends; retain a killed writer's fragment separately from later rows.
+
+    With ``wait_s``, a writer that cannot take the lock within that long raises instead of
+    waiting on whoever holds it: a supervisor must not block on another writer.
+    """
     fd = os.open(
         path, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600
     )
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise OSError(f"message sink is not a regular file: {path}")
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        if wait_s is None:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        else:
+            deadline = time.monotonic() + wait_s
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise OSError(
+                            f"message sink stayed locked for {wait_s:g} s: {path}") from None
+                    time.sleep(0.05)
         start = os.fstat(fd).st_size
         interrupted = start and os.pread(fd, 1, start - 1) != b"\n"
         if interrupted:
@@ -424,7 +446,8 @@ def append_record(path: Path, payload: bytes) -> None:
         os.close(parent)
 
 
-def message(root: Path, recipient: str, sender: str, text: str, *, log: str = os.devnull) -> None:
+def message(root: Path, recipient: str, sender: str, text: str, *, log: str = os.devnull,
+            wait_s: float | None = None) -> None:
     if recipient not in {"validator", "orchestrator"}:
         raise ValueError("author messages use tmux_lane_message.sh to preserve role boundaries")
     if sender not in {
@@ -450,12 +473,38 @@ def message(root: Path, recipient: str, sender: str, text: str, *, log: str = os
                         message_digest=hashlib.sha256(text.encode()).hexdigest())) + "\n"
     ).encode()
     # Decisions and handoffs always persist, regardless of optional console logging.
-    append_record(directory / "inbox.jsonl", payload)
+    append_record(directory / "inbox.jsonl", payload, wait_s=wait_s)
     if log != os.devnull:
         try:
             append_record(Path(log), payload)
         except OSError as error:
             print(f"factory: message queued; optional log failed: {error}", file=sys.stderr)
+
+
+def delivered(root: Path, recipient: str, sender: str, text: str) -> bool:
+    """Whether the recipient's inbox already ends with this message among its recent rows.
+
+    For a writer retrying after an error that may have come after its row was committed (the
+    directory sync): it checks before writing the same message again. Only the inbox's last
+    64 KiB is read.
+    """
+    path = root / recipient / "inbox.jsonl"
+    digest = hashlib.sha256(text.encode()).hexdigest()
+    try:
+        with path.open("rb") as stream:
+            stream.seek(max(0, stream.seek(0, os.SEEK_END) - 65536))
+            tail = stream.read()
+    except OSError:
+        return False
+    for line in tail.splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if (isinstance(row, dict) and row.get("message_digest") == digest
+                and row.get("sender") == sender and row.get("text") == text):
+            return True
+    return False
 
 
 def resident_command(agent: str, model: str, effort: str, prompt: str, root: Path) -> list[str]:
