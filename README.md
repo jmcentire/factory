@@ -217,7 +217,11 @@ observations to the resident Orchestrator. Select it explicitly per run; it gran
 
 `factory version --json` reports the installed builder name/package version, Factory Git revision
 and dirty state (when available), harness schema and Python version. `factory --version`
-is the short form. New ordinary runs retain this identity as `factory_version` in
+is the short form. A checkout reports its own revision. A package built without one
+reports the revision its packager wrote, as a full lowercase Git object name, to
+`factory_runtime/BUILD_REVISION`: Factory then reports that revision as not dirty and
+does not run Git to identify itself, so stamp only an unmodified tree. Without a
+checkout or a stamp the revision is unknown. New ordinary runs retain this identity as `factory_version` in
 `harness.json`, separately from the target repository revision. Older records are
 unknown, not evidence that a user ran the latest Factory. Use
 `python harness/run_record.py provenance --runs RUNS --run RUN` to render that run's

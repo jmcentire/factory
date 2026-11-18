@@ -3,6 +3,11 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## Unreleased
+
+- A package can state the revision it was built from in `factory_runtime/BUILD_REVISION`,
+  so `factory version` and new run records identify a build that has no Git checkout.
+
 ## [0.8.30] - 2026-11-13
 
 ### Changed

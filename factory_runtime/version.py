@@ -2,12 +2,28 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 from factory_core import __version__
+
+#: A packager that builds from an unmodified revision writes that revision's full object name
+#: here. A package has no checkout to ask, and a stamped build never runs Git to identify itself.
+STAMP = Path(__file__).with_name("BUILD_REVISION")
+
+
+def _stamped_revision() -> str | None:
+    try:
+        text = STAMP.read_text()
+    except FileNotFoundError:
+        return None
+    revision = text.removesuffix("\n")
+    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", revision):
+        raise ValueError(f"{STAMP} must hold one full lowercase Git revision and nothing else")
+    return revision
 
 
 def build_identity() -> dict[str, Any]:
@@ -16,6 +32,10 @@ def build_identity() -> dict[str, Any]:
         "name": "Factory", "version": __version__, "revision": None, "dirty": None,
         "harness_schema": "factory-harness/3", "python": sys.version.split()[0],
     }
+    stamped = _stamped_revision()
+    if stamped is not None:
+        result["revision"], result["dirty"] = stamped, False
+        return result
     if not (root / "pyproject.toml").is_file() or not (root / ".git").exists():
         return result
     try:
