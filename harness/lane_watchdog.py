@@ -32,11 +32,15 @@ Validator's attention has no control at all, so the watcher, not a person, does 
   session's phase says the turn ended, whether or not a done line was seen: Cursor's stop report
   carries no text, so a Cursor Tester that finished was told to nobody (2026-11-17: the
   Validator sat idle 20.6 min until its own monitor timed out). While the turn has ended and no
-  new one has started, there is no stall stop, review pause or wrap-up; the caps still apply. A
-  turn's end, and the notice's delivery, are not acceptance of the work, and neither makes the
-  lane ``done``. Notices are posted to ``validator_input``, which keeps them until they are in
-  the Validator's inbox: every check delivers what is owed, and a watcher whose lane has ended
-  stays up to an hour to deliver its own.
+  new one has started, there is no stall stop, review pause or wrap-up; the caps still apply,
+  and a lane with no cap is escalated to the Validator with a diagnosis each ``HOLD_LIMIT_S``
+  it goes without a commit or a new turn, never stopped for elapsed time alone. A turn's end,
+  and the notice's delivery, are not acceptance of the work, and neither makes the lane
+  ``done``. Each turn end is queued in the watch record in the same write that advances its
+  count, and leaves the queue only once posted to ``validator_input`` and woken, so a failed
+  post survives later turn ends and new lives. ``validator_input`` keeps notices until they are
+  in the Validator's inbox: every check delivers what is owed, and a watcher whose lane has
+  ended stays up to an hour to deliver its own.
 - **Completion wake.** An agent response may claim ``__LANE_DONE__ <slot> commits=<n>``.
   Only a matching successful wrapper exit receipt, a confirmed dead pane and absence of the
   observed process tree make that claim terminal. Tool output is not a response, and an exit
@@ -121,8 +125,9 @@ WAITING_PHASES = ("idle", "waiting-for-input")
 #: continue past it) and a stream session's failed turn.
 TURN_END_PHASES = (*WAITING_PHASES, "stop-reported", "failed")
 #: A lane with no wall or spend cap (a plan-billed lane: tmux_lane.sh refuses it a wall cap) has
-#: the stall stop as its only bound. Whatever holds it (a wait, a pending question), it is
-#: stopped as stalled after this long with no commit and no new turn (``watch.hold_limit_s``).
+#: no cap to end it. Whatever holds it (a wait, a pending question), each this long with no
+#: commit and no new turn is escalated to the Validator with a diagnosis; elapsed time alone
+#: never stops it (``watch.hold_limit_s``).
 HOLD_LIMIT_S = 8 * 3600
 # Wall-clock time beyond awake time between two checks is the machine asleep, not the lane idle.
 SLEEP_TOLERANCE_S = 60.0
@@ -243,6 +248,21 @@ def _session_key(native: Mapping[str, Any]) -> str:
     wrapper = native.get("wrapper")
     session = re.sub(r"[^A-Za-z0-9._-]", "", str(native.get("session_id") or "unbound"))[:80]
     return f"{session}.{wrapper.get('pid') if isinstance(wrapper, dict) else None}"
+
+
+def _notice_queue(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """The watch record's queue of Validator notices not yet posted and woken. A record from
+    before the queue kept one pending notice in ``turn_ended``; it is moved in once."""
+    queue = state.get("notices")
+    if not isinstance(queue, list):
+        queue = state["notices"] = []
+    old = state.get("turn_ended")
+    if isinstance(old, dict) and "notice" in old:
+        if not (old.get("posted", True) and old.get("woken", True)):
+            queue.append({key: old[key] for key in ("notice", "detail", "text", "posted", "woken")
+                          if key in old})
+        state["turn_ended"] = {key: old[key] for key in ("count", "seen_at", "open") if key in old}
+    return queue
 
 
 def _turn_ends(native: Mapping[str, Any]) -> int | None:
@@ -761,32 +781,73 @@ class LaneWatch:
         phase = native.get("phase")
         if reported > noticed and phase in TURN_END_PHASES:
             self._record_turn_end(launch, state, native, reported, phase, summary)
-        pending = state.get("turn_ended")
-        if not isinstance(pending, dict) or (pending.get("posted", True)
-                                             and pending.get("woken", True)):
+        self._post_notices(launch, state)
+
+    def _post_notices(self, launch: Mapping[str, Any], state: dict[str, Any]) -> None:
+        """Post and wake each queued Validator notice in order. An entry leaves the queue only
+        once both are done, so a failed post survives later turn ends and a new life, and is
+        retried at the next check; its id makes a repeat post a no-op."""
+        queue = _notice_queue(state)
+        if not queue:
             return
         validator_input = self._input()
         wait = validator_input.run_record.SUPERVISOR_WAIT_S
         try:
-            if not pending.get("posted"):
-                if not validator_input.post(self.root, str(pending["notice"]),
-                                            "lane-turn-ended", "host", str(pending["text"]),
-                                            wait_s=wait):
-                    pending["woken"] = True  # told already, by an earlier watch: no new wake
-                pending["posted"] = True
-            if not pending.get("woken"):
-                # On record before the wake: a watcher that dies in between loses this one wake,
-                # and never repeats it. A locked event log is retried at the next check.
-                pending["woken"] = True
+            while queue:
+                pending = queue[0]
+                if not pending.get("posted"):
+                    if not validator_input.post(self.root, str(pending["notice"]),
+                                                str(pending.get("kind", "lane-turn-ended")),
+                                                "host", str(pending["text"]), wait_s=wait):
+                        pending["woken"] = True  # told already, by an earlier watch: no new wake
+                    pending["posted"] = True
+                    self._write_state(state)
+                if not pending.get("woken"):
+                    # On record before the wake: a watcher that dies in between loses this one
+                    # wake, and never repeats it. A locked event log is retried at the next check.
+                    pending["woken"] = True
+                    self._write_state(state)
+                    try:
+                        self._wake(launch, str(pending.get("wake", "lane-turn-ended")),
+                                   str(pending["detail"]), refusal=False, wait_s=wait)
+                    except (OSError, validator_input.AttentionGateError):
+                        pending["woken"] = False
+                        raise
+                queue.pop(0)
                 self._write_state(state)
-                try:
-                    self._wake(launch, "lane-turn-ended", str(pending["detail"]),
-                               refusal=False, wait_s=wait)
-                except (OSError, validator_input.AttentionGateError):
-                    pending["woken"] = False
-                    raise
         except (OSError, ValueError, validator_input.AttentionGateError):
-            return  # retried from the record at the next check, told once
+            self._write_state(state)
+            return  # retried from the queue at the next check, told once
+
+    def _escalate_hold(self, launch: Mapping[str, Any], state: dict[str, Any],
+                       native: Mapping[str, Any], held: float, limit: float, since: float,
+                       waiting: bool, summary: str) -> None:
+        """Tell the Validator, once per hold limit, that an uncapped lane has made no commit and
+        started no new turn for that long, with what is known of why. The lane keeps running:
+        elapsed time asks for a decision, it does not make one."""
+        periods = int(held // limit)
+        if periods < 1:
+            return
+        notice_id = f"{self.slot}:hold:{since:.0f}:{periods}"
+        if any(entry.get("notice") == notice_id for entry in _notice_queue(state)) or \
+                state.get("hold_escalated") == notice_id:
+            return
+        lane = str(launch.get("lane") or self.slot)
+        phase = native.get("phase") or "unreadable"
+        detail = (f"no commit or new turn for {held / 3600:.1f} h, past {periods} x the "
+                  f"{limit / 3600:g} h hold limit of a lane with no wall or spend cap; "
+                  f"session phase {phase}, session {self._session(native)}, "
+                  f"{'waiting for the Validator' if waiting else 'not reported waiting'} "
+                  f"(seen {_iso(self.now())}); {summary}")
+        _notice_queue(state).append({
+            "notice": notice_id, "kind": "lane-status", "wake": "lane-hold-limit",
+            "detail": detail,
+            "text": (f"{lane}: {detail}. It was not stopped. Diagnose it from its window, then "
+                     "continue it, message it, or close it."),
+            "posted": False, "woken": False})
+        state["hold_escalated"] = notice_id
+        self._write_state(state)
+        self._post_notices(launch, state)
 
     def _record_turn_end(self, launch: Mapping[str, Any], state: dict[str, Any],
                          native: Mapping[str, Any], reported: int, phase: object,
@@ -802,11 +863,17 @@ class LaneWatch:
                  "its session reported the end of a response and may still continue on its own")
         detail = f"{ended} (seen {_iso(self.now())}); {done}; {summary}"
         notice_id = f"{self.slot}:{_session_key(native)}:{reported}"
-        state.update(turn_ends_noticed=reported, turn_ended={
-            "count": reported, "seen_at": self.now(), "notice": notice_id, "detail": detail,
+        queue = _notice_queue(state)
+        queue.append({
+            "notice": notice_id, "kind": "lane-turn-ended", "wake": "lane-turn-ended",
+            "detail": detail,
             "text": (f"{lane}: {detail}. A turn's end is not acceptance of its work. Evaluate "
                      "it, then continue the lane or close it."),
             "posted": False, "woken": False})
+        # The notice is queued in the same write that advances the count: the count never
+        # moves past a turn end that is not on record.
+        state.update(turn_ends_noticed=reported,
+                     turn_ended={"count": reported, "seen_at": self.now(), "open": True})
         self._write_state(state)
 
     def _deliver_notices(self) -> None:
@@ -906,6 +973,8 @@ class LaneWatch:
             "turn_ends_session": (
                 prior.get("turn_ends_session") if type(prior.get("turn_ends_noticed")) is int
                 else _session_key(self._native_turn()) if prior else None),
+            # Notices not yet posted and woken outlive the life that recorded them.
+            "notices": _notice_queue(dict(prior)),
             "status": "watching",
         }
         self._write_state(state)
@@ -1201,10 +1270,8 @@ class LaneWatch:
                                      f"{reason}; {summary}")
 
         if limit is not None and held > limit:  # whatever holds it: a wait or a question
-            return self._request_end(
-                launch, state, "stalled", "refusal-lane-stall",
-                f"no commit or new turn for {held / 3600:.1f} h, past the {limit / 3600:g} h "
-                f"hold limit of a lane with no wall or spend cap; {summary}")
+            self._escalate_hold(launch, state, native, held, limit,
+                                max(anchor, last_commit, turn), waiting, summary)
         if not pending and not waiting and idle > window:
             return self._request_end(
                 launch, state, "stalled", "refusal-lane-stall",
