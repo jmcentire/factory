@@ -468,6 +468,11 @@ def _flock(fd: int, operation: int, wait_s: float | None, what: str, path: objec
             time.sleep(0.05)
 
 
+#: Who may write to an inbox.
+SENDERS = frozenset({"validator", "orchestrator", "coder", "tester", "host", "dispatcher",
+                     "founder", "seat-supervisor"})
+
+
 def message(root: Path, recipient: str, sender: str, text: str, *, log: str = os.devnull,
             wait_s: float | None = None, once_since: int | None = None) -> None:
     """Append ``text`` to the recipient's inbox (and, optionally, ``log``).
@@ -478,16 +483,7 @@ def message(root: Path, recipient: str, sender: str, text: str, *, log: str = os
     """
     if recipient not in {"validator", "orchestrator"}:
         raise ValueError("author messages use tmux_lane_message.sh to preserve role boundaries")
-    if sender not in {
-        "validator",
-        "orchestrator",
-        "coder",
-        "tester",
-        "host",
-        "dispatcher",
-        "founder",
-        "seat-supervisor",
-    }:
+    if sender not in SENDERS:
         raise ValueError("unknown sender")
     if root.is_symlink():
         raise ValueError("run directory is a symlink")
@@ -1088,7 +1084,7 @@ def _start_locked(runs: Path, run: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["create", "start", "context", "status", "message",
-                                           "capture", "provenance", "pr"])
+                                           "notify", "capture", "provenance", "pr"])
     parser.add_argument("--runs", type=Path, required=True)
     parser.add_argument("--run", required=True)
     parser.add_argument("--repo", type=Path)
@@ -1108,6 +1104,8 @@ def main() -> int:
     parser.add_argument("--slot", help="author slot for terminal output capture")
     parser.add_argument("--from", dest="sender", default="host")
     parser.add_argument("--message-file", type=Path)
+    parser.add_argument("--kind", help="notify: the notice's kind (validator_input.KINDS)")
+    parser.add_argument("--id", dest="notice_id", help="notify: the notice's id, told once")
     args = parser.parse_args()
     try:
         if args.action == "create":
@@ -1166,6 +1164,18 @@ def main() -> int:
                 if args.to is None or args.message_file is None:
                     parser.error("message requires --to and --message-file")
                 message(root, args.to, args.sender, args.message_file.read_text(), log=doc["log"])
+            elif args.action == "notify":
+                if not (args.kind and args.notice_id and args.message_file):
+                    parser.error("notify requires --kind, --id and --message-file")
+                import validator_input
+
+                validator_input.post(root, args.notice_id, args.kind, args.sender,
+                                     args.message_file.read_text(), wait_s=SUPERVISOR_WAIT_S)
+                if args.notice_id in validator_input.deliver(root, wait_s=SUPERVISOR_WAIT_S):
+                    print(f"factory: {args.notice_id} is recorded and still owed to the "
+                          "Validator; the next delivery retries it", file=sys.stderr)
+                    return 75
+                print(f"factory: {args.notice_id} delivered to the Validator's inbox")
             else:
                 doc["validation"] = [
                     read_json(p) for p in sorted(root.glob("validation/*/result.json"))

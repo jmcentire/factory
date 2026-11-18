@@ -806,10 +806,7 @@ def test_a_lane_that_reported_done_is_waiting_not_stalled(tmp_path: Path) -> Non
     _commit(watched.repo, T0 + 200, "a")
     message = {"type": "item.completed",
                "item": {"type": "agent_message", "text": "__LANE_DONE__ tester commits=1"}}
-    # The session wrapper marks the turn's input in the lane log before any of its output.
-    mark = {"type": "persistent-turn-start", "turn_started_at": T0 + 10}
     with watched.log.open("a") as stream:
-        stream.write(json.dumps(mark) + "\n")
         stream.write(json.dumps(message) + "\n")
     native = watched.lanes / "tester-persistent.json"
     native.write_text(json.dumps({"phase": "idle", "turn_started_at": T0 + 10}))
@@ -825,10 +822,7 @@ def test_a_new_turn_after_done_is_watched_for_stalls_again(tmp_path: Path) -> No
     _commit(watched.repo, T0 + 200, "a")
     message = {"type": "item.completed",
                "item": {"type": "agent_message", "text": "__LANE_DONE__ tester commits=1"}}
-    # The session wrapper marks the turn's input in the lane log before any of its output.
-    mark = {"type": "persistent-turn-start", "turn_started_at": T0 + 10}
     with watched.log.open("a") as stream:
-        stream.write(json.dumps(mark) + "\n")
         stream.write(json.dumps(message) + "\n")
     native = watched.lanes / "tester-persistent.json"
     native.write_text(json.dumps({"phase": "idle", "turn_started_at": T0 + 10}))
