@@ -19,6 +19,7 @@ import pathlib
 import re
 import stat
 import sys
+import time
 from collections.abc import Mapping
 
 _LANES = frozenset({"validator", "coder", "tester"})
@@ -184,7 +185,14 @@ def validate_blocking_event(event: object) -> dict[str, object]:
     return dict(event)
 
 
-def _append_jsonl(path: pathlib.Path, body: Mapping[str, object]) -> None:
+def _append_jsonl(path: pathlib.Path, body: Mapping[str, object], *,
+                  wait_s: float | None = None) -> None:
+    """Append one event row under the sink's lock.
+
+    With ``wait_s``, a writer that cannot take the lock within that long raises
+    AttentionGateError, having written nothing, instead of waiting on whoever holds it: a
+    supervisor must not block on another writer.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     row = (json.dumps(body, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
     descriptor = os.open(
@@ -201,7 +209,20 @@ def _append_jsonl(path: pathlib.Path, body: Mapping[str, object]) -> None:
         if not stat.S_ISREG(metadata.st_mode):
             raise AttentionGateError(f"attention event sink is not regular: {path}")
         os.fchmod(descriptor, 0o600)
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        if wait_s is None:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        else:
+            deadline = time.monotonic() + wait_s
+            while True:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise AttentionGateError(
+                            f"attention event sink stayed locked for {wait_s:g} s: {path}"
+                        ) from None
+                    time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
         # The file lock, rather than the broader attention lock, is the common
         # ordering primitive with legacy dispatcher writers.  Snapshot the rollback
         # boundary only after acquiring it so a failed append can never erase bytes

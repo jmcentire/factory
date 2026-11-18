@@ -18,6 +18,8 @@ import secrets
 import shlex
 import stat
 import sys
+import time
+from collections.abc import Callable
 from io import BufferedReader
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -411,17 +413,41 @@ def context(runs: Path, run: str) -> None:
         sys.stdout.buffer.write(value.encode() + b"\0")
 
 
-def append_record(path: Path, payload: bytes) -> None:
-    """Serialize appends; retain a killed writer's fragment separately from later rows."""
+#: How long a supervisor (a lane watchdog) waits for another writer's lock on an inbox; then it
+#: gives up and retries at its next check rather than block its supervision.
+SUPERVISOR_WAIT_S = 5.0
+
+
+def append_record(path: Path, payload: bytes, *, wait_s: float | None = None,
+                  once: Callable[[bytes], bool] | None = None, since: int | None = None) -> bool:
+    """Serialize appends; retain a killed writer's fragment separately from later rows.
+
+    With ``wait_s``, a writer that cannot take the lock within that long raises instead of
+    waiting on whoever holds it: a supervisor must not block on another writer.
+
+    With ``once``, a writer that may already have written this row (a retry) decides under the
+    lock, so two retrying at once write it once: ``once`` says whether rows read from ``since``
+    (or the last 64 KiB) hold it. When the complete rows do, nothing is written. When the
+    unterminated tail is it whole (a writer killed before its newline), only the newline is
+    written, which completes that row. Returns whether anything was written.
+    """
     fd = os.open(
         path, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600
     )
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise OSError(f"message sink is not a regular file: {path}")
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        _flock(fd, fcntl.LOCK_EX, wait_s, "message sink", path)
         start = os.fstat(fd).st_size
         interrupted = start and os.pread(fd, 1, start - 1) != b"\n"
+        if once is not None:
+            begin = (_row_start(fd, since) if since is not None and 0 <= since <= start
+                     else max(0, start - 65536))
+            complete, _, tail = os.pread(fd, start - begin, begin).rpartition(b"\n")
+            if once(complete):
+                return False
+            if interrupted and once(tail):
+                payload, interrupted = b"\n", False
         if interrupted:
             payload = b"\n" + payload
         try:
@@ -446,21 +472,42 @@ def append_record(path: Path, payload: bytes) -> None:
         os.fsync(parent)
     finally:
         os.close(parent)
+    return True
 
 
-def message(root: Path, recipient: str, sender: str, text: str, *, log: str = os.devnull) -> None:
+def _flock(fd: int, operation: int, wait_s: float | None, what: str, path: object) -> None:
+    """Take ``operation`` (``LOCK_EX`` or ``LOCK_SH``) on ``fd``, waiting on whoever holds the
+    lock; with ``wait_s``, at most that long, then raising OSError."""
+    if wait_s is None:
+        fcntl.flock(fd, operation)
+        return
+    deadline = time.monotonic() + wait_s
+    while True:
+        try:
+            fcntl.flock(fd, operation | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise OSError(f"{what} stayed locked for {wait_s:g} s: {path}") from None
+            time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+
+
+#: Who may write to an inbox.
+SENDERS = frozenset({"validator", "orchestrator", "coder", "tester", "host", "dispatcher",
+                     "founder", "seat-supervisor"})
+
+
+def message(root: Path, recipient: str, sender: str, text: str, *, log: str = os.devnull,
+            wait_s: float | None = None, once_since: int | None = None) -> None:
+    """Append ``text`` to the recipient's inbox (and, optionally, ``log``).
+
+    With ``once_since`` (an ``inbox_end`` taken before a first attempt), a retry: the message is
+    written only if the inbox does not already hold it from there, decided under the inbox's
+    lock (``append_record``), and the log gets nothing when it is not written.
+    """
     if recipient not in {"validator", "orchestrator"}:
         raise ValueError("author messages use tmux_lane_message.sh to preserve role boundaries")
-    if sender not in {
-        "validator",
-        "orchestrator",
-        "coder",
-        "tester",
-        "host",
-        "dispatcher",
-        "founder",
-        "seat-supervisor",
-    }:
+    if sender not in SENDERS:
         raise ValueError("unknown sender")
     if root.is_symlink():
         raise ValueError("run directory is a symlink")
@@ -474,12 +521,88 @@ def message(root: Path, recipient: str, sender: str, text: str, *, log: str = os
                         message_digest=hashlib.sha256(text.encode()).hexdigest())) + "\n"
     ).encode()
     # Decisions and handoffs always persist, regardless of optional console logging.
-    append_record(directory / "inbox.jsonl", payload)
+    if not append_record(
+            directory / "inbox.jsonl", payload, wait_s=wait_s, since=once_since,
+            once=None if once_since is None else (lambda rows: _holds(rows, sender, text))):
+        return  # already in the inbox: nothing was written, so nothing to log
     if log != os.devnull:
         try:
-            append_record(Path(log), payload)
+            append_record(Path(log), payload, wait_s=wait_s)
         except OSError as error:
             print(f"factory: message queued; optional log failed: {error}", file=sys.stderr)
+
+
+def _inbox_directory(root: Path, recipient: str) -> int:
+    """The recipient's directory, opened only where ``message`` writes: not through a linked
+    run directory or a linked recipient directory. Raises OSError otherwise."""
+    if root.is_symlink():
+        raise OSError(f"{root} is a symlink")
+    return os.open(root / recipient, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+
+
+def inbox_end(root: Path, recipient: str, *, wait_s: float | None = None) -> int:
+    """The recipient's inbox size, read under the inbox's lock: a message written after this
+    is at or past it.
+
+    A writer holds the lock from its append to its sync or its rollback (``append_record``), so
+    a size read without it could count a row that is then rolled back, and a message written
+    next would start before the offset, or wholly before it. Under the lock the size is where
+    committed rows end (or a killed writer's unterminated row). With ``wait_s``, a reader that
+    cannot take the lock within that long raises OSError, as a writer does.
+
+    An inbox that is not a regular file in a real directory (missing, a link, a folder, or
+    under a linked directory) is 0: a message can be written only once it is one, and then
+    from its start.
+    """
+    try:
+        directory = _inbox_directory(root, recipient)
+    except OSError:
+        return 0
+    try:
+        fd = os.open("inbox.jsonl", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                     dir_fd=directory)
+    except OSError:
+        return 0
+    finally:
+        os.close(directory)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return 0
+        _flock(fd, fcntl.LOCK_SH, wait_s, "inbox", root / recipient / "inbox.jsonl")
+        return os.fstat(fd).st_size
+    finally:
+        os.close(fd)
+
+
+def _row_start(fd: int, offset: int) -> int:
+    """Where the row holding byte ``offset`` starts: ``offset`` itself at a row's start.
+
+    ``inbox_end`` takes an offset under the inbox's lock: a row's start, or the end of a row a
+    killed writer left unterminated. One saved before it did (a watcher's state from an earlier
+    version) can count another writer's append that was then rolled back, so the row written
+    next starts before it. A read from the offset starts at that row."""
+    position = offset
+    while position > 0:
+        size = min(4096, position)
+        newline = os.pread(fd, size, position - size).rfind(b"\n")
+        if newline >= 0:
+            return position - size + newline + 1
+        position -= size
+    return 0
+
+
+def _holds(rows: bytes, sender: str, text: str, digest: str | None = None) -> bool:
+    """Whether ``rows`` hold this message from ``sender``."""
+    digest = digest or hashlib.sha256(text.encode()).hexdigest()
+    for line in rows.splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if (isinstance(row, dict) and row.get("message_digest") == digest
+                and row.get("sender") == sender and row.get("text") == text):
+            return True
+    return False
 
 
 def resident_command(agent: str, model: str, effort: str, prompt: str, root: Path) -> list[str]:
@@ -962,7 +1085,7 @@ def _start_locked(runs: Path, run: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["create", "start", "context", "status", "message",
-                                           "capture", "provenance", "pr"])
+                                           "notify", "capture", "provenance", "pr"])
     parser.add_argument("--runs", type=Path, required=True)
     parser.add_argument("--run", required=True)
     parser.add_argument("--repo", type=Path)
@@ -982,6 +1105,11 @@ def main() -> int:
     parser.add_argument("--slot", help="author slot for terminal output capture")
     parser.add_argument("--from", dest="sender", default="host")
     parser.add_argument("--message-file", type=Path)
+    parser.add_argument("--kind", help=(
+        "notify: the notice's kind (validator_input.KINDS). Exits 0 delivered, 75 recorded and "
+        "still owed, 74 recorded but delivery unknown, 65 id already used for another notice "
+        "(not sent), 70 not recorded (a record stayed locked or failed; retry)"))
+    parser.add_argument("--id", dest="notice_id", help="notify: the notice's id, told once")
     args = parser.parse_args()
     try:
         if args.action == "create":
@@ -1040,6 +1168,27 @@ def main() -> int:
                 if args.to is None or args.message_file is None:
                     parser.error("message requires --to and --message-file")
                 message(root, args.to, args.sender, args.message_file.read_text(), log=doc["log"])
+            elif args.action == "notify":
+                if not (args.kind and args.notice_id and args.message_file):
+                    parser.error("notify requires --kind, --id and --message-file")
+                import validator_input
+
+                try:
+                    told = validator_input.notify(root, args.notice_id, args.kind, args.sender,
+                                                  args.message_file.read_text(),
+                                                  wait_s=SUPERVISOR_WAIT_S)
+                except validator_input.LedgerUnreadable as error:
+                    print(f"factory: {args.notice_id} is recorded, but whether it was delivered "
+                          f"is unknown: {error}", file=sys.stderr)
+                    return 74
+                except validator_input.NoticeIdReused as error:
+                    print(f"factory: {error}", file=sys.stderr)
+                    return 65
+                if not told:
+                    print(f"factory: {args.notice_id} is recorded and still owed to the "
+                          "Validator; the next delivery retries it", file=sys.stderr)
+                    return 75
+                print(f"factory: {args.notice_id} delivered to the Validator's inbox")
             else:
                 doc["validation"] = [
                     read_json(p) for p in sorted(root.glob("validation/*/result.json"))
