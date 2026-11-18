@@ -688,7 +688,8 @@ PY
   SAFE_TMPDIR="${TMPDIR:-/tmp}"
   SAFE_TERM="${TERM:-xterm-256color}"
   [ "$SAFE_TERM" != dumb ] || SAFE_TERM=xterm-256color
-  SAFE_SHELL="${SHELL:-/bin/bash}"
+  # The generated commands use Bash quoting. Pass Bash and -c as separate tmux arguments.
+  SAFE_SHELL="${BASH:-/bin/bash}"
   SAFE_LANG="${LANG:-en_US.UTF-8}"
   SAFE_CODEX_HOME="${CODEX_HOME:-$SAFE_HOME/.codex}"
   # A rebuilt environment starts a trusted Python helper too, so it carries the same
@@ -1402,12 +1403,12 @@ PY
   if printf '%s\n' "$WINDOWS" | grep -q "^watch-$LANE "; then
     WID=$(window_id "watch-$LANE"); [ -z "$WID" ] || tmux kill-window -t "$WID" >/dev/null 2>&1 || true
   fi
-  if ! tmux new-window -t "$RUN" -n "$LANE" -c "$REPOSITORY" "$LANE_CMD"; then
+  if ! tmux new-window -t "$RUN" -n "$LANE" -c "$REPOSITORY" "$SAFE_SHELL" -c "$LANE_CMD"; then
     append_event "$(mark launch-failed)"
     refuse 70 "failed to launch $RUN:$LANE"
   fi
   # Completion and stall observation are required even when a plan lane has no cap.
-  if ! tmux new-window -d -t "$RUN" -n "watch-$LANE" -c "$ROOT" "$WATCH_CMD"; then
+  if ! tmux new-window -d -t "$RUN" -n "watch-$LANE" -c "$ROOT" "$SAFE_SHELL" -c "$WATCH_CMD"; then
     WID=$(window_id "$LANE"); [ -z "$WID" ] || tmux kill-window -t "$WID" >/dev/null 2>&1 || true
     append_event "$(mark launch-failed)"
     refuse 70 "the watcher for $RUN:$LANE could not start, so the lane was stopped: a lane with no watcher is not launched"

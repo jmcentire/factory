@@ -730,7 +730,8 @@ SAFE_USER="${USER:-$(id -un)}"
 SAFE_PATH="${PATH:?lane-message: PATH is required}"
 SAFE_TMPDIR="${TMPDIR:-/tmp}"
 SAFE_TERM="${TERM:-xterm-256color}"
-SAFE_SHELL="${SHELL:-/bin/bash}"
+# The generated commands use Bash quoting. Pass Bash and -c as separate tmux arguments.
+SAFE_SHELL="${BASH:-/bin/bash}"
 SAFE_LANG="${LANG:-en_US.UTF-8}"
 SAFE_CODEX_HOME="${CODEX_HOME:-$SAFE_HOME/.codex}"
 # Resume on the model the lane launched with: the Codex config overrides that selected it when
@@ -991,10 +992,10 @@ finally:
 PY
   # No live turn: resume the retained thread, in a fresh window when the lane's was closed.
   if [ "$PANE_DEAD" = "missing" ]; then
-    tmux new-window -t "$RUN" -n "$WINDOW" -c "$REPOSITORY" "$RESUME_CMD"
+    tmux new-window -t "$RUN" -n "$WINDOW" -c "$REPOSITORY" "$SAFE_SHELL" -c "$RESUME_CMD"
     tmux set-option -w -t "$RUN:$WINDOW" remain-on-exit on >/dev/null 2>&1 || true
   else
-    tmux respawn-pane -k -t "$RUN:$WINDOW" -c "$REPOSITORY" "$RESUME_CMD"
+    tmux respawn-pane -k -t "$RUN:$WINDOW" -c "$REPOSITORY" "$SAFE_SHELL" -c "$RESUME_CMD"
   fi
   # Match first launch: only an explicitly capped lane needs the spend/qualification watcher.
   # Ordinary plan-funded work must not gain automatic pauses merely by receiving a message.
@@ -1004,7 +1005,7 @@ PY
   if [ -n "$WALL_CAP_S" ] || [ "$HOSTED_RESUME" = 1 ]; then
     WATCH_WID=$(window_id "watch-$WINDOW")
     [ -z "$WATCH_WID" ] || tmux kill-window -t "$WATCH_WID" >/dev/null 2>&1 || true
-    tmux new-window -d -t "$RUN" -n "watch-$WINDOW" -c "$ROOT" "$WATCH_CMD" || {
+    tmux new-window -d -t "$RUN" -n "watch-$WINDOW" -c "$ROOT" "$SAFE_SHELL" -c "$WATCH_CMD" || {
       WID=$(window_id "$WINDOW"); [ -z "$WID" ] || tmux send-keys -t "$WID" C-c >/dev/null 2>&1 || true
       echo "lane-message: the watcher for $RUN:$WINDOW could not start; the resumed turn was interrupted" >&2
       exit 70
