@@ -3,6 +3,28 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## [0.8.31] - 2026-11-18
+
+### Changed
+
+- Codex seats default to GPT-6.2-Sol, and Factory publishing defaults are aligned with it.
+- A conflict between proposed work and a repository rule is reconciled with the rule's
+  owners: they are notified with the proposed exception and may revise the rule, ask for a
+  block, or not respond. Agents never rewrite a rule to fit their change, and a recorded
+  exception is never reported as meeting the original requirement (#129).
+- An uncapped (plan-billed) lane that goes `HOLD_LIMIT_S` without a commit or a new turn is
+  escalated to the Validator with a diagnosis instead of being stopped (#135, #124).
+
+### Fixed
+
+- Coder and Tester lanes launch in packaged installs: every launcher helper path names the
+  package root, and that path is kept out of the agent's environment (#134).
+- Turn-end notices to the Validator are queued durably and survive a failed post, later turn
+  ends and new watcher lives; the Validator is woken as soon as a lane ends its turn (#125, #135).
+- Lanes waiting at a host permission dialog are held, not stopped as stalled; spinner redraws
+  no longer count as activity, and macOS `ps` CPU time is read correctly (#124).
+- Refused author launches name the file that caused them (#122).
+
 ## [0.8.30] - 2026-11-13
 
 ### Changed
