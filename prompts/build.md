@@ -90,7 +90,7 @@ For a task large enough to lose track of, keep a task list of the phases you int
 - **Task details:** the tracker ticket (a local ticket cache first, if the loader names one), GitHub issue (`gh issue view`), or parse plain-language description
 - **Kindex:** `search` task ID, keywords, domain terms. `search` for prior work, decisions, constraints. Check code ingestion status.
 - **Target repo:** Identify, verify remote exists, clone if needed
-- **Required reads:** CLAUDE.md, .claude/rules/, REVIEW.md, CODEOWNERS, module documentation
+- **Required reads:** AGENTS.md, CLAUDE.md, .claude/rules/, `.kin/` decisions and constraints, REVIEW.md, CODEOWNERS, module documentation. These rules bind: when the task conflicts with one, change the approach or ask the user; never edit, weaken or reword a rule to fit the change unless the task asks to change that rule.
 - **Codebase analysis:** Search relevant files, read key code, check git log for recent changes
 
 Mark task 1 complete.
