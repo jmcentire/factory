@@ -684,8 +684,8 @@ def test_a_turn_end_on_record_holds_through_an_unreadable_record_for_one_window_
         watched.report(phase="working")
         assert watched.at(800) == "watching"
     watched.record_path.unlink()
+    at = STALL_AT + 1 + (STALL_WINDOW_S + 1 if then == "record-gone" else 0)
     if then == "record-gone":
         assert watched.at(STALL_AT + 1) == "watching"
-        _settle(watched, STALL_AT + STALL_WINDOW_S + 2, "stalled")
-    else:
-        _settle(watched, STALL_AT + 1, "stalled")
+    assert watched.at(at) == "watching"  # quiet once; a hang must outlast HUNG_CONFIRM_S
+    _settle(watched, at + lane_watchdog.HUNG_CONFIRM_S, "stalled")

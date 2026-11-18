@@ -78,6 +78,8 @@ class Tmux:
         self.on_capture: Callable[[], None] | None = None
         self.fired = 0
         self.dead = False
+        self.pane_pid = "0"
+        self.windows = "tester @7\nwatch-tester @8\n"
         self.calls: list[Call] = []
         self.checks: list[list[Call]] = [[]]
 
@@ -91,7 +93,9 @@ class Tmux:
                 raise error
         out, rc = ("1\n" if self.dead else "0\n"), 0
         if is_lookup(args):
-            out = "tester @7\nwatch-tester @8\n"
+            out = self.windows
+        elif "#{pane_pid}" in args:
+            out = f"{self.pane_pid}\n"
         elif args[0] == "capture-pane":
             if self.capture_fault is not None:
                 raise self.capture_fault
@@ -115,8 +119,9 @@ class Lane:
     def __init__(self, tmp_path: Path, tmux: Tmux, *, agent: str = "cursor-agent",
                  prompt_via: str | None = "terminal", lane: str | None = "tester",
                  caps: dict[str, object] | None = None, watch: dict[str, object] | None = None,
-                 thread: bool = False) -> None:
-        self.root, self.tmux, self.now = tmp_path / "run", tmux, T0
+                 thread: bool = False, table: dict[int, dict[str, str | int]] | None = None,
+                 ) -> None:
+        self.root, self.tmux, self.now, self.table = tmp_path / "run", tmux, T0, table or {}
         self.lanes = self.root / "tmux-lanes"
         self.lanes.mkdir(parents=True)
         self.repo = tmp_path / "clone"
@@ -150,7 +155,8 @@ class Lane:
         """A fresh watcher, not armed again: all it knows is what the run's files hold."""
         self.watch = lane_watchdog.LaneWatch(
             root=self.root, slot="tester", now=lambda: self.now, stop=self._stop,
-            tmux=self.tmux, echo=self._echo, deliver=self._deliver, processes=lambda: {})
+            tmux=self.tmux, echo=self._echo, deliver=self._deliver,
+            processes=lambda: {pid: dict(row) for pid, row in self.table.items()})
 
     def _echo(self, line: str) -> None:
         self.said.append(line)
@@ -192,6 +198,9 @@ class Lane:
 
     def wakes(self, kind: str) -> int:
         return [row["kind"] for row in self.rows("tmux-lanes/wake.jsonl")].count(kind)
+
+    def dialog(self) -> object:
+        return json.loads((self.lanes / "tester-watch.json").read_text()).get("dialog")
 
 
 def commit(lane: Lane, at: float) -> None:
@@ -256,8 +265,9 @@ def test_a_failed_pane_read_is_uncertain_and_never_stops_the_lane(
 def test_a_lane_whose_screen_keeps_changing_is_working_and_kept(tmp_path: Path) -> None:
     tmux = Tmux(WORK)
     lane = Lane(tmp_path, tmux)
-    for n, seconds in enumerate((PAST - 60, PAST, PAST + 300, PAST + 600)):
-        tmux.screen = WORK + payload(f"step {n} of the build: ok")
+    for name, seconds in zip(("alpha", "beta", "gamma", "delta"),
+                             (PAST - 60, PAST, PAST + 300, PAST + 600), strict=True):
+        tmux.screen = WORK + payload(f"compiled module {name}")
         assert lane.at(seconds) == "watching"
     assert lane.stops == [] and len(lane.notices()) == 1
     assert lane.wakes("lane-waiting") == lane.wakes("lane-uncertain") == 0
@@ -281,3 +291,73 @@ def test_a_cleared_dialog_ends_the_wait_and_the_next_one_is_told_again(tmp_path:
     assert lane.at(PAST + 120) == "watching"
     assert lane.at(PAST + 60 + STALL_WINDOW_S + 1) == "watching"
     assert lane.wakes("lane-waiting") == 2 and lane.stops == []
+
+
+# Review of the reworked #124 (2026-11-18).
+
+def test_an_uncapped_lane_at_a_dialog_is_stopped_at_the_hold_limit(tmp_path: Path) -> None:
+    """A plan-billed lane has no wall or spend cap, so the stall stop is its only bound: a wait
+    may not keep it forever."""
+    lane = Lane(tmp_path, Tmux(CURSOR_APPROVAL))
+    assert lane.at(PAST) == "watching"
+    assert lane.at(900 + lane_watchdog.HOLD_LIMIT_S + 1) in {"stalled", "stopping"}
+    assert lane.stops == [TARGET] and lane.tmux.typed() == []
+    assert "hold limit" in lane.notices()[-1]
+
+
+def test_a_spinner_over_a_stalled_stream_is_hung_with_one_wake(tmp_path: Path) -> None:
+    """A TUI stuck on a stalled stream redraws a spinner and an elapsed-time counter with a
+    little CPU: not work. Its real stall wakes the operator once, by the stop."""
+    tmux = Tmux(WORK)
+    tmux.pane_pid = "4242"
+    lane = Lane(tmp_path, tmux, table={4242: {"pid": 4242, "ppid": 1, "state": "S",
+                                              "started": "Tue Nov 17 09:59:57 2026"}})
+    for n, seconds in enumerate((PAST, PAST + 60, PAST + 120, PAST + 60 + 300)):
+        tmux.screen = WORK + payload(f"{'⠋⠙⠹⠸'[n]} Generating… ({seconds}s · esc to interrupt)")
+        lane.table[4242]["cpu"] = f"00:00:{n:02d}"  # 1 s a minute or less: a redraw
+        lane.at(seconds)
+    assert lane.stops == [TARGET]
+    assert lane.wakes("lane-uncertain") == 0 and len(lane.notices()) == 1
+
+
+@pytest.mark.parametrize("gone", ["pane-dead", "window-gone"])
+def test_a_dialog_on_a_pane_that_died_or_went_away_is_no_longer_a_wait(
+    tmp_path: Path, gone: str,
+) -> None:
+    """The dialog was rewritten only by a live read, so a lane whose pane died or whose window
+    went away stayed waiting, and carried the dialog into its next life."""
+    tmux = Tmux(CURSOR_APPROVAL)
+    lane = Lane(tmp_path, tmux)
+    lane.at(PAST)
+    assert lane.dialog() is not None
+    if gone == "pane-dead":
+        tmux.dead = True
+    else:
+        tmux.windows = "validator @9\n"
+    lane.at(PAST + 60)
+    assert lane.dialog() is None
+    lane.resume(PAST + 90)
+    assert lane.dialog() is None
+
+
+def test_a_lane_flipping_between_working_and_uncertain_is_told_once(tmp_path: Path) -> None:
+    tmux = Tmux(WORK)
+    lane = Lane(tmp_path, tmux)
+    for rc, word, seconds in ((0, "alpha", PAST), (0, "beta", PAST + 30),
+                              (1, "gamma", PAST + 30 + STALL_WINDOW_S + 1),
+                              (0, "delta", PAST + 60 + STALL_WINDOW_S + 1),
+                              (0, "epsilon", PAST + 90 + STALL_WINDOW_S + 1)):
+        tmux.capture_rc, tmux.screen = rc, WORK + payload(f"compiled module {word}")
+        assert lane.at(seconds) == "watching"
+    assert len(lane.notices()) == 1 and lane.wakes("lane-uncertain") == 1
+
+
+def test_dialog_words_above_the_pane_bottom_are_not_a_dialog(tmp_path: Path) -> None:
+    """Detection scanned the last 15 rows, so a lane whose output said "Do you want to proceed"
+    a few rows up was held as at a dialog."""
+    screen = WORK + payload("Do you want to proceed with the migration?",
+                            *(f"applied step {word}" for word in ("one", "two", "three",
+                                                                  "four", "five")))
+    lane = Lane(tmp_path, Tmux(screen))
+    assert lane.at(PAST) == "watching"
+    assert lane.dialog() is None and lane.wakes("lane-waiting") == 0
