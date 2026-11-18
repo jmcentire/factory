@@ -5,15 +5,18 @@ Authority: normative. Cites the operator incident (2026-11-17): an install left
 clone; the refusal named neither and stopped at the first problem, so the operator needed
 two refusal rounds. The contract, as redesigned the same day: the receipt keeps exactly the
 keys and `tree_digest` values it had before; the refusal names directory links, non-regular
-files, unreadable files and unlistable directories (in that order), then the changes against
-the projection's first commit as added, removed and changed paths (sorted, at most five per
-kind, then " and N more"); a directory the first commit never had is named once as `dir/`.
-Amended the same day after review: prepare writes files at exactly 0644 or 0755, so any mode
-change of a committed file is named; contents compare as `git add` would commit them now
-(attribute filters included); files under an unlistable directory, or under a directory
-replaced by a link or a non-regular file, are not reported as removed; a new directory is
-named only if it holds more than directories; an unreadable first commit is said to be
-unreadable. Problem kinds are joined by "; " (inferred, as the changes are).
+files, unreadable files and unlistable directories (in that order), then the changes as
+added, removed and changed paths (sorted, at most five per kind, then " and N more"); a
+directory the projection never had is named once as `dir/`, and only if it holds more than
+directories. Amended after review: prepare writes the source blobs' raw bytes at exactly 0644
+or 0755, so any mode change of a committed file is named; the baseline is the source commit
+(the receipt's `source_commit`, limited to its `files`), compared as raw bytes, so line
+endings are content and nothing the clone configures (attributes, filters, diff drivers,
+fsmonitor, hooks) is consulted or run; the marker must be a regular empty 0600 file; files
+under an unlistable directory, or under a directory replaced by a link or a non-regular file,
+are not reported as removed; a source commit that cannot be read is said to be unreadable,
+after every problem and every added and removed path. Problem kinds are joined by "; "
+(inferred, as the changes are).
 
 Expected values are direct from that contract unless a comment says "inferred". Digest
 literals were computed once by the module as it stood at ecddf63 (before refusals named
@@ -43,9 +46,6 @@ UNREADABLE = CONTAINS + "a file that cannot be read: "
 UNLISTABLE = CONTAINS + "a directory that cannot be read: "
 CHANGES = "role inputs have unrecorded changes before first launch: "
 BOTH = "; and unrecorded changes: "
-UNSHOWN = CHANGES + ("none that the projection's first commit can show "
-                     "(line endings Git normalizes, or the no-index marker's mode)")
-UNREAD_BASELINE = "the projection's first commit could not be read ("
 # The receipt keys harness/role_inputs.py wrote at ecddf63, in its order.
 RECEIPT_KEYS = ["role", "repository", "source_commit", "initial_commit", "includes", "excludes",
                 "files", "omitted_directory_links", "tree_digest"]
@@ -365,6 +365,14 @@ def test_a_committed_directory_replaced_by_a_fifo_is_named_only_as_that(coder, d
     assert _refusal(runs, dest) == ODD + directory
 
 
+def test_a_new_folder_holding_only_an_unlistable_folder_is_added(coder):
+    # new/ can be listed and holds only new/sub/, which cannot be listed and holds files.
+    dest, runs, _, _ = coder
+    _write(dest / "new/sub/leaked.py", "IMPLEMENTATION")
+    _unlistable(dest / "new/sub")
+    assert _refusal(runs, dest) == UNLISTABLE + "new/sub/" + BOTH + "added new/"
+
+
 def test_a_new_directory_that_cannot_be_listed_is_not_also_added(coder):
     # Amendment 4: named only as a directory that cannot be read, not also "added new/".
     dest, runs, _, _ = coder
@@ -373,99 +381,215 @@ def test_a_new_directory_that_cannot_be_listed_is_not_also_added(coder):
     assert _refusal(runs, dest) == UNLISTABLE + "new/"
 
 
-# --- the baseline: Git attributes, odd names, an unreadable first commit --------------------
+# --- the baseline is the source commit: raw bytes, nothing run from the clone ---------------
 
 
-@pytest.fixture
-def normalized(tmp_path):
-    """A Coder projection holding a CRLF file that `*.txt text` normalizes when committed.
+def _blob(repo, name):
+    """The bytes HEAD stores for name, looked up without Git's quoting of names."""
+    listing = subprocess.run(["git", "-C", str(repo), "ls-tree", "-r", "-z", "HEAD"],
+                             check=True, capture_output=True).stdout
+    for entry in filter(None, listing.split(b"\0")):
+        info, path = entry.split(b"\t", 1)
+        if path == os.fsencode(name):
+            return subprocess.run(["git", "-C", str(repo), "cat-file", "blob",
+                                   info.split()[2].decode()], check=True,
+                                  capture_output=True).stdout
+    raise AssertionError(f"{name!r} is not committed")
 
-    The source commits the CRLF bytes before .gitattributes exists, then adds .gitattributes
-    without renormalizing; the projection's first commit stores the file with LF endings while
-    the clone holds the CRLF bytes.
+
+def _attributes_source(repo, files):
+    """A source whose files were committed before `*.txt text` was, without renormalizing.
+
+    The source commit keeps CRLF bytes that `git add` under those attributes would store as LF.
     """
-    repo = tmp_path / "source"
     repo.mkdir()
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     _git(repo, "config", "core.autocrlf", "false")
-    _write(repo / "src/app.py", "IMPLEMENTATION\n")
-    (repo / "api").mkdir()
-    (repo / "api/crlf.txt").write_bytes(b"one\r\ntwo\r\n")
-    _commit(repo, "crlf")
+    for name, data in files.items():
+        path = repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    _commit(repo, "files")
     (repo / ".gitattributes").write_text("*.txt text\n")
     _git(repo, "add", ".gitattributes")
     _git(repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
          "commit", "-q", "-m", "attributes")
-    assert b"\r\n" in subprocess.run(["git", "-C", str(repo), "show", "HEAD:api/crlf.txt"],
-                                     check=True, capture_output=True).stdout
+    for name, data in files.items():
+        assert _blob(repo, name) == data  # positive control: the raw bytes are committed
+    return repo
+
+
+def _prepare_coder(tmp_path, repo):
     runs = tmp_path / "runs"
     run_record.create(runs, "task", repo, b"Implement public behavior")
     dest = tmp_path / "coder"
-    result = role_inputs.prepare(runs, "task", "coder", dest, [], [])
-    # Positive control: the clone holds CRLF bytes; its first commit stores them normalized.
+    return dest, runs, role_inputs.prepare(runs, "task", "coder", dest, [], [])
+
+
+@pytest.fixture
+def normalized(tmp_path):
+    """A Coder projection of a CRLF and an LF text file under `*.txt text`."""
+    repo = _attributes_source(tmp_path / "source", {
+        "src/app.py": b"IMPLEMENTATION\n", "api/crlf.txt": b"one\r\ntwo\r\n",
+        "api/lf.txt": b"one\ntwo\n"})
+    dest, runs, result = _prepare_coder(tmp_path, repo)
+    # prepare writes the source blob's raw bytes, while the clone's own first commit (made by
+    # `git add` under the attributes) stores them normalized: that commit is not the baseline.
     assert (dest / "api/crlf.txt").read_bytes() == b"one\r\ntwo\r\n"
-    assert subprocess.run(["git", "-C", str(dest), "show", "HEAD:api/crlf.txt"], check=True,
-                          capture_output=True).stdout == b"one\ntwo\n"
+    assert _blob(dest, "api/crlf.txt") == b"one\ntwo\n"
     return dest, runs, result
 
 
 @pytest.mark.parametrize("change,expected", [
     ("none", None),
-    # Amendment 3: compared as `git add` would commit it now, the CRLF file is unchanged.
+    # Untouched CRLF bytes are the source blob's bytes, whatever the attributes say.
     ("link", LINKS + "src/zz_link"),
     ("content", CHANGES + "changed api/crlf.txt"),
-    ("link+content", LINKS + "src/zz_link" + BOTH + "changed api/crlf.txt"),
-    # LF bytes commit as the same blob, so nothing can be named; the tree digest differs.
-    ("line endings", UNSHOWN),
+    # Line endings are content, in either direction, named in the same refusal as the rest.
+    ("to LF", CHANGES + "changed api/crlf.txt"),
+    ("to CRLF", CHANGES + "changed api/lf.txt"),
+    ("to LF+to CRLF+link", LINKS + "src/zz_link" + BOTH + "changed api/crlf.txt, api/lf.txt"),
+    # The attributes are only a file: removing or editing them names only them.
+    ("remove attributes", CHANGES + "removed .gitattributes"),
+    ("edit attributes", CHANGES + "changed .gitattributes"),
+    ("edit attributes+link", LINKS + "src/zz_link" + BOTH + "changed .gitattributes"),
 ])
-def test_contents_are_compared_as_git_would_commit_them(normalized, change, expected):
+def test_contents_are_raw_bytes_and_line_endings_are_content(normalized, change, expected):
     dest, runs, result = normalized
-    if "link" in change:
+    kinds = change.split("+")
+    if "link" in kinds:
         _link_dir(dest / "src/zz_link", "../api")
-    if "content" in change:
+    if "content" in kinds:
         (dest / "api/crlf.txt").write_bytes(b"one\r\nTHREE\r\n")
-    if change == "line endings":
+    if "to LF" in kinds:
         (dest / "api/crlf.txt").write_bytes(b"one\ntwo\n")
+    if "to CRLF" in kinds:
+        (dest / "api/lf.txt").write_bytes(b"one\r\ntwo\r\n")
+    if "remove attributes" in kinds:
+        (dest / ".gitattributes").unlink()
+    if "edit attributes" in kinds:
+        (dest / ".gitattributes").write_text("* text=auto eol=crlf\n")
     if expected is None:
         assert role_inputs.verify(runs, "task", "coder", dest) == result
     else:
         assert _refusal(runs, dest) == expected
 
 
-# From amendment 6: a leading '"' and a newline. Inferred: Git quotes a tab and non-ASCII
-# bytes in its plain output the same way, so those are names of the same kind.
-ODD_NAMES = ['"quoted.txt', "line\nbreak.txt", "tab\tand space.txt", "café.txt"]
+PLANTED_HOOKS = ["pre-commit", "prepare-commit-msg", "commit-msg", "post-commit",
+                 "post-checkout", "post-merge", "post-rewrite", "post-index-change",
+                 "reference-transaction", "pre-auto-gc", "fsmonitor-watchman"]
+
+
+def _plant(dest, outside, attributes):
+    """Arm the clone so Git, run there with its own config and attributes, runs a planted
+    program; every run leaves a file named for what ran in outside/sentinels."""
+    sentinels = outside / "sentinels"
+    sentinels.mkdir(parents=True)
+    program = outside / "planted.sh"
+    program.write_text(
+        "#!/bin/sh\n"
+        f': > "{sentinels}/$1"\n'
+        'case "$1" in clean|smudge) exec cat ;; textconv) exec cat "$2" ;; esac\n'
+        "exit 0\n")
+    program.chmod(0o755)
+    hooks = outside / "hooks"
+    hooks.mkdir()
+    for hook in PLANTED_HOOKS:
+        (hooks / hook).write_text(f'#!/bin/sh\nexec "{program}" hook-{hook}\n')
+        (hooks / hook).chmod(0o755)
+    for key, value in {"filter.plant.clean": f"{program} clean",
+                       "filter.plant.smudge": f"{program} smudge",
+                       "filter.plant.process": f"{program} process",
+                       "diff.plant.textconv": f"{program} textconv",
+                       "diff.external": f"{program} external-diff",
+                       "core.fsmonitor": f"{program} fsmonitor",
+                       "core.hooksPath": str(hooks)}.items():
+        _git(dest, "config", key, value)
+    (dest / attributes).write_text("* filter=plant diff=plant\n")
+    return sentinels
+
+
+def _fired(dest, sentinels):
+    """Positive control: plain Git commands in the clone do run the planted program."""
+    def git(*args):
+        subprocess.run(["git", "-C", str(dest), *args], capture_output=True)
+
+    # The planted process filter takes the place of clean and fails (aborting a diff), and
+    # the planted fsmonitor reports that nothing changed: each is set aside only while the
+    # plants behind it are shown to run, and the clone is left fully armed.
+    process = _git(dest, "config", "filter.plant.process")
+    _git(dest, "config", "--unset", "filter.plant.process")
+    git("hash-object", "src/app.py")
+    git("-c", "core.fsmonitor=false", "diff")
+    git("-c", "core.fsmonitor=false", "diff", "--no-ext-diff")
+    _git(dest, "config", "filter.plant.process", process)
+    git("hash-object", "src/app.py")
+    git("status")
+    git("hook", "run", "pre-commit")
+    fired = {path.name for path in sentinels.iterdir()}
+    for path in sentinels.iterdir():
+        path.unlink()
+    return fired
+
+
+@pytest.mark.parametrize("attributes,expected", [
+    (".git/info/attributes", CHANGES + "changed src/app.py"),
+    (".gitattributes", CHANGES + "added .gitattributes; changed src/app.py"),
+])
+def test_a_refusal_runs_nothing_the_clone_configures(tmp_path, coder, attributes, expected):
+    # Codex review of #122: hashing with the clone's attributes ran its filter.*.clean.
+    dest, runs, _, _ = coder
+    sentinels = _plant(dest, tmp_path / "outside", attributes)
+    (dest / "src/app.py").write_text("CHANGED\n")  # so verify refuses and compares contents
+    fired = _fired(dest, sentinels)
+    assert {"process", "clean", "fsmonitor", "external-diff", "textconv",
+            "hook-pre-commit"} <= fired, fired
+    assert _refusal(runs, dest) == expected
+    refused = subprocess.run(
+        [sys.executable, str(REPO / "harness/role_inputs.py"), "verify", "--runs", str(runs),
+         "--run", "task", "--role", "coder", "--repo", str(dest)],
+        env=_environment(tmp_path), capture_output=True, text=True)
+    assert refused.returncode == 70 and "role inputs: " + expected in refused.stderr
+    brief = tmp_path / "brief"
+    brief.write_text("Implement behavior")
+    launched = subprocess.run(["bash", str(REPO / "harness/tmux_lane.sh"), "task", "coder",
+                               "launch", "--runs", str(runs), "--repo", str(dest), "--prompt",
+                               str(brief)], env=_environment(tmp_path), capture_output=True,
+                              text=True)
+    assert launched.returncode != 0 and expected in launched.stderr
+    assert sorted(path.name for path in sentinels.iterdir()) == []
+
+
+# Every name the same way: a leading quote at the root, a newline, a trailing CR, a tab and
+# non-ASCII. The .txt ones hold CRLF bytes under `*.txt text`.
+ODD_NAMES = ['"quoted.txt', "line\nbreak.txt", "trailing\r", "tab\tname.txt", "café.txt"]
 
 
 @pytest.fixture
 def odd(tmp_path):
-    """A Coder projection whose committed names Git quotes or escapes in its plain output."""
-    repo = tmp_path / "source"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    _write(repo / "src/app.py", "IMPLEMENTATION\n")
-    for name in ODD_NAMES:
-        _write(repo / "docs" / name, f"{name}\n")
-    _commit(repo, "odd names")
-    runs = tmp_path / "runs"
-    run_record.create(runs, "task", repo, b"Implement public behavior")
-    dest = tmp_path / "coder"
-    result = role_inputs.prepare(runs, "task", "coder", dest, [], [])
-    assert sorted(result["files"]) == sorted(["src/app.py", *(f"docs/{n}" for n in ODD_NAMES)])
+    files = {"src/app.py": b"IMPLEMENTATION\n"}
+    files.update({name: name.encode() + b"\r\n" for name in ODD_NAMES})
+    dest, runs, result = _prepare_coder(tmp_path, _attributes_source(tmp_path / "source", files))
+    assert sorted(result["files"]) == sorted([".gitattributes", *files])
     return dest, runs, result
 
 
-@pytest.mark.parametrize("name", ODD_NAMES)
-def test_a_committed_odd_name_verifies_and_is_named_when_edited(odd, name):
-    # Amendment 6: unchanged passes; an edit names the path as it is.
+def test_odd_names_left_untouched_are_never_named(odd):
     dest, runs, result = odd
     assert role_inputs.verify(runs, "task", "coder", dest) == result
-    (dest / "docs" / name).write_text("CHANGED\n")
-    assert _refusal(runs, dest) == CHANGES + "changed docs/" + name
+    (dest / "src/app.py").write_text("CHANGED\n")  # so verify compares every file
+    assert _refusal(runs, dest) == CHANGES + "changed src/app.py"
+
+
+@pytest.mark.parametrize("name", ODD_NAMES)
+def test_an_edited_odd_name_is_named_as_it_is(odd, name):
+    dest, runs, _ = odd
+    (dest / name).write_bytes(b"CHANGED\r\n")
+    assert _refusal(runs, dest) == CHANGES + "changed " + name
 
 
 def _break_first_commit(dest):
-    """Delete the first commit's root tree object; HEAD still resolves to that commit."""
+    """Delete the clone's first commit's root tree object; HEAD still resolves to it."""
     tree = _git(dest, "rev-parse", "HEAD^{tree}")
     loose = dest / ".git/objects" / tree[:2] / tree[2:]
     assert loose.is_file()  # positive control: a loose object this test can remove
@@ -475,27 +599,143 @@ def _break_first_commit(dest):
     _git(dest, "rev-parse", "HEAD")  # still resolves
 
 
-def test_an_unreadable_first_commit_is_said_to_be_unreadable(coder):
-    # Amendment 5: with no problem, the refusal says no change can be named, and why.
+@pytest.mark.parametrize("change,expected", [
+    ("content", CHANGES + "changed src/app.py"),
+    ("link+content", LINKS + "src/zz_link" + BOTH + "changed src/app.py"),
+])
+def test_a_corrupt_first_commit_in_the_clone_does_not_matter(coder, change, expected):
+    # The baseline is the source commit, so the clone's own objects are never read for it.
     dest, runs, _, _ = coder
     _break_first_commit(dest)
+    if "link" in change:
+        _link_dir(dest / "src/zz_link", "../docs")
     (dest / "src/app.py").write_text("CHANGED\n")
-    message = _refusal(runs, dest)
-    prefix = CHANGES + "none can be named: " + UNREAD_BASELINE
-    assert message.startswith(prefix) and message.endswith(")"), message
-    assert len(message) > len(prefix) + 1  # Git's error is carried
+    assert _refusal(runs, dest) == expected
 
 
-def test_an_unreadable_first_commit_still_names_the_problems(coder):
-    # Amendment 5: with a problem, the problems are named and other changes cannot be.
-    dest, runs, _, _ = coder
-    _break_first_commit(dest)
-    _link_dir(dest / "src/zz_link", "../docs")
-    (dest / "src/app.py").write_text("CHANGED\n")
-    message = _refusal(runs, dest)
-    prefix = LINKS + "src/zz_link; other changes cannot be named: " + UNREAD_BASELINE
+def _break_source(source, how, commit):
+    if how == "not a repository":
+        shutil.rmtree(source)
+        source.mkdir()
+    elif how == "commit object missing":
+        loose = source / ".git/objects" / commit[:2] / commit[2:]
+        assert loose.is_file()  # positive control: a loose object this test can remove
+        loose.unlink()
+    else:
+        shutil.move(source, source.with_name("moved"))
+
+
+def _assert_unreadable_source(message, named):
+    prefix = named + "the source commit could not be read ("
     assert message.startswith(prefix) and message.endswith(")"), message
-    assert len(message) > len(prefix) + 1
+    assert len(message) > len(prefix) + 1  # the error is carried
+
+
+@pytest.mark.parametrize("how", ["not a repository", "commit object missing"])
+@pytest.mark.parametrize("change,named", [
+    ("content", CHANGES + "none can be named: "),
+    ("add+remove+content",
+     CHANGES + "added leaked.py; removed src/mod1.py; other changes cannot be named: "),
+    ("link+content", LINKS + "src/zz_link; other changes cannot be named: "),
+    # Inferred: problems, then the changes part, then what cannot be named.
+    ("link+add+content",
+     LINKS + "src/zz_link" + BOTH + "added leaked.py; other changes cannot be named: "),
+])
+def test_an_unreadable_source_commit_still_names_problems_added_and_removed(inputs, coder, how,
+                                                                           change, named):
+    source, _, _ = inputs
+    dest, runs, _, result = coder
+    _break_source(source, how, result["source_commit"])
+    kinds = change.split("+")
+    if "link" in kinds:
+        _link_dir(dest / "src/zz_link", "../docs")
+    if "add" in kinds:
+        _write(dest / "leaked.py", "IMPLEMENTATION")
+    if "remove" in kinds:
+        (dest / "src/mod1.py").unlink()
+    (dest / "src/app.py").write_text("CHANGED\n")
+    _assert_unreadable_source(_refusal(runs, dest), named)
+
+
+NOT_HELD = ("the source commit could not be read "
+            "(the source commit does not hold every prepared file)")
+
+
+def _commit_without(source, name):
+    """A commit object in source whose tree is HEAD's minus name; HEAD does not move."""
+    env = {**os.environ, "GIT_INDEX_FILE": str(source.parent / "without-index")}
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(source), *args], env=env, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    git("read-tree", "HEAD")
+    git("rm", "-q", "--cached", "--", name)
+    commit = git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                 "commit-tree", git("write-tree"), "-m", "earlier, without " + name)
+    assert name not in _git(source, "ls-tree", "-r", "--name-only", commit).splitlines()
+    return commit
+
+
+def _edit_receipt(root, **changes):
+    path = root / "inputs/coder.json"
+    receipt = json.loads(path.read_text())
+    receipt.update(changes)
+    path.write_text(json.dumps(receipt, indent=2) + "\n")
+
+
+@pytest.mark.parametrize("edit,change,expected", [
+    # The receipt's source_commit names a commit that lacks the prepared src/mod1.py.
+    ("earlier commit", "content", CHANGES + "none can be named: " + NOT_HELD),
+    ("earlier commit", "link+add+content",
+     LINKS + "src/zz_link" + BOTH + "added leaked.py; other changes cannot be named: "
+     + NOT_HELD),
+    # A name the source commit never held is added to the receipt's files.
+    ("name in files, file present", "content", CHANGES + "none can be named: " + NOT_HELD),
+    # Inferred: a listed name missing from the clone is removed, as for any listed file.
+    ("name in files, file absent", "content",
+     CHANGES + "removed src/ghost.py; other changes cannot be named: " + NOT_HELD),
+])
+def test_a_source_commit_missing_a_prepared_file_is_said_to_be_unreadable(inputs, coder, edit,
+                                                                          change, expected):
+    # Validator mutation run: with this check dropped, the missing file was silently skipped.
+    source, _, root = inputs
+    dest, runs, _, result = coder
+    if edit == "earlier commit":
+        _edit_receipt(root, source_commit=_commit_without(source, "src/mod1.py"))
+    else:
+        _edit_receipt(root, files=sorted([*result["files"], "src/ghost.py"]))
+        if edit.endswith("present"):
+            _write(dest / "src/ghost.py", "GHOST\n")
+    if "link" in change:
+        _link_dir(dest / "src/zz_link", "../docs")
+    if "add" in change:
+        _write(dest / "leaked.py", "IMPLEMENTATION")
+    (dest / "src/app.py").write_text("CHANGED\n")  # a real edit, so the digest differs
+    assert _refusal(runs, dest) == expected
+
+
+@pytest.mark.parametrize("change", ["none", "add+remove"])
+def test_a_moved_source_repository_is_refused_as_main_refuses_it(tmp_path, inputs, coder,
+                                                                 change):
+    # Unchanged from ecddf63: verify loads the run record first, and that refuses a task
+    # whose repository is gone, clean clone or not, before any comparison.
+    source, _, root = inputs
+    dest, runs, _, result = coder
+    _break_source(source, "moved", result["source_commit"])
+    if change != "none":
+        _write(dest / "leaked.py", "IMPLEMENTATION")
+        (dest / "src/mod1.py").unlink()
+    assert _refusal(runs, dest) == "recorded repository is unavailable"
+    _record_launch(root, "coder", dest)
+    with pytest.raises(ValueError) as refused:  # a replacement round is not admitted either
+        role_inputs.verify(runs, "task", "coder", dest, replacing=True)
+    assert str(refused.value) == "recorded repository is unavailable"
+    command = [sys.executable, str(REPO / "harness/role_inputs.py"), "verify", "--runs",
+               str(runs), "--run", "task", "--role", "coder", "--repo", str(dest)]
+    cli = subprocess.run(command, env=_environment(tmp_path), capture_output=True, text=True)
+    assert cli.returncode == 70 and cli.stdout == ""  # no receipt is printed
+    assert cli.stderr.splitlines() == ["role inputs: recorded repository is unavailable"]
 
 
 # --- unrecorded changes ---------------------------------------------------------------------
@@ -646,23 +886,34 @@ def test_git_state_in_the_clone_cannot_hide_a_change(coder, state, expected):
     ("delete", CHANGES + "removed " + MARKER),
     ("rewrite", CHANGES + "changed " + MARKER),
     ("file link", CHANGES + "changed " + MARKER),
-    # Neither non-empty nor irregular: only its mode differs, which no commit records.
-    ("chmod", UNSHOWN),
+    # It must be a regular empty file with mode 0600: any other mode is named too.
+    ("chmod 644", CHANGES + "changed " + MARKER),
+    ("chmod 400", CHANGES + "changed " + MARKER),
+    ("chmod 644+content", CHANGES + "changed " + MARKER + ", src/app.py"),
+    ("chmod 400+link", LINKS + "src/zz_link" + BOTH + "changed " + MARKER),
     ("delete+remove", CHANGES + "removed " + MARKER + ", src/mod1.py"),
 ])
 def test_the_no_index_marker_is_named(coder, change, expected):
     # `git clean -fdx` in a lane clone deletes the marker: it is listed in .git/info/exclude.
     dest, runs, _, _ = coder
     marker = dest / MARKER
-    if "delete" in change or change == "file link":
+    assert stat.S_IMODE(marker.lstat().st_mode) == 0o600  # positive control: as prepared
+    kinds = change.split("+")
+    if "delete" in kinds or "file link" in kinds:
         marker.unlink()
-    if change == "rewrite":
+    if "rewrite" in kinds:
         marker.write_text("rewritten\n")
-    if change == "file link":
+    if "file link" in kinds:
         marker.symlink_to("api/spec.txt")
-    if change == "chmod":
+    if "chmod 644" in kinds:
         _chmod(marker, 0o644)
-    if "remove" in change:
+    if "chmod 400" in kinds:
+        _chmod(marker, 0o400)
+    if "content" in kinds:
+        (dest / "src/app.py").write_text("CHANGED\n")
+    if "link" in kinds:
+        _link_dir(dest / "src/zz_link", "../docs")
+    if "remove" in kinds:
         (dest / "src/mod1.py").unlink()
     assert _refusal(runs, dest) == expected
 
