@@ -701,8 +701,8 @@ class LaneWatch:
 
         One notice per new count of turn ends, sent once the session's phase says the turn
         ended; a count seen while the session is in another phase waits for that. The count is
-        noticed only when the notice is made. Notices are queued in order and an inbox message
-        that could not be written is retried at each check (``_deliver_turn_notices``). The
+        noticed only when the notice is made. Notices are queued in order, each with its wake,
+        and what could not be done is retried at each check (``_deliver_turn_notices``). The
         time this check saw the turn end restarts the stall window: the session's own
         ``stop_reported_at`` is set only for the first stop after a prompt.
         """
@@ -731,57 +731,83 @@ class LaneWatch:
                                                            DEFAULT_STALL_WINDOW_S))
             detail += (f"; unless it commits or is continued, it is stopped as stalled "
                        f"{window / 60:.0f} min after this turn end")
-        self._wake(launch, "lane-turn-ended", detail, refusal=False)
         state["turn_end_seen_at"] = self.now()
         state.setdefault("turn_notices", []).append({
             "text": (f"FACTORY_LANE_TURN_ENDED {lane}: {detail}. A turn's end is not acceptance "
                      "of its work. Evaluate it, then continue the lane or close it."),
-            "lane": lane, "failed": False})
-        self._deliver_turn_notices(state)
+            "lane": lane, "failed": False, "wake": detail})
+        self._deliver_turn_notices(launch, state)
 
-    def _deliver_turn_notices(self, state: dict[str, Any]) -> None:
-        """Write pending turn-end notices to the Validator's inbox, oldest first; keep the rest
-        when one fails, each recorded once as undelivered. They outlive the watch's life and
-        status, so none is dropped. A write that failed after its row was committed (the
-        directory sync) is found delivered rather than written twice."""
+    def _deliver_turn_notices(self, launch: Mapping[str, Any], state: dict[str, Any]) -> None:
+        """Make each pending turn-end notice: its wake, then its inbox message, oldest first.
+
+        Notices outlive the watch's life and status, so none is dropped. They are on record,
+        with the inbox's end, before any is attempted, so a check that dies mid-way, or whose
+        write failed after its row was committed (the directory sync), does not tell one twice.
+        What could not be done is retried at the next check; each sink is waited on at most
+        once a check, and each message not delivered is recorded once as undelivered.
+        """
         notices = state.get("turn_notices")
         if not isinstance(notices, list) or not notices:
-            return
-        failed = getattr(self, "_inbox_failed", "")
-        if failed:  # the inbox already failed this check: one wait per check, then the next
-            self._undelivered(notices, failed)
             return
         harness = str(pathlib.Path(__file__).resolve().parent)
         if harness not in sys.path:
             sys.path.insert(0, harness)
         import run_record
+        from attention_gate import AttentionGateError
 
-        while notices:
-            notice, text = notices[0], str(notices[0].get("text"))
+        wait = run_record.SUPERVISOR_WAIT_S
+        for notice in notices:
+            if "inbox_from" not in notice:
+                notice["inbox_from"] = run_record.inbox_end(self.root, "validator")
+        self._write_state(state)
+        for notice in notices:
+            if notice.get("wake") is None or getattr(self, "_events_failed", False):
+                continue
             try:
-                if not (notice.get("failed")
-                        and run_record.delivered(self.root, "validator", "host", text)):
-                    run_record.message(self.root, "validator", "host", text,
-                                       wait_s=run_record.SUPERVISOR_WAIT_S)
+                self._wake(launch, "lane-turn-ended", str(notice["wake"]), refusal=False,
+                           wait_s=wait)
+            except (OSError, AttentionGateError):
+                self._events_failed = True  # the event log stayed locked: woken at a later check
+            else:
+                notice["wake"] = None
+        for notice in notices:
+            if notice.get("sent") or getattr(self, "_inbox_failed", ""):
+                continue  # in order: none after one that failed
+            text = str(notice.get("text"))
+            try:
+                if not run_record.delivered(self.root, "validator", "host", text,
+                                            since=int(notice["inbox_from"])):
+                    run_record.message(self.root, "validator", "host", text, wait_s=wait)
             except (OSError, ValueError) as error:
-                # Degraded: the wake is recorded; the notices are retried at the next check.
                 self._inbox_failed = str(error) or type(error).__name__
-                self._undelivered(notices, self._inbox_failed)
-                return
-            notices.pop(0)
+            else:
+                notice["sent"] = True
+        failed = getattr(self, "_inbox_failed", "")
+        if failed:
+            self._undelivered(notices, failed)
+        notices[:] = [notice for notice in notices
+                      if not notice.get("sent") or notice.get("wake") is not None]
 
     def _undelivered(self, notices: list[dict[str, Any]], error: str) -> None:
-        """Record each queued notice once as undelivered, through the run's event writer."""
-        from attention_gate import _append_jsonl
+        """Record each message not delivered once as undelivered, through the run's event
+        writer, waiting on its lock at most once a check."""
+        import run_record
+        from attention_gate import AttentionGateError, _append_jsonl
 
         for notice in notices:
-            if not notice.get("failed"):
-                notice["failed"] = True
+            if notice.get("failed") or notice.get("sent") or getattr(self, "_events_failed", False):
+                continue
+            try:
                 _append_jsonl(self.root / "events.jsonl", {
                     "ts": _iso(self.now()), "kind": "lane-turn-notice-undelivered",
                     "class": "lane", "source": "watchdog.py lane",
                     "detail": f"{notice.get('lane')}: {error}"[:500], "wake": False,
-                })
+                }, wait_s=run_record.SUPERVISOR_WAIT_S)
+            except (OSError, AttentionGateError):
+                self._events_failed = True  # recorded at a later check
+            else:
+                notice["failed"] = True
 
     @staticmethod
     def _claim_fresh(state: Mapping[str, Any], native: Mapping[str, Any]) -> bool:
@@ -881,6 +907,7 @@ class LaneWatch:
             "commits": list(prior.get("commits", [])),
             "hold_ts": None,
             "reviews": int(prior.get("reviews", 0)),
+            "review_held_s": float(prior.get("review_held_s", 0.0)),
             "wrapup_sent": bool(prior.get("wrapup_sent", False)),
             "continued": continued,
             "completion_claim": False,
@@ -910,7 +937,10 @@ class LaneWatch:
 
     # -- effects -----------------------------------------------------------------------------
 
-    def _wake(self, launch: Mapping[str, Any], kind: str, detail: str, *, refusal: bool) -> None:
+    def _wake(self, launch: Mapping[str, Any], kind: str, detail: str, *, refusal: bool,
+              wait_s: float | None = None) -> None:
+        """Record a wake for the run. With ``wait_s``, an event log another writer holds longer
+        than that raises AttentionGateError before any of the wake is done."""
         harness = str(pathlib.Path(__file__).resolve().parent)
         if harness not in sys.path:
             sys.path.insert(0, harness)
@@ -924,7 +954,7 @@ class LaneWatch:
             _append_jsonl(self.root / "events.jsonl", {
                 "ts": _iso(self.now()), "kind": kind, "class": "lane",
                 "source": "watchdog.py lane", "detail": message[:4096], "wake": True,
-            })
+            }, wait_s=wait_s)
         _append_row(self.lanes / "wake.jsonl", {
             "ts": _iso(self.now()), "kind": kind, "slot": self.slot, "detail": detail[:4096],
         })
@@ -1061,9 +1091,9 @@ class LaneWatch:
     def check(self) -> str:
         launch = self.launch()
         state = _load_json(self.state_path)
-        self._inbox_failed = ""
+        self._inbox_failed, self._events_failed = "", False
         if state.get("turn_notices"):
-            self._deliver_turn_notices(state)
+            self._deliver_turn_notices(launch, state)
             self._write_state(state)
         if state.get("status") in LANE_FINAL:
             return str(state["status"])
@@ -1161,8 +1191,8 @@ class LaneWatch:
         # (as before), unless its session is known to have died; so does its session's own
         # report that it waits, while its session is seen running. A stop report alone does
         # not: the session may continue past it, so it only restarts the window above. A pause
-        # or wrap-up has nothing to interrupt while it waits, and a review that falls due then
-        # is not owed once the lane is continued: the Validator was told of the turn's end.
+        # or wrap-up has nothing to interrupt while it waits, and the time it waits is not work
+        # a review is owed for: the Validator was told of the turn's end.
         session = (self._session(native) if native.get("phase") in STOPPED_PHASES
                    else "unknown")
         waiting = ((self._claim_fresh(state, native) and native.get("phase") in STOPPED_PHASES
@@ -1171,8 +1201,7 @@ class LaneWatch:
         wall_cap = caps.get("wall_cap_s")
         wrap_s = float(watch.get("wrap_s") or 0)
         review_s = float(watch.get("review_every_s") or 0)
-        if waiting and review_s > 0:
-            state["reviews"] = max(int(state.get("reviews", 0)), int(active // review_s))
+        self._held_for_reviews(state, active, "waiting", waiting)
         resumable = self._resumable(launch) and not waiting
         if (
             resumable and wall_cap is not None and wrap_s > 0 and not state.get("wrapup_sent")
@@ -1182,7 +1211,8 @@ class LaneWatch:
                                  idle, summary)
         if (
             resumable and review_s > 0 and idle <= window
-            and active >= review_s * (int(state.get("reviews", 0)) + 1)
+            and active - float(state.get("review_held_s", 0.0))
+            >= review_s * (int(state.get("reviews", 0)) + 1)
             and (wall_cap is None or float(wall_cap) - active > wrap_s + REVIEW_HEADROOM_S)
         ):
             return self._pause_for_review(launch, state, current, active, idle, summary)
@@ -1208,6 +1238,23 @@ class LaneWatch:
         return "watching"
 
     # -- pausing and wrapping up: the turn ends, the thread is continued by a lane message ---------
+
+    @staticmethod
+    def _held_for_reviews(state: dict[str, Any], active: float, reason: str,
+                          held: bool) -> None:
+        """Time a lane is held by someone else (at a host dialog, waiting for the Validator) is
+        not work a progress review is owed for: the review rule counts active time less
+        ``review_held_s``. The active time from a check at which any reason held the lane to
+        the next check is added to it once, however many reasons there are; ``held`` says
+        whether ``reason`` holds it at this check."""
+        last = state.get("review_held_active")
+        if last != active:
+            if isinstance(last, (int, float)) and any(
+                    (state.get("review_held_by") or {}).values()):
+                state["review_held_s"] = float(state.get("review_held_s", 0.0)) + max(
+                    0.0, active - float(last))
+            state["review_held_active"], state["review_held_by"] = active, {}
+        state["review_held_by"][reason] = held
 
     def _pause_for_review(self, launch: Mapping[str, Any], state: dict[str, Any], current: float,
                           active: float, idle: float, summary: str) -> str:

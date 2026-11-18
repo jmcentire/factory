@@ -27,17 +27,19 @@ amended after review):
 3. A slot's first watch has told no turn ends. Every later arm (a restart, a new life, a re-arm
    after a final status) carries the noticed count; a watch state without one takes the
    current count as noticed. A lower count is a new session.
-4. Notices are queued: an undeliverable one is recorded once and retried at every check,
-   whatever the watch status and into a new life, and delivered in order, exactly once. A
-   held inbox lock delays a notice (the check gives up within seconds), never the watcher;
-   a write that failed after its row was committed is not repeated. Each notice says when
-   its turn end was seen.
+4. Notices, each with its wake, are queued and on record in the watch state before anything
+   is told: an undeliverable message or wake is retried at every check, whatever the watch
+   status and into a new life, and given in order, exactly once, even across a watcher that
+   died mid-delivery. A held inbox or events-log lock delays them (the check gives up within
+   seconds), never the watcher; a failed message is recorded once, through the run's event
+   writer; a write that failed after its row was committed is not repeated, however much the
+   inbox grew since. Each notice says when its turn end was seen.
 5. The stall clock restarts at the record's turn timestamps and at the check that announced a
    turn end. A lane is spared the stall stop, the review pause and the wrap-up only while (a)
    it printed a done line this turn, its turn ended (not failed) and its session is not
    positively dead, or (b) it says it waits for input and this check saw its session's own
-   worker and wrapper alive. A review that falls due while it waits is not owed afterwards.
-   The caps always apply.
+   worker and wrapper alive. Time spent waiting is not work a review is owed for, in this
+   life or the next. The caps always apply.
 
 The real ``LaneWatch`` runs against a synthetic run root. Doubles sit only at its declared
 seams, as in tests/test_lane_controls.py: the clock, the tmux runner, the process table, the
@@ -65,7 +67,7 @@ from typing import Any
 
 import pytest
 
-from harness import lane_agent, lane_watchdog, run_record
+from harness import attention_gate, lane_agent, lane_watchdog, run_record
 
 T0 = 1_791_000_000.0
 READ_ALLOWANCE_S = 900
@@ -990,13 +992,13 @@ HOLDER = (
 )
 
 
-class InboxLock:
-    """Another writer holding ``fcntl.flock(LOCK_EX)`` on an inbox file."""
+class HeldLock:
+    """Another writer holding ``fcntl.flock(LOCK_EX)`` on a file (an inbox, the events log)."""
 
-    def __init__(self, inbox: Path, hold_s: float = 40.0) -> None:
-        inbox.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    def __init__(self, path: Path, hold_s: float = 40.0) -> None:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.process = subprocess.Popen(
-            [sys.executable, "-I", "-c", HOLDER, str(inbox), str(hold_s)],
+            [sys.executable, "-I", "-c", HOLDER, str(path), str(hold_s)],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         assert self.process.stdout is not None
         assert self.process.stdout.readline().strip() == "locked"
@@ -1033,7 +1035,7 @@ def test_a_held_inbox_lock_delays_the_notices_but_never_the_watcher(tmp_path: Pa
     assert watched.undelivered() == 1
     _unblock(watched, "symlink")
 
-    holder = InboxLock(watched.root / "validator" / "inbox.jsonl")
+    holder = HeldLock(watched.root / "validator" / "inbox.jsonl")
     try:
         for count, phase, at in ((2, "waiting-for-input", 120), (3, "stop-reported", 180)):
             _new_turn(watched, CLAUDE, at=at - 30)
@@ -1066,7 +1068,7 @@ def test_a_message_without_a_wait_still_waits_for_the_inbox_lock(
 
     root = tmp_path / "run"
     inbox = root / "validator" / "inbox.jsonl"
-    holder = InboxLock(inbox)
+    holder = HeldLock(inbox)
     errors: list[BaseException] = []
 
     def send() -> None:
@@ -1194,6 +1196,469 @@ def test_a_notice_says_when_its_turn_end_was_seen(tmp_path: Path) -> None:
     assert _seen(360) not in first + second
     assert [row["ts"] for row in watched.events("lane-turn-ended")] == [_seen(120), _seen(180)]
     assert first != second
+
+
+def _seen_order(rows: list[dict[str, Any]]) -> list[str]:
+    """The seen times the wake rows carry, in the order they were written."""
+    return [match.group(1) for row in rows
+            for match in [re.search(r"\(seen ([^)]+)\)", str(row.get("detail", "")))] if match]
+
+
+def test_a_locked_events_log_queues_the_wake_but_not_the_message(tmp_path: Path) -> None:
+    """Falsifier: a check that blocks on another writer of the events log, drops the wake it
+    could not write, wakes again for a turn end already woken, or wakes out of order; the
+    Validator's message held back with the wake."""
+
+    watched = _session(tmp_path / "lane", CLAUDE, None, 0)
+    assert watched.at(30) == "watching"
+    holder = HeldLock(watched.root / "events.jsonl")
+    try:
+        for count, phase, at in ((1, "stop-reported", 60), (2, "waiting-for-input", 120)):
+            if count > 1:
+                _new_turn(watched, CLAUDE, at=at - 50)
+            _ends_turn(watched, CLAUDE, phase, count, at=at - 20)
+            outcome, took = _timed_check(watched, at)
+            assert outcome == "watching" and took < 8, took
+            assert watched.events("lane-turn-ended") == []
+            assert watched.wakes("lane-turn-ended") == []
+            assert len(watched.texts()) == count  # the message does not wait for the wake
+    finally:
+        holder.release()
+
+    assert watched.at(150) == "watching"
+    expected = [_seen(60), _seen(120)]
+    assert _seen_order(watched.events("lane-turn-ended")) == expected
+    assert _seen_order(watched.wakes("lane-turn-ended")) == expected
+    first, second = watched.texts()
+    assert f"(seen {_seen(60)})" in first and f"(seen {_seen(120)})" in second
+    assert watched.at(180) == "watching"
+    assert len(watched.events("lane-turn-ended")) == len(watched.wakes("lane-turn-ended")) == 2
+    assert len(watched.texts()) == 2
+
+
+@pytest.mark.parametrize("status", ["exited", "stalled", "paused", "new-life"])
+def test_a_queued_wake_is_given_whatever_the_watch_status(tmp_path: Path, status: str) -> None:
+    """Falsifier: a wake queued behind a locked events log dropped once the lane is finished,
+    stopped for a stall, paused, or watched by a new life, or given twice."""
+
+    options: dict[str, Any] = {"watch": REVIEWED, "thread": True} if status == "paused" else {}
+    watched = _session(tmp_path / "lane", CLAUDE, None, 0, **options)
+    assert watched.at(30) == "watching"
+    holder = HeldLock(watched.root / "events.jsonl")
+    try:
+        _ends_turn(watched, CLAUDE, "stop-reported", 1, at=40)
+        outcome, took = _timed_check(watched, 60)
+        assert outcome == "watching" and took < 8, took
+        assert watched.wakes("lane-turn-ended") == []
+        if status == "new-life":  # a resumed turn's watcher takes over the queue
+            watched.clock.value = T0 + 90
+            watched.watch.arm(new_life=True)
+    finally:
+        holder.release()
+
+    if status == "exited":
+        lane_agent.record_exit(watched.exits, slot="tester", rc=1, stopped=False)
+        watched.kill()
+        reached = 90
+    elif status == "stalled":
+        reached = STALL_AT + 1
+    elif status == "paused":
+        reached = 1080
+    else:
+        reached = 120
+    expected = "watching" if status == "new-life" else status
+    for seconds in (reached, reached + 30, reached + 60):
+        assert watched.at(seconds) == expected
+    assert _seen_order(watched.events("lane-turn-ended")) == [_seen(60)]
+    assert _seen_order(watched.wakes("lane-turn-ended")) == [_seen(60)]
+    assert len(watched.texts()) == 1
+
+
+def test_with_the_events_log_and_the_inbox_locked_a_check_is_still_bounded(
+    tmp_path: Path,
+) -> None:
+    """Falsifier: a check that waits on both locks for each notice (or without bound); a
+    turn end whose wake or message is lost, doubled or reordered once both are released; a
+    failed message recorded more than once. (Whether a failure that cleared with both locks
+    is recorded at all, the contract does not say.)"""
+
+    watched = _session(tmp_path / "lane", CLAUDE, None, 0)
+    assert watched.at(30) == "watching"
+    events = HeldLock(watched.root / "events.jsonl")
+    inbox = HeldLock(watched.root / "validator" / "inbox.jsonl")
+    try:
+        for count, phase, at in ((1, "stop-reported", 60), (2, "waiting-for-input", 120)):
+            if count > 1:
+                _new_turn(watched, CLAUDE, at=at - 50)
+            _ends_turn(watched, CLAUDE, phase, count, at=at - 20)
+            outcome, took = _timed_check(watched, at)
+            assert outcome == "watching" and took < 13, took
+            assert watched.wakes("lane-turn-ended") == [] and watched.texts() == []
+    finally:
+        events.release()
+        inbox.release()
+
+    assert watched.at(150) == "watching"
+    expected = [_seen(60), _seen(120)]
+    assert _seen_order(watched.events("lane-turn-ended")) == expected
+    assert _seen_order(watched.wakes("lane-turn-ended")) == expected
+    first, second = watched.texts()
+    assert STOP_WORDS in first and f"(seen {_seen(60)})" in first
+    assert WAITING_WORDS in second and f"(seen {_seen(120)})" in second
+    assert watched.at(180) == "watching"
+    assert len(watched.wakes("lane-turn-ended")) == 2 and len(watched.texts()) == 2
+    assert watched.undelivered() <= 2
+
+
+def test_undelivered_rows_wait_for_the_events_log_and_are_recorded_once(tmp_path: Path) -> None:
+    """Falsifier: a ``lane-turn-notice-undelivered`` row written around the events log's lock,
+    or waited for without bound, or lost while the lock is held, or recorded at every
+    check once it is released."""
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    watched = _session(tmp_path / "lane", CLAUDE, None, 0)
+    _block(watched, "symlink", elsewhere)
+    assert watched.at(30) == "watching"
+    holder = HeldLock(watched.root / "events.jsonl")
+    try:
+        for count, phase, at in ((1, "stop-reported", 60), (2, "waiting-for-input", 120)):
+            if count > 1:
+                _new_turn(watched, CLAUDE, at=at - 50)
+            _ends_turn(watched, CLAUDE, phase, count, at=at - 20)
+            outcome, took = _timed_check(watched, at)
+            assert outcome == "watching" and took < 13, took
+            assert watched.undelivered() == 0 and watched.wakes("lane-turn-ended") == []
+    finally:
+        holder.release()
+
+    assert watched.at(150) == "watching"
+    assert watched.undelivered() == 2
+    assert len(watched.wakes("lane-turn-ended")) == 2 and watched.texts() == []
+    assert watched.at(180) == "watching"
+    assert watched.undelivered() == 2
+    _unblock(watched, "symlink")
+    assert watched.at(210) == "watching"
+    first, second = watched.texts()
+    assert STOP_WORDS in first and WAITING_WORDS in second
+    assert watched.at(240) == "watching"
+    assert watched.undelivered() == 2 and len(watched.texts()) == 2
+    assert list(elsewhere.iterdir()) == []
+
+
+@pytest.mark.parametrize("hook", ["wake-echo", "failing-message"])
+def test_an_undelivered_row_waits_on_the_events_log_only_so_long(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hook: str,
+) -> None:
+    """The turn end's wake is written; then, before the inbox write fails, another process
+    takes the events log's lock, so the undelivered row is the write that meets it. The lock
+    is taken from the wake's echo line (with a symlinked inbox) or from a failing
+    ``run_record.message`` on the watcher's own module. Falsifier: the undelivered row waiting
+    on the lock without bound (the watcher stops watching), written around the lock, lost, or
+    written again at every check; the message lost or doubled once the inbox works."""
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    watched = _session(tmp_path / "lane", CLAUDE, None, 0)
+    events = watched.root / "events.jsonl"
+    holders: list[HeldLock] = []
+    broken = [True]
+
+    def lock_events() -> None:
+        if not holders:  # returns once the other process holds the lock
+            holders.append(HeldLock(events))
+
+    assert watched.at(30) == "watching"
+    if hook == "wake-echo":
+        _block(watched, "symlink", elsewhere)
+
+        def echo(line: str) -> None:
+            watched.said.append(line)
+            if line.startswith("FACTORY_WAKE lane-turn-ended"):
+                lock_events()
+
+        watched.watch.echo = echo
+        count, at = 1, 60
+    else:
+        _ends_turn(watched, CLAUDE, "stop-reported", 1, at=40)
+        assert watched.at(60) == "watching"
+        assert len(watched.texts()) == 1  # the watcher's inbox writer is loaded now
+
+        def make(real: Any, fired: list[str]) -> Any:
+            def failing(*args: Any, **kwargs: Any) -> Any:
+                if broken[0]:
+                    fired.append("message")
+                    lock_events()
+                    raise OSError("the inbox cannot be written")
+                return real(*args, **kwargs)
+            return failing
+
+        _on_the_watchers_writer("message", monkeypatch, make)
+        _new_turn(watched, CLAUDE, at=70)
+        assert watched.at(90) == "watching"
+        count, at = 2, 120
+
+    try:
+        _ends_turn(watched, CLAUDE, "waiting-for-input", count, at=at - 20)
+        outcome, took = _timed_check(watched, at)
+        assert holders, "the events log was never locked between the wake and the inbox write"
+        assert outcome == "watching" and took < 8, took
+        assert _seen(at) in _seen_order(watched.wakes("lane-turn-ended"))  # the wake went first
+        assert watched.undelivered() == 0
+    finally:
+        for holder in holders:
+            holder.release()
+
+    assert watched.at(at + 30) == "watching"
+    assert watched.undelivered() == 1
+    assert watched.at(at + 60) == "watching"
+    assert watched.undelivered() == 1
+    assert len(watched.texts()) == count - 1
+    if hook == "wake-echo":
+        _unblock(watched, "symlink")
+    else:
+        broken[0] = False
+    assert watched.at(at + 90) == "watching"
+    texts = watched.texts()
+    assert len(texts) == count and f"(seen {_seen(at)})" in texts[-1]
+    assert watched.at(at + 120) == "watching"
+    assert len(watched.texts()) == count and watched.undelivered() == 1
+    assert _seen_order(watched.wakes("lane-turn-ended")).count(_seen(at)) == 1
+    assert list(elsewhere.iterdir()) == []
+
+
+def test_the_event_writer_gives_up_on_a_held_lock_only_when_asked(tmp_path: Path) -> None:
+    """Falsifier: ``wait_s`` ignored (a supervisor blocks on another writer), a partial or late
+    row written after giving up, or the default writer giving up too."""
+
+    path = tmp_path / "run" / "events.jsonl"
+    path.parent.mkdir()
+    path.write_text('{"kind":"before"}\n', encoding="utf-8")
+    path.chmod(0o600)
+    holder = HeldLock(path)
+    errors: list[BaseException] = []
+
+    def patient() -> None:
+        try:
+            attention_gate._append_jsonl(path, {"kind": "patient"})
+        except BaseException as error:  # reported below
+            errors.append(error)
+
+    writer = threading.Thread(target=patient, daemon=True)
+    try:
+        started = time.monotonic()
+        with pytest.raises(attention_gate.AttentionGateError):
+            attention_gate._append_jsonl(path, {"kind": "hasty"}, wait_s=1.0)
+        took = time.monotonic() - started
+        assert 0.9 <= took < 4, took
+        assert path.read_text(encoding="utf-8") == '{"kind":"before"}\n'
+        writer.start()
+        writer.join(timeout=2.0)
+        assert writer.is_alive(), errors
+        assert path.read_text(encoding="utf-8") == '{"kind":"before"}\n'
+    finally:
+        holder.release()
+    writer.join(timeout=15)
+    assert not writer.is_alive() and errors == []
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert [row["kind"] for row in rows] == ["before", "patient"]
+
+
+def _on_the_watchers_writer(name: str, monkeypatch: pytest.MonkeyPatch,
+                            make: Any) -> list[str]:
+    """Replace ``name`` on each loaded run_record module (the watcher loads the harness
+    modules by their own names) with ``make(real, fired)``; returns the list that records
+    each injected failure."""
+
+    fired: list[str] = []
+    modules = {id(module): module for key, module in list(sys.modules.items())
+               if key in {"run_record", "harness.run_record"}}
+    for module in modules.values():
+        monkeypatch.setattr(module, name, make(getattr(module, name), fired))
+    return fired
+
+
+@pytest.mark.parametrize("dies", ["before-the-write", "after-the-row-is-committed"])
+@pytest.mark.parametrize("successor", ["fresh-check", "rearmed"])
+def test_a_watcher_that_dies_mid_delivery_gives_each_notice_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dies: str, successor: str,
+) -> None:
+    """The queued notice and its noticed count are on record before anything is told.
+    Falsifier: state written after the delivery, so the next watcher announces the turn end
+    again (a second message, or one with a new seen time) or never; a row committed just before
+    the death written again; the wake lost. (The wake is not held to exactly once here: the
+    contract says "each notice", and a wake written just before the death is given again.)"""
+
+    watched = _session(tmp_path, CLAUDE, None, 0)
+    assert watched.at(30) == "watching"
+    _ends_turn(watched, CLAUDE, "stop-reported", 1, at=40)
+    assert watched.at(60) == "watching"
+    assert len(watched.texts()) == 1  # the watcher's inbox writer is loaded now
+
+    if dies == "before-the-write":
+        def make(real: Any, fired: list[str]) -> Any:
+            def dying(*args: Any, **kwargs: Any) -> Any:
+                if not fired:
+                    fired.append("message")
+                    raise SystemExit("the watchdog was killed")
+                return real(*args, **kwargs)
+            return dying
+        fired = _on_the_watchers_writer("message", monkeypatch, make)
+    else:
+        def make(real: Any, fired: list[str]) -> Any:
+            def dying(*args: Any, **kwargs: Any) -> Any:
+                result = real(*args, **kwargs)
+                target = Path(args[0] if args else kwargs["path"])
+                if not fired and target.name == "inbox.jsonl":
+                    fired.append(str(target))
+                    raise SystemExit("the watchdog was killed")
+                return result
+            return dying
+        fired = _on_the_watchers_writer("append_record", monkeypatch, make)
+
+    _new_turn(watched, CLAUDE, at=70)
+    assert watched.at(90) == "watching"
+    _ends_turn(watched, CLAUDE, "waiting-for-input", 2, at=100)
+    try:
+        watched.at(120)
+    except SystemExit:
+        pass
+    assert fired, "the death was never injected into the watcher's inbox writer"
+
+    watched.watch = watched._watch()  # the next watcher process
+    if successor == "rearmed":
+        watched.watch.arm()
+    for seconds in (150, 180):
+        assert watched.at(seconds) == "watching"
+    first, second = watched.texts()
+    assert WAITING_WORDS in second and f"(seen {_seen(120)})" in second
+    assert len(watched.texts()) == 2
+    for rows in (watched.wakes("lane-turn-ended"), watched.events("lane-turn-ended")):
+        assert set(_seen_order(rows)) == {_seen(60), _seen(120)}
+        assert _seen_order(rows)[0] == _seen(60)
+
+
+def test_a_committed_notice_is_found_however_much_the_inbox_grew_before_the_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Falsifier: the retry searching only the inbox's last 64 KiB, so a notice whose row was
+    committed before the write failed, and then buried under other senders' messages, is
+    written again."""
+
+    watched = _session(tmp_path, CLAUDE, None, 0)
+    assert watched.at(30) == "watching"
+    _ends_turn(watched, CLAUDE, "stop-reported", 1, at=40)
+    assert watched.at(60) == "watching"
+    assert len(watched.texts()) == 1
+
+    def make(real: Any, fired: list[str]) -> Any:
+        def late(*args: Any, **kwargs: Any) -> Any:
+            result = real(*args, **kwargs)
+            target = Path(args[0] if args else kwargs["path"])
+            if not fired and target.name == "inbox.jsonl":
+                fired.append(str(target))
+                raise OSError("the disk went away after the row was written")
+            return result
+        return late
+
+    fired = _on_the_watchers_writer("append_record", monkeypatch, make)
+    _new_turn(watched, CLAUDE, at=70)
+    assert watched.at(90) == "watching"
+    _ends_turn(watched, CLAUDE, "waiting-for-input", 2, at=100)
+    assert watched.at(120) == "watching"
+    assert fired, "the failure was never injected into the watcher's inbox writer"
+    filler = "y" * 1000
+    for index in range(80):  # about 80 KiB from the founder before the retry
+        run_record.message(watched.root, "validator", "founder", f"{filler} {index}")
+    for seconds in (150, 180):
+        assert watched.at(seconds) == "watching"
+    texts = watched.texts()
+    assert len(texts) == 2 and f"(seen {_seen(120)})" in texts[1]
+    _new_turn(watched, CLAUDE, at=200)
+    assert watched.at(210) == "watching"
+    _ends_turn(watched, CLAUDE, "stop-reported", 3, at=220)
+    assert watched.at(240) == "watching"
+    assert len(watched.texts()) == 3
+
+
+def test_inbox_end_is_the_inboxs_size(tmp_path: Path) -> None:
+    """Falsifier: an offset that is not the inbox's size (a retry would search from the wrong
+    place), or an error for an absent inbox."""
+
+    root = tmp_path / "run"
+    root.mkdir()
+    assert run_record.inbox_end(root, "validator") == 0
+    run_record.message(root, "validator", "host", "first")
+    inbox = root / "validator" / "inbox.jsonl"
+    assert run_record.inbox_end(root, "validator") == inbox.stat().st_size > 0
+    run_record.message(root, "validator", "host", "second")
+    assert run_record.inbox_end(root, "validator") == inbox.stat().st_size
+    assert run_record.inbox_end(root, "orchestrator") == 0
+
+
+def test_delivered_since_an_offset_finds_the_message_however_much_follows(
+    tmp_path: Path,
+) -> None:
+    """Falsifier: ``since`` ignored (the last 64 KiB searched instead, so a buried row is
+    missed), a row before the offset taken for this attempt's, or an offset past a now
+    shorter inbox (rotated, truncated) finding nothing."""
+
+    root = tmp_path / "run"
+    root.mkdir()
+    run_record.message(root, "validator", "host", "notice A")
+    offset = run_record.inbox_end(root, "validator")
+    run_record.message(root, "validator", "host", "notice B")
+    filler = "z" * 1000
+    for index in range(100):  # about 100 KiB after it
+        run_record.message(root, "validator", "founder", f"{filler} {index}")
+    assert run_record.delivered(root, "validator", "host", "notice B", since=offset)
+    assert not run_record.delivered(root, "validator", "host", "notice B")
+    assert not run_record.delivered(root, "validator", "host", "notice A", since=offset)
+    assert not run_record.delivered(root, "validator", "founder", "notice B", since=offset)
+    assert run_record.delivered(root, "validator", "founder", f"{filler} 99", since=offset)
+    past = run_record.inbox_end(root, "validator") + 4096
+    assert run_record.delivered(root, "validator", "founder", f"{filler} 99", since=past)
+    assert not run_record.delivered(root, "validator", "host", "notice B", since=past)
+
+
+@pytest.mark.parametrize("since", [None, 0], ids=["no-offset", "offset"])
+@pytest.mark.parametrize("shape", ["symlink", "fifo"])
+def test_delivered_neither_follows_a_symlink_nor_blocks_on_a_fifo(
+    tmp_path: Path, shape: str, since: int | None,
+) -> None:
+    """Falsifier: a planted symlink's target read as the inbox (a notice taken as delivered
+    that the Validator never got), or a FIFO opened for reading, which blocks the watcher
+    until something writes to it."""
+
+    root = tmp_path / "run"
+    inbox = root / "validator" / "inbox.jsonl"
+    inbox.parent.mkdir(parents=True, mode=0o700)
+    text = "FACTORY_LANE_TURN_ENDED tester.r2: planted"
+    if shape == "symlink":
+        decoy = tmp_path / "decoy"
+        decoy.mkdir()
+        run_record.message(decoy, "validator", "host", text)
+        inbox.symlink_to(decoy / "validator" / "inbox.jsonl")
+    else:
+        os.mkfifo(inbox)
+    answers: list[bool] = []
+    errors: list[BaseException] = []
+
+    def ask() -> None:
+        try:
+            answers.append(run_record.delivered(root, "validator", "host", text, since=since))
+        except BaseException as error:  # reported below
+            errors.append(error)
+
+    asker = threading.Thread(target=ask, daemon=True)
+    asker.start()
+    asker.join(timeout=5)
+    try:
+        assert not asker.is_alive(), "delivered() blocked"
+        assert errors == [] and answers == [False]
+    finally:
+        if shape == "fifo" and asker.is_alive():  # free a reader stuck in open()
+            os.close(os.open(inbox, os.O_WRONLY | os.O_NONBLOCK))
 
 
 # -- 4. the stall rule -----------------------------------------------------------------------
@@ -1585,6 +2050,51 @@ def test_a_review_that_fell_due_while_the_lane_waited_is_not_owed_afterwards(
     assert watched.at(1800) == "paused"
     assert watched.stops == [TARGET]
     assert len(watched.events("lane-review-due")) == 1
+
+
+def test_waiting_time_is_not_work_a_review_is_owed_for(tmp_path: Path) -> None:
+    """Review every 1200 s, checks every 30 s; the lane waits from 60 s and is continued at
+    1180 s, so 1140 s of its active time was waiting and its first review is due at about
+    2340 s. Falsifier: the review owed at 1200 s of active time regardless (the old rule
+    paused there, 20 s into the new work), or waiting time counted otherwise."""
+
+    watched = _session(tmp_path, CLAUDE, None, 0,
+                       watch={"runs_dir": "/runs", "review_every_s": 1200}, thread=True)
+    for seconds in range(30, 2341, 30):
+        if seconds == 60:
+            _ends_turn(watched, CLAUDE, "waiting-for-input", 1, at=45)
+        if seconds == 1200:
+            _new_turn(watched, CLAUDE, at=1180)  # the Validator continues the lane
+        expected = "paused" if seconds == 2340 else "watching"
+        assert watched.at(seconds) == expected, seconds
+    assert watched.stops == [TARGET]
+    assert len(watched.events("lane-review-due")) == 1
+
+
+def test_waiting_time_carries_into_a_new_life_after_a_review(tmp_path: Path) -> None:
+    """Review every 600 s; 300 s of waiting puts the first pause at 900 s of active time, and
+    the reviewed lane's next life owes its second review at 1500 s of active time (1200 s of
+    work), not at 1200 s. Falsifier: the new life forgetting the waiting time."""
+
+    watched = _session(tmp_path, CLAUDE, None, 0,
+                       watch={"runs_dir": "/runs", "review_every_s": 600}, thread=True)
+    for seconds in range(30, 901, 30):
+        if seconds == 60:
+            _ends_turn(watched, CLAUDE, "waiting-for-input", 1, at=45)
+        if seconds == 360:
+            _new_turn(watched, CLAUDE, at=345)
+        expected = "paused" if seconds == 900 else "watching"
+        assert watched.at(seconds) == expected, seconds
+
+    # The Validator reviews the lane and continues it: a new life of the watcher.
+    watched.revive()
+    _new_turn(watched, CLAUDE, at=1500)
+    watched.clock.value = T0 + 1500
+    watched.watch.arm(new_life=True)
+    for seconds in range(1530, 2101, 30):  # active time 930 s .. 1500 s
+        expected = "paused" if seconds == 2100 else "watching"
+        assert watched.at(seconds) == expected, seconds
+    assert len(watched.events("lane-review-due")) == 2
 
 
 @pytest.mark.parametrize("caps", [

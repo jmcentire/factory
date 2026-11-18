@@ -481,21 +481,41 @@ def message(root: Path, recipient: str, sender: str, text: str, *, log: str = os
             print(f"factory: message queued; optional log failed: {error}", file=sys.stderr)
 
 
-def delivered(root: Path, recipient: str, sender: str, text: str) -> bool:
-    """Whether the recipient's inbox already ends with this message among its recent rows.
+def inbox_end(root: Path, recipient: str) -> int:
+    """The recipient's inbox size now: a message written after this is at or past it."""
+    try:
+        return (root / recipient / "inbox.jsonl").stat().st_size
+    except OSError:
+        return 0
 
-    For a writer retrying after an error that may have come after its row was committed (the
-    directory sync): it checks before writing the same message again. Only the inbox's last
-    64 KiB is read.
+
+def delivered(root: Path, recipient: str, sender: str, text: str, *,
+              since: int | None = None) -> bool:
+    """Whether the recipient's inbox already holds this message.
+
+    For a writer that may already have written it: one retrying after an error that may have
+    come after its row was committed (the directory sync), or one that stopped mid-write. It
+    reads from ``since``, an ``inbox_end`` taken before the first attempt, however much was
+    written after it; without one (or when the inbox is now shorter), the last 64 KiB. Only a
+    regular file is read, never through a link.
     """
     path = root / recipient / "inbox.jsonl"
     digest = hashlib.sha256(text.encode()).hexdigest()
     try:
-        with path.open("rb") as stream:
-            stream.seek(max(0, stream.seek(0, os.SEEK_END) - 65536))
-            tail = stream.read()
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
         return False
+    try:
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode):
+            return False
+        end = metadata.st_size
+        start = since if since is not None and 0 <= since <= end else max(0, end - 65536)
+        tail = os.pread(fd, end - start, start)
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
     for line in tail.splitlines():
         try:
             row = json.loads(line)
