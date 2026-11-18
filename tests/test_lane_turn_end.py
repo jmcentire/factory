@@ -18,28 +18,36 @@ amended after review):
    ``stop-reported``, ``waiting-for-input``, ``idle`` or (a stream turn that failed)
    ``failed``, one ``lane-turn-ended`` wake and one Validator inbox message from ``host``
    (``FACTORY_LANE_TURN_ENDED <lane>: ...``) are given, and the count is noticed. A count seen
-   in any other phase is not noticed. A notice for a lane that is not waiting for input (a stop
-   report, a failed turn) and printed no done line this turn names the stall deadline in the
-   launch's whole minutes.
-2. A done line counts for the turn in which it was read, and for no turn when a new turn
-   started since the previous check. On a verified exit only a done line of the current turn
-   makes the lane ``done``.
+   in any other phase is not noticed. The notice names the stall deadline in the launch's
+   whole minutes exactly when the stall exemption (5) does not hold.
+2. Which turn a done line counts for comes from what the session's wrapper writes to the lane
+   log. A stream wrapper marks each turn's input (``persistent-turn-start`` with the record's
+   ``turn_started_at``) before its output; a response counts for the turn of the last mark
+   before it, kept across checks and into a new life on the same log offset, cleared by a new
+   offset or a truncated or replaced log; a response with no mark counts for no turn. A native
+   terminal wrapper's ``native-stop-report`` row names the turn current when the stop arrived
+   and whether it is ``bound`` to it (by generation, else: not the turn's first stop, or a
+   first stop of a prompt that was not queued and does not end a continuation); its done line
+   counts for that turn only when bound. A lane with no session record counts its done line
+   as before. On a verified exit only a done line of the current turn makes the lane ``done``.
 3. A slot's first watch has told no turn ends. Every later arm (a restart, a new life, a re-arm
    after a final status) carries the noticed count; a watch state without one takes the
    current count as noticed. A lower count is a new session.
 4. Notices, each with its wake, are queued and on record in the watch state before anything
    is told: an undeliverable message or wake is retried at every check, whatever the watch
    status and into a new life, and given in order, exactly once, even across a watcher that
-   died mid-delivery. A held inbox or events-log lock delays them (the check gives up within
-   seconds), never the watcher; a failed message is recorded once, through the run's event
-   writer; a write that failed after its row was committed is not repeated, however much the
-   inbox grew since. Each notice says when its turn end was seen.
+   died mid-delivery. A check waits on the events log's lock, and on the inbox's, for one
+   ``run_record.SUPERVISOR_WAIT_S`` allowance each in all, never the watcher; a failed message
+   is recorded once, through the run's event writer; a write that failed after its row was
+   committed is not repeated, however much the inbox grew since. Each notice says when its
+   turn end was seen. ``LaneWatch.run`` keeps delivering owed notices after a final verdict,
+   for at most ``TURN_NOTICE_DRAIN_S``.
 5. The stall clock restarts at the record's turn timestamps and at the check that announced a
    turn end. A lane is spared the stall stop, the review pause and the wrap-up only while (a)
-   it printed a done line this turn, its turn ended (not failed) and its session is not
-   positively dead, or (b) it says it waits for input and this check saw its session's own
-   worker and wrapper alive. Time spent waiting is not work a review is owed for, in this
-   life or the next. The caps always apply.
+   a done line counts for its current turn, its turn ended (not failed) and its session is not
+   known dead, or (b) it says it waits for input and this check saw its session's own worker
+   and wrapper alive. Time spent waiting is not work a review is owed for, in this life or the
+   next (a new life carries the held time up to its start). The caps always apply.
 
 The real ``LaneWatch`` runs against a synthetic run root. Doubles sit only at its declared
 seams, as in tests/test_lane_controls.py: the clock, the tmux runner, the process table, the
@@ -49,7 +57,8 @@ modelled pane (window ``@1``, pane pid ``4242``, alive or dead); the process dou
 pane's tree: its shell, the session wrapper and the worker under it, whose identities the
 session record carries as persistent_lane.py writes them. The stop double does what a
 delivered SIGTERM does: the pane dies and its processes leave the table. The tmux and delivery
-recorders are evidence only of what the watcher itself asked for (T17).
+recorders are evidence only of what the watcher itself asked for (T17). Section 8 runs the
+real session wrappers with synthetic native programs.
 """
 
 from __future__ import annotations
@@ -94,6 +103,8 @@ CLOSING = ("A turn's end is not acceptance of its work. Evaluate it, then contin
            "close it.")
 DEADLINE_HEAD = "unless it commits or is continued"
 DEADLINE = DEADLINE_HEAD + ", it is stopped as stalled {} min after this turn end"
+ALLOWANCE_DEADLINE = (DEADLINE_HEAD
+                      + ", it is stopped as stalled {} min after its read allowance ends ({})")
 DONE_LINE = "Report written.\n__LANE_DONE__ tester commits=0"
 RESUMABLE = {"runs_dir": "/runs", "wrap_s": 300}
 REVIEWED = {"runs_dir": "/runs", "review_every_s": 1080}
@@ -254,10 +265,33 @@ class Lane:
         self.record = record
         self.record_path.write_text(json.dumps(record), encoding="utf-8")
 
+    def _log_row(self, row: dict[str, Any]) -> None:
+        with self.log.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(row) + "\n")
+
     def respond(self, text: str) -> None:
         """One typed agent response in the lane log (a done line, when it carries one)."""
-        with self.log.open("a", encoding="utf-8") as stream:
-            stream.write(json.dumps({"type": "result", "result": text}) + "\n")
+        self._log_row({"type": "result", "result": text})
+
+    def agent_message(self, text: str) -> None:
+        """A Codex agent message, which may come before its turn ends."""
+        self._log_row({"type": "item.completed", "item": {"type": "agent_message", "text": text}})
+
+    def mark(self, at: float) -> None:
+        """What the stream wrapper writes as a turn's input is sent, before any of its output:
+        the record's ``turn_started_at`` for that turn."""
+        self._log_row({"type": "persistent-turn-start", "turn_started_at": T0 + at})
+
+    def stop_report(self, text: str, *, bound: bool = True, turn: float | None = None) -> None:
+        """A native stop report row as the terminal wrapper writes it: the record's current turn
+        (or ``T0 + turn``) when the stop arrived, and whether the stop is bound to that turn."""
+        assert self.record is not None
+        started = self.record["turn_started_at"] if turn is None else T0 + turn
+        self._log_row({"type": "native-stop-report", "turn_started_at": started,
+                       "bound": bound, "stop_hook_active": False,
+                       "last_assistant_message": text,
+                       "session_id": "12345678-1234-4234-8234-123456789abc",
+                       "source": "native-stop-hook"})
 
     def tool_output(self, text: str) -> None:
         """Tool output in the lane log: not a response, so it neither claims nor retracts."""
@@ -371,23 +405,41 @@ CLAUDE_STREAM: Kind = ("claude", "turns", "turn_completed_at", "working")
 CODEX_STREAM: Kind = ("codex-ollama", "turns", "turn_completed_at", "working")
 
 
-def _session(tmp_path: Path, kind: Kind, phase: str | None, count: int,
-             **options: Any) -> Lane:
-    """A lane of ``kind`` whose record shows ``phase`` (its mid-turn phase when None)."""
+def _stream(kind: Kind) -> bool:
+    return kind[1] == "turns"
+
+
+def _session(tmp_path: Path, kind: Kind, phase: str | None, count: int, *,
+             marked: bool = True, **options: Any) -> Lane:
+    """A lane of ``kind`` whose record shows ``phase`` (its mid-turn phase when None). A stream
+    session's wrapper marks its first turn's input in the lane log (unless not ``marked``)."""
     agent, counter, _, mid = kind
-    return Lane(tmp_path, record={"phase": phase or mid, counter: count}, agent=agent,
-                **options)
+    watched = Lane(tmp_path, record={"phase": phase or mid, counter: count}, agent=agent,
+                   **options)
+    if _stream(kind) and marked:
+        watched.mark(-5)
+    return watched
 
 
-def _ends_turn(watched: Lane, kind: Kind, phase: str, count: int, at: float) -> None:
+def _ends_turn(watched: Lane, kind: Kind, phase: str, count: int, at: float, *,
+               done: bool = False, bound: bool = True) -> None:
+    """The session ends a turn; with ``done`` its last response carries the done line (a stream
+    response, or the text of the native stop report that ends the turn)."""
     _, counter, stamp, _ = kind
+    if done and _stream(kind):
+        watched.respond(DONE_LINE)
+    elif done:
+        watched.stop_report(DONE_LINE, bound=bound)
     watched.report(phase=phase, **{counter: count, stamp: T0 + at})
 
 
 def _new_turn(watched: Lane, kind: Kind, at: float) -> None:
-    """A new prompt reaches the session (persistent_lane clears the turn-end stamp)."""
+    """A new prompt reaches the session (persistent_lane clears the turn-end stamp); a stream
+    wrapper marks the new turn's input in the lane log."""
     _, _, stamp, mid = kind
     watched.report(phase=mid, turn_started_at=T0 + at, **{stamp: None})
+    if _stream(kind):
+        watched.mark(at)
 
 
 def _block(watched: Lane, how: str, elsewhere: Path) -> None:
@@ -440,7 +492,7 @@ def test_a_cursor_stop_report_wakes_the_validator_once(
     assert STOP_WORDS in text and WAITING_WORDS not in text
     assert DONE_UNSEEN in text and DONE_SEEN not in text
     assert "1 commit(s)" in text
-    assert DEADLINE.format(20) in text
+    assert _deadline(100) in text
     assert text.rstrip().endswith(CLOSING)
     assert "tmux_lane_message.sh" not in text
 
@@ -476,7 +528,7 @@ def test_the_notice_says_what_the_session_reported(
     assert [said for said in SAID if said != words and said in text] == []
     assert DONE_UNSEEN in text and "0 commit(s)" in text and text.rstrip().endswith(CLOSING)
     if deadline:
-        assert DEADLINE.format(20) in text
+        assert _deadline(100) in text
     else:
         assert DEADLINE_HEAD not in text
     assert watched.at(150) == "watching" and watched.at(180) == "watching"
@@ -495,33 +547,131 @@ def test_the_deadline_names_the_launchs_stall_window_in_whole_minutes(
     _ends_turn(watched, CURSOR, "stop-reported", 1, at=100)
     assert watched.at(120) == "watching"
     [text] = watched.texts()
-    assert DEADLINE.format(minutes) in text
+    assert _deadline(100, minutes) in text
 
 
-@pytest.mark.parametrize(("kind", "phase"), [(CLAUDE, "stop-reported"), (STREAM, "failed")],
-                         ids=["stop-reported", "failed"])
-def test_the_deadline_is_left_out_only_while_a_done_line_was_read_this_turn(
-    tmp_path: Path, kind: Kind, phase: str,
+# (kind, phase it ends in, its done line: none, bound or unbound, how this check sees its
+# session) -> whether the notice gives the stall deadline (the stall rule would stop it).
+DEADLINE_CASES: dict[str, tuple[Kind, str, str, str, bool]] = {
+    "stop-done-alive": (CLAUDE, "stop-reported", "bound", "alive", False),
+    "stop-done-unknown": (CLAUDE, "stop-reported", "bound", "no-identities", False),
+    "stop-unbound-done-alive": (CLAUDE, "stop-reported", "unbound", "alive", True),
+    "stop-alive": (CLAUDE, "stop-reported", "none", "alive", True),
+    "stop-done-dead": (CLAUDE, "stop-reported", "bound", "session-gone", True),
+    "failed-done-alive": (STREAM, "failed", "bound", "alive", True),
+    "failed-alive": (STREAM, "failed", "none", "alive", True),
+    "waiting-alive": (CLAUDE, "waiting-for-input", "none", "alive", False),
+    "waiting-unknown": (CLAUDE, "waiting-for-input", "none", "snapshot-unavailable", True),
+    "waiting-no-identities": (CLAUDE, "waiting-for-input", "none", "no-identities", True),
+    "waiting-dead": (CLAUDE, "waiting-for-input", "none", "session-gone", True),
+    "waiting-done-unknown": (CLAUDE, "waiting-for-input", "bound", "snapshot-unavailable",
+                             False),
+    "waiting-done-dead": (CLAUDE, "waiting-for-input", "bound", "worker-zombie", True),
+    "idle-alive": (STREAM, "idle", "none", "alive", False),
+    "idle-unknown": (STREAM, "idle", "none", "snapshot-unavailable", True),
+    "idle-done-no-identities": (STREAM, "idle", "bound", "no-identities", False),
+    "idle-done-dead": (STREAM, "idle", "bound", "wrapper-gone", True),
+}
+
+
+@pytest.mark.parametrize("case", list(DEADLINE_CASES))
+def test_the_deadline_is_given_exactly_when_the_stall_rule_would_stop_the_lane(
+    tmp_path: Path, case: str,
 ) -> None:
-    """Falsifier: the deadline given although a done line was read this turn (or withheld
-    although none was), or a done line from an earlier turn withholding it."""
+    """The notice names the deadline exactly when the stall exemption does not hold: a done
+    line counted for this turn with the turn ended (not failed) and the session not known dead,
+    or a waiting phase with the session seen alive. Each case then runs to the stall boundary,
+    so the notice and the stall rule are checked against each other. Falsifier: a failed turn
+    or a waiting lane whose session is dead or unseen told it has no deadline (and then
+    stopped), or a lane the rule spares told it will be stopped."""
 
-    watched = _session(tmp_path, kind, None, 0)
-    watched.respond(DONE_LINE)
+    kind, phase, done, seen, deadline = DEADLINE_CASES[case]
+    watched = _session(tmp_path, kind, None, 0, identities=seen != "no-identities")
     assert watched.at(60) == "watching"
-    _ends_turn(watched, kind, phase, 1, at=100)
+    if seen not in {"alive", "no-identities"}:
+        watched.unobserve(seen)
+    _ends_turn(watched, kind, phase, 1, at=100, done=done != "none", bound=done == "bound")
     assert watched.at(120) == "watching"
-    [first] = watched.texts()
-    assert DONE_SEEN in first and DEADLINE_HEAD not in first
+    [text] = watched.texts()
+    assert (DONE_SEEN in text) is (done == "bound")
+    if deadline:
+        assert _deadline(100) in text
+    else:
+        assert DEADLINE_HEAD not in text
+    assert watched.at(STALL_AT - 1) == "watching"
+    assert watched.stops == []
+    outcome = watched.at(STALL_AT + 1)
+    if deadline:
+        assert outcome in {"stalled", "stopping"} and watched.stops == [TARGET]
+    else:
+        assert outcome == "watching" and watched.stops == []
 
-    _new_turn(watched, kind, at=600)
-    watched.tool_output("ran the suite")
-    assert watched.at(630) == "watching"
-    _ends_turn(watched, kind, phase, 2, at=700)
-    assert watched.at(720) == "watching"
-    assert watched.notices() == 2
-    later = watched.texts()[1]
-    assert DONE_UNSEEN in later and DEADLINE.format(20) in later
+
+@pytest.mark.parametrize(("ended", "announced", "boundary"), [
+    (100, 120, STALL_AT), (READ_ALLOWANCE_S, READ_ALLOWANCE_S, STALL_AT),
+    (1000, 1020, 1020 + STALL_WINDOW_S),
+], ids=["inside-the-allowance", "at-its-end", "after-it"])
+def test_the_deadline_counts_from_the_read_allowances_end_for_a_turn_that_ended_inside_it(
+    tmp_path: Path, ended: float, announced: float, boundary: float,
+) -> None:
+    """A turn that ends inside the read allowance is stopped a window after the allowance ends,
+    and its notice says so, with the allowance's end; one that ends at or after the allowance's
+    end is stopped a window after its turn end. Each runs to its stall boundary. Falsifier: a
+    notice of a turn inside the allowance promising a stop 20 min after the turn end (the lane
+    runs on to 2100 s), or the allowance named for a turn after it."""
+
+    watched = _session(tmp_path, CLAUDE, None, 0)
+    assert watched.at(60) == "watching"
+    _ends_turn(watched, CLAUDE, "stop-reported", 1, at=ended)
+    assert watched.at(announced) == "watching"
+    [text] = watched.texts()
+    if ended < READ_ALLOWANCE_S:
+        assert ALLOWANCE_DEADLINE.format(20, _seen(READ_ALLOWANCE_S)) in text
+        assert "after this turn end" not in text
+    else:
+        assert DEADLINE.format(20) in text and "read allowance" not in text
+    _stalls_at_the_boundary(watched, boundary)
+
+
+@pytest.mark.parametrize("continued", ["after-a-review-pause", "after-a-wrap-up"])
+def test_a_continued_life_names_its_deadline_from_the_turn_end(
+    tmp_path: Path, continued: str,
+) -> None:
+    """A life continued after a review pause or a wrap-up has no read allowance, so a turn that
+    ends soon after it is told the deadline from its turn end (and, after the pause, is stopped
+    a window after it). Falsifier: the continued life given a fresh allowance, so the notice
+    names an allowance's end and the lane runs on past the deadline it was told."""
+
+    if continued == "after-a-review-pause":
+        watched = _session(tmp_path, CLAUDE, None, 0, thread=True,
+                           watch={"runs_dir": "/runs", "review_every_s": 1500})
+        for seconds in (60, 600, 1200, 1470):
+            assert watched.at(seconds) == "watching"
+        assert watched.at(1500) == "paused"
+        resumed = 1600
+    else:
+        watched = _session(tmp_path, CLAUDE, None, 0, thread=True, watch=RESUMABLE,
+                           caps={"wall_cap_s": 4000})
+        for commit, seconds in ((1000, 1100), (2000, 2100), (3000, 3100)):
+            _commit(watched.repo, T0 + commit, f"c{commit}")
+            assert watched.at(seconds) == "watching"
+        assert watched.at(3700) == "wrapping"
+        resumed = 3750
+    assert watched.stops == [TARGET]
+    watched.revive()
+    _new_turn(watched, CLAUDE, at=resumed)
+    watched.clock.value = T0 + resumed
+    watched.watch.arm(new_life=True)
+    _ends_turn(watched, CLAUDE, "stop-reported", 1, at=resumed + 100)
+    assert watched.at(resumed + 120) == "watching"
+    [text] = watched.texts()
+    assert DEADLINE.format(20) in text and "read allowance" not in text
+    if continued == "after-a-review-pause":
+        boundary = resumed + 120 + STALL_WINDOW_S
+        assert watched.at(boundary - 1) == "watching"
+        assert watched.stops == [TARGET]
+        assert watched.at(boundary + 1) in {"stalled", "stopping"}
+        assert watched.stops == [TARGET, TARGET] and watched.stalls() == 1
 
 
 @pytest.mark.parametrize("read", ["before-the-turn-end", "with-the-turn-end"])
@@ -569,29 +719,233 @@ def test_a_done_line_from_an_earlier_turn_does_not_speak_for_a_later_one(tmp_pat
     assert DONE_UNSEEN in later and DONE_SEEN not in later
 
 
-def test_a_done_line_read_after_an_unseen_new_turn_is_credited_to_no_turn(
+def _stalls_at_the_boundary(watched: Lane, seconds: float = STALL_AT) -> None:
+    assert watched.at(seconds - 1) == "watching"
+    assert watched.stops == []
+    assert watched.at(seconds + 1) in {"stalled", "stopping"}
+    assert watched.stops == [TARGET]
+
+
+def _spared_past_the_boundary(watched: Lane, seconds: float = STALL_AT) -> None:
+    for at in (seconds + 1, seconds + 3600):
+        assert watched.at(at) == "watching"
+    assert watched.stops == [] and watched.stalls() == 0
+
+
+# Which turn a stream session's done line counts for: the turn whose wrapper mark comes last
+# before it in the lane log. Each lane below is unobserved (no recorded identities), so only a
+# done line counted for its current turn spares it the stall stop.
+
+
+def test_a_turn_that_starts_and_claims_done_between_two_checks_is_credited(
     tmp_path: Path,
 ) -> None:
-    """Between two checks a turn ended and a new one started; a done line read then may belong
-    to either. Falsifier: crediting it to the new turn, so the notice says done and the lane
-    (its session unobserved: no recorded identities) is spared the stall stop although the new
-    turn never claimed done."""
+    """Between two checks turn 1 ends, turn 2 starts (its mark), prints its done line and ends.
+    Falsifier (agy's review): the done line lost because a new turn began since the previous
+    check, so the notice says no done line and the finished lane is stopped as stalled."""
 
     watched = _session(tmp_path, CLAUDE_STREAM, None, 0, identities=False)
     assert watched.at(60) == "watching"
     _ends_turn(watched, CLAUDE_STREAM, "idle", 1, at=100)
     _new_turn(watched, CLAUDE_STREAM, at=150)
-    watched.respond(DONE_LINE)
-    assert watched.at(180) == "watching"
-    assert watched.notices() == 0  # mid-turn
-    _ends_turn(watched, CLAUDE_STREAM, "idle", 2, at=200)
+    _ends_turn(watched, CLAUDE_STREAM, "idle", 2, at=200, done=True)
     assert watched.at(210) == "watching"
     [text] = watched.texts()
-    assert DONE_UNSEEN in text and DONE_SEEN not in text
-    assert watched.at(STALL_AT - 1) == "watching"
+    assert DONE_SEEN in text and DEADLINE_HEAD not in text
+    _spared_past_the_boundary(watched)
+
+
+@pytest.mark.parametrize("read", ["in-one-check", "turn-k-before-k-plus-1-began"])
+def test_turn_ks_done_line_read_after_turn_k_plus_1_began_counts_for_k_never_k_plus_1(
+    tmp_path: Path, read: str,
+) -> None:
+    """Turn 1 prints its done line and ends; turn 2 starts and ends without one. Falsifier
+    (Codex's review): turn 1's done line, read after turn 2 began, credited to turn 2, so its
+    notice says done and the lane that never finished its new work is spared the stall stop."""
+
+    watched = _session(tmp_path, CLAUDE_STREAM, None, 0, identities=False)
+    assert watched.at(60) == "watching"
+    _ends_turn(watched, CLAUDE_STREAM, "idle", 1, at=100, done=True)
+    if read == "turn-k-before-k-plus-1-began":
+        assert watched.at(120) == "watching"
+        assert DONE_SEEN in watched.texts()[0]
+    _new_turn(watched, CLAUDE_STREAM, at=150)
+    assert watched.at(180) == "watching"
+    _ends_turn(watched, CLAUDE_STREAM, "idle", 2, at=200)
+    assert watched.at(210) == "watching"
+    later = watched.texts()[-1]
+    assert DONE_UNSEEN in later and DONE_SEEN not in later
+    assert _deadline(200) in later
+    _stalls_at_the_boundary(watched)
+
+
+@pytest.mark.parametrize("respond", ["agent-message", "result"])
+def test_a_done_line_printed_mid_turn_counts_for_that_turn(tmp_path: Path, respond: str) -> None:
+    """A Codex ``item.completed`` agent message carries the done line before its turn ends, and
+    a check reads it mid-turn. Falsifier: a done line counted only when read with its turn end,
+    so the turn's notice says no done line and the finished lane is stopped."""
+
+    watched = _session(tmp_path, CODEX_STREAM, None, 0, identities=False)
+    assert watched.at(60) == "watching"
+    _new_turn(watched, CODEX_STREAM, at=90)
+    assert watched.at(120) == "watching"
+    if respond == "agent-message":
+        watched.agent_message(DONE_LINE)
+    else:
+        watched.respond(DONE_LINE)
+    assert watched.at(150) == "watching" and watched.notices() == 0
+    watched.tool_output("ran the suite")
+    _ends_turn(watched, CODEX_STREAM, "idle", 1, at=200)
+    assert watched.at(210) == "watching"
+    [text] = watched.texts()
+    assert DONE_SEEN in text and DEADLINE_HEAD not in text
+    _spared_past_the_boundary(watched)
+
+
+@pytest.mark.parametrize("kind", [CLAUDE_STREAM, CLAUDE], ids=["stream", "terminal"])
+def test_a_response_with_no_turn_mark_before_it_counts_for_no_turn(
+    tmp_path: Path, kind: Kind,
+) -> None:
+    """A persistent session's response with no wrapper mark before it in the log (a terminal
+    session's wrapper writes none: its done lines come in stop reports). Falsifier: such a
+    response credited to the current turn."""
+
+    watched = _session(tmp_path, kind, None, 0, identities=False, marked=False)
+    watched.respond(DONE_LINE)
+    assert watched.at(60) == "watching"
+    _ends_turn(watched, kind, "idle" if _stream(kind) else "stop-reported", 1, at=100)
+    assert watched.at(120) == "watching"
+    [text] = watched.texts()
+    assert DONE_UNSEEN in text and _deadline(100) in text
+    _stalls_at_the_boundary(watched)
+
+
+@pytest.mark.parametrize("arm", ["check", "restart", "new-life"])
+def test_the_last_turn_mark_is_kept_across_checks_and_arms_that_keep_the_log_offset(
+    tmp_path: Path, arm: str,
+) -> None:
+    """The turn's mark is read at one check and its done line at a later one, across a restart
+    or a new life of the watcher that keeps its log offset. Falsifier: the mark forgotten between
+    checks or lives, so the done line counts for no turn."""
+
+    watched = _session(tmp_path, CLAUDE_STREAM, None, 0, identities=False)
+    assert watched.at(60) == "watching"
+    _new_turn(watched, CLAUDE_STREAM, at=90)
+    assert watched.at(120) == "watching"
+    watched.clock.value = T0 + 130
+    if arm == "restart":
+        watched.restart()
+    elif arm == "new-life":
+        watched.watch.arm(new_life=True)
+    _ends_turn(watched, CLAUDE_STREAM, "idle", 1, at=200, done=True)
+    assert watched.at(210) == "watching"
+    [text] = watched.texts()
+    assert DONE_SEEN in text and DEADLINE_HEAD not in text
+    _spared_past_the_boundary(watched)
+
+
+@pytest.mark.parametrize("change", ["new-offset", "truncated", "replaced"])
+def test_a_new_log_offset_or_a_truncated_or_replaced_log_clears_the_last_turn_mark(
+    tmp_path: Path, change: str,
+) -> None:
+    """The turn's mark was read; then the watcher's new life is given a new log offset, or the
+    log is truncated or replaced, and a done line follows with no mark before it. Falsifier: a
+    mark from another log position (or another file) crediting the done line to this turn."""
+
+    watched = _session(tmp_path, CLAUDE_STREAM, None, 0, identities=False)
+    assert watched.at(60) == "watching"
+    _new_turn(watched, CLAUDE_STREAM, at=90)
+    watched.respond("Working on it.")
+    assert watched.at(120) == "watching"
+    if change == "new-offset":  # past output this watcher never read
+        watched.respond("More output.")
+        watched.clock.value = T0 + 130
+        watched.watch.arm(new_life=True, log_offset=watched.log.stat().st_size)
+    elif change == "truncated":
+        watched.log.write_text("")
+    else:
+        replacement = watched.log.with_name("replacement.log")
+        replacement.write_text("")
+        os.replace(replacement, watched.log)
+    _ends_turn(watched, CLAUDE_STREAM, "idle", 1, at=200, done=True)
+    assert watched.at(210) == "watching"
+    [text] = watched.texts()
+    renewed = READ_ALLOWANCE_S + (130 if change == "new-offset" else 0)
+    assert DONE_UNSEEN in text and _deadline(200, allowance_end=renewed) in text
+    # A new life's read allowance starts at its arm.
+    _stalls_at_the_boundary(watched, STALL_AT + (130 if change == "new-offset" else 0))
+
+
+def test_a_lane_without_a_session_record_counts_its_done_line_as_before(tmp_path: Path) -> None:
+    """A lane that is not persistent has no turns and no marks. Falsifier: its done line
+    counted for no turn, so its verified exit is reported as an exit, not done."""
+
+    watched = Lane(tmp_path, record=None)
+    assert watched.at(60) == "watching"
+    watched.respond(DONE_LINE)
+    assert watched.at(120) == "watching"
+    lane_agent.record_exit(watched.exits, slot="tester", rc=0, stopped=False)
+    watched.kill()
+    assert watched.at(150) == "done"
     assert watched.stops == []
-    assert watched.at(STALL_AT + 1) == "stalled"
-    assert watched.stops == [TARGET] and watched.stalls() == 1
+
+
+# Which turn a native terminal session's done line counts for: the turn its stop report row
+# names, and only when the wrapper bound that stop to it.
+
+
+@pytest.mark.parametrize(("stop", "credited"), [
+    ("bound-this-turn", True),
+    ("unbound-this-turn", False),
+    ("bound-earlier-turn", False),
+])
+def test_a_stop_reports_done_line_counts_only_when_bound_and_only_for_its_turn(
+    tmp_path: Path, stop: str, credited: bool,
+) -> None:
+    """Falsifier: an unbound stop's done line (a response the wrapper could not tie to this
+    turn) or one bound to an earlier turn sparing the current turn the stall stop."""
+
+    watched = _session(tmp_path, CLAUDE, None, 0, identities=False)
+    assert watched.at(60) == "watching"
+    _new_turn(watched, CLAUDE, at=90)
+    watched.stop_report(DONE_LINE, bound=stop != "unbound-this-turn",
+                        turn=-5 if stop == "bound-earlier-turn" else None)
+    watched.report(phase="stop-reported", stop_reports=1, stop_reported_at=T0 + 100)
+    assert watched.at(120) == "watching"
+    [text] = watched.texts()
+    assert (DONE_SEEN in text) is credited
+    assert (DEADLINE_HEAD in text) is not credited
+    if credited:
+        _spared_past_the_boundary(watched)
+    else:
+        _stalls_at_the_boundary(watched)
+
+
+def test_a_stop_that_arrives_after_a_queued_prompt_does_not_exempt_the_queued_turn(
+    tmp_path: Path,
+) -> None:
+    """Codex's case: prompt B is reported while A still runs, then A's stop arrives carrying
+    A's done line; the wrapper records it unbound, against B's turn. B's own stop is bound.
+    Falsifier: A's done line sparing B (stopped never, though B never said done)."""
+
+    watched = _session(tmp_path, CLAUDE, None, 0, identities=False)
+    assert watched.at(60) == "watching"
+    _new_turn(watched, CLAUDE, at=90)  # A
+    assert watched.at(120) == "watching"
+    _new_turn(watched, CLAUDE, at=150)  # B, queued behind A
+    watched.stop_report(DONE_LINE, bound=False)  # A's stop, under B's turn
+    watched.report(phase="stop-reported", stop_reports=1, stop_reported_at=T0 + 160)
+    assert watched.at(180) == "watching"
+    [first] = watched.texts()
+    assert DONE_UNSEEN in first and _deadline(160) in first
+    assert watched.at(1200) == "watching"
+
+    watched.stop_report("B: not finished yet.")  # B's own stop, bound, no done line
+    watched.report(stop_reports=2, stop_reported_at=T0 + 1300)
+    assert watched.at(1320) == "watching"
+    second = watched.texts()[-1]
+    assert DONE_UNSEEN in second and _deadline(1300) in second
+    _stalls_at_the_boundary(watched, 1320 + STALL_WINDOW_S)
 
 
 @pytest.mark.parametrize(("kind", "busy", "settled"), [
@@ -974,6 +1328,14 @@ def test_a_pending_notice_is_retried_whatever_the_watch_status(
     assert len(watched.inbox()) == 1
     assert watched.undelivered() == 1
     assert len(watched.wakes("lane-turn-ended")) == 1
+
+
+def _deadline(ended: float, minutes: int = 20, allowance_end: float = READ_ALLOWANCE_S) -> str:
+    """The notice's deadline for a turn that ended ``ended`` s after the launch: counted from
+    the read allowance's end when it ended inside the allowance, else from the turn end."""
+    if ended < allowance_end:
+        return ALLOWANCE_DEADLINE.format(minutes, _seen(allowance_end))
+    return DEADLINE.format(minutes)
 
 
 def _seen(seconds: float) -> str:
@@ -1427,6 +1789,87 @@ def test_an_undelivered_row_waits_on_the_events_log_only_so_long(
     assert list(elsewhere.iterdir()) == []
 
 
+FLICKER = (
+    "import fcntl, os, select, sys\n"
+    "path, hold = sys.argv[1], float(sys.argv[2])\n"
+    "fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)\n"
+    "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+    "print('locked', flush=True)\n"
+    "while not select.select([sys.stdin], [], [], hold)[0]:\n"
+    "    size = os.stat(path).st_size\n"
+    "    fcntl.flock(fd, fcntl.LOCK_UN)\n"
+    "    while os.stat(path).st_size == size:\n"
+    "        if select.select([sys.stdin], [], [], 0.001)[0]:\n"
+    "            sys.exit(0)\n"
+    "    fcntl.flock(fd, fcntl.LOCK_EX)\n"
+)
+
+
+class FlickeringLock(HeldLock):
+    """Another process that holds the lock, releases it just before each 5 s timeout, and
+    takes it again as soon as one write has landed."""
+
+    def __init__(self, path: Path, hold_s: float = 4.5) -> None:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.process = subprocess.Popen(
+            [sys.executable, "-I", "-c", FLICKER, str(path), str(hold_s)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        assert self.process.stdout is not None
+        assert self.process.stdout.readline().strip() == "locked"
+
+
+@pytest.mark.parametrize("locks", ["events-log", "inbox", "both"])
+def test_owed_notices_wait_on_a_flickering_lock_one_allowance_per_check(
+    tmp_path: Path, locks: str,
+) -> None:
+    """Codex's case: three notices are owed, and another process lets each write through just
+    before its timeout and takes the lock again before the next. A check waits on each lock for
+    one allowance in all. Falsifier: an allowance per write (three wakes or three messages take
+    about 13.5 s, and the watcher stalls for as long), or notices lost, doubled or reordered."""
+
+    events_down, inbox_down = locks in {"events-log", "both"}, locks in {"inbox", "both"}
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    watched = _session(tmp_path / "lane", CLAUDE, None, 0)
+    events = watched.root / "events.jsonl"
+    inbox = watched.root / "validator" / "inbox.jsonl"
+    assert watched.at(30) == "watching"
+    # An outage queues three notices: the events log is not a file, the inbox is not writable.
+    kept = events.read_bytes() if events.exists() else b""
+    if events_down:
+        events.unlink(missing_ok=True)
+        events.mkdir()
+    if inbox_down:
+        _block(watched, "symlink", elsewhere)
+    for count, at in ((1, 60), (2, 120), (3, 180)):
+        _ends_turn(watched, CLAUDE, "stop-reported", count, at=at - 10)
+        assert watched.at(at) == "watching"
+    if events_down:
+        events.rmdir()
+        events.write_bytes(kept)
+    if inbox_down:
+        _unblock(watched, "symlink")
+    owed = [_seen(60), _seen(120), _seen(180)]
+    assert len(watched.texts()) == (0 if inbox_down else 3)
+    assert len(watched.wakes("lane-turn-ended")) == (0 if events_down else 3)
+
+    holders = [FlickeringLock(path) for path, down in ((events, events_down),
+                                                       (inbox, inbox_down)) if down]
+    try:
+        outcome, took = _timed_check(watched, 240)
+        assert outcome == "watching"
+        assert took < (13 if locks == "both" else 8), took
+    finally:
+        for holder in holders:
+            holder.release()
+    for seconds in (270, 300):
+        assert watched.at(seconds) == "watching"
+    assert _seen_order(watched.wakes("lane-turn-ended")) == owed
+    assert _seen_order(watched.events("lane-turn-ended")) == owed
+    assert [re.search(r"\(seen ([^)]+)\)", text)[1] for text in watched.texts()] == owed
+    assert list(elsewhere.iterdir()) == []
+
+
 def test_the_event_writer_gives_up_on_a_held_lock_only_when_asked(tmp_path: Path) -> None:
     """Falsifier: ``wait_s`` ignored (a supervisor blocks on another writer), a partial or late
     row written after giving up, or the default writer giving up too."""
@@ -1835,9 +2278,8 @@ def test_a_lane_that_printed_its_done_line_this_turn_and_ended_it_is_not_stall_s
     watched = _session(tmp_path, kind, None, 0, identities=seen != "no-identities")
     if seen == "snapshot-unavailable":
         watched.unobserve(seen)
-    watched.respond(DONE_LINE)
     assert watched.at(600) == "watching"
-    _ends_turn(watched, kind, phase, 1, at=700)
+    _ends_turn(watched, kind, phase, 1, at=700, done=True)
     for seconds in (700, STALL_AT + 1, STALL_AT + 3 * 3600):
         assert watched.at(seconds) == "watching"
     assert watched.stops == [] and watched.stalls() == 0
@@ -1952,10 +2394,8 @@ def _waiting(tmp_path: Path, name: str, **options: Any) -> Lane:
     kind, phase, identities, done = WAITING_LANES[name]
     watched = _session(tmp_path, kind, None, 0, identities=identities, **options)
     _commit(watched.repo, T0 + 100, "a")
-    if done:
-        watched.respond(DONE_LINE)
     assert watched.at(600) == "watching"
-    _ends_turn(watched, kind, phase, 1, at=700)
+    _ends_turn(watched, kind, phase, 1, at=700, done=done)
     assert watched.at(730) == "watching"
     return watched
 
@@ -2097,6 +2537,33 @@ def test_waiting_time_carries_into_a_new_life_after_a_review(tmp_path: Path) -> 
     assert len(watched.events("lane-review-due")) == 2
 
 
+def test_a_new_life_counts_the_time_since_a_held_last_check_as_held(tmp_path: Path) -> None:
+    """Review every 600 s, checks every 30 s. The lane waits for input from 45 s; its
+    watcher's last check (held) is at 300 s, and its next life starts at 1200 s with new work.
+    The time to 1200 s was spent waiting, so the first review falls due about 600 s of work
+    later (near 1750 s). Falsifier: the gap between the last held check and the new life
+    counted as work, so the lane is paused for review at once (1230 s)."""
+
+    watched = _session(tmp_path, CLAUDE, None, 0,
+                       watch={"runs_dir": "/runs", "review_every_s": 600}, thread=True)
+    for seconds in range(30, 301, 30):
+        if seconds == 60:
+            _ends_turn(watched, CLAUDE, "waiting-for-input", 1, at=45)
+        assert watched.at(seconds) == "watching", seconds
+    watched.clock.value = T0 + 1200
+    _new_turn(watched, CLAUDE, at=1200)  # the Validator continues the lane: a new life
+    watched.watch.arm(new_life=True)
+    paused = None
+    for seconds in range(1230, 2401, 30):
+        outcome = watched.at(seconds)
+        if outcome != "watching":
+            assert outcome == "paused"
+            paused = seconds
+            break
+    assert paused is not None and 1680 <= paused <= 1800, paused
+    assert len(watched.events("lane-review-due")) == 1
+
+
 @pytest.mark.parametrize("caps", [
     {"wall_cap_s": 1800},
     {"spend_cap_usd": "1", "usd_per_hour": "2"},
@@ -2117,34 +2584,542 @@ def test_a_waiting_lane_is_still_capped(
 # -- 6. the exit -----------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(("claim", "outcome"), [
-    ("this-turn", "done"), ("earlier-turn", "exited"), ("credited-to-no-turn", "exited"),
-])
+@pytest.mark.parametrize(("kind", "claim", "outcome"), [
+    (CLAUDE_STREAM, "this-turn", "done"),
+    (CLAUDE_STREAM, "earlier-turn", "exited"),
+    (CLAUDE_STREAM, "turn-k-read-after-k-plus-1-began", "exited"),
+    (CLAUDE_STREAM, "no-mark-before-it", "exited"),
+    (CLAUDE, "this-turn", "done"),
+    (CLAUDE, "unbound-stop", "exited"),
+    (CLAUDE, "earlier-turn", "exited"),
+], ids=["stream-this-turn", "stream-earlier-turn", "stream-turn-k-read-after-k-plus-1",
+        "stream-no-mark", "terminal-this-turn", "terminal-unbound-stop",
+        "terminal-earlier-turn"])
 def test_a_persistent_lane_exits_done_only_on_a_done_line_of_its_current_turn(
-    tmp_path: Path, claim: str, outcome: str,
+    tmp_path: Path, kind: Kind, claim: str, outcome: str,
 ) -> None:
     """Falsifier: a verified exit reported as done on the strength of an earlier turn's done
-    line (or one read after an unseen new turn started), so the Validator takes as finished a
-    lane whose last turn never said so."""
+    line (read before or after the next turn began), a response with no turn mark before it,
+    or a stop the wrapper did not bind to the turn, so the Validator takes as finished a lane
+    whose last turn never said so."""
 
-    watched = _session(tmp_path, CLAUDE_STREAM, None, 0, identities=False)
-    if claim != "credited-to-no-turn":
-        watched.respond(DONE_LINE)
+    settled = "idle" if _stream(kind) else "stop-reported"
+    watched = _session(tmp_path, kind, None, 0, identities=False,
+                       marked=claim != "no-mark-before-it")
     assert watched.at(60) == "watching"
-    _ends_turn(watched, CLAUDE_STREAM, "idle", 1, at=100)
-    if claim == "credited-to-no-turn":
-        _new_turn(watched, CLAUDE_STREAM, at=150)
+    if claim == "no-mark-before-it":
         watched.respond(DONE_LINE)
-        assert watched.at(180) == "watching"
-        _ends_turn(watched, CLAUDE_STREAM, "idle", 2, at=200)
+    _ends_turn(watched, kind, settled, 1, at=100, done=claim in {"this-turn", "earlier-turn",
+                                                                 "unbound-stop"},
+               bound=claim != "unbound-stop")
+    if claim == "turn-k-read-after-k-plus-1-began":
+        watched.respond(DONE_LINE)  # turn 1's last response, read with turn 2's mark
+        _new_turn(watched, kind, at=150)
+        _ends_turn(watched, kind, settled, 2, at=200)
     assert watched.at(210) == "watching"
     if claim == "earlier-turn":
-        _new_turn(watched, CLAUDE_STREAM, at=240)
+        _new_turn(watched, kind, at=240)
         watched.tool_output("ran the suite")
         assert watched.at(250) == "watching"
-        _ends_turn(watched, CLAUDE_STREAM, "idle", 2, at=260)
+        _ends_turn(watched, kind, settled, 2, at=260)
         assert watched.at(270) == "watching"
     lane_agent.record_exit(watched.exits, slot="tester", rc=0, stopped=False)
     watched.kill()
     assert watched.at(300) == outcome
     assert watched.stops == []
+
+
+# -- 7. the watcher's run after a final verdict ----------------------------------------------
+
+
+def _run(watched: Lane, script: dict[float, Any]) -> tuple[str, list[float]]:
+    """``LaneWatch.run`` with its injectable sleep: each sleep advances the clock, and what
+    ``script`` says happens at a time happens before the check at that time."""
+
+    polls: list[float] = []
+    pending = dict(script)
+
+    def sleep(seconds: float) -> None:
+        watched.clock.value += seconds
+        polls.append(watched.clock.value - T0)
+        for at in sorted(at for at in pending if watched.clock.value - T0 >= at):
+            pending.pop(at)()
+
+    watched.clock.value = T0
+    verdict = watched.watch.run(sleep=sleep, launch_wait_s=0)
+    return verdict, polls
+
+
+def _exits(watched: Lane) -> Any:
+    def exit_() -> None:
+        lane_agent.record_exit(watched.exits, slot="tester", rc=0, stopped=False)
+        watched.kill()
+    return exit_
+
+
+def test_run_returns_its_final_verdict_at_once_when_no_notice_is_owed(tmp_path: Path) -> None:
+    """Falsifier: a watcher that polls on after its verdict with nothing to deliver."""
+
+    watched = _session(tmp_path, CLAUDE, None, 0)
+    verdict, polls = _run(watched, {
+        60: lambda: _ends_turn(watched, CLAUDE, "stop-reported", 1, at=50),
+        150: _exits(watched),
+    })
+    assert verdict == "exited"
+    assert polls[-1] == 150  # the check at 150 s gave the verdict; no poll after it
+    assert watched.notices() == 1
+
+
+def test_run_delivers_a_notice_still_owed_after_its_final_verdict(tmp_path: Path) -> None:
+    """The turn ends, the inbox cannot be written, the lane exits (a final verdict), and the
+    inbox is mended 15 minutes later. Falsifier: the watcher returning at its verdict, so the
+    turn end is never told; or the notice given twice."""
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    watched = _session(tmp_path / "lane", CLAUDE, None, 0)
+    _block(watched, "symlink", elsewhere)
+    verdict, polls = _run(watched, {
+        60: lambda: _ends_turn(watched, CLAUDE, "stop-reported", 1, at=50),
+        150: _exits(watched),
+        1050: lambda: _unblock(watched, "symlink"),
+    })
+    assert verdict == "exited"
+    assert polls[-1] == 1050  # returned once the owed notice was delivered
+    [text] = watched.texts()
+    assert f"(seen {_seen(60)})" in text
+    assert watched.undelivered() == 1 and watched.notices() == 1
+    assert list(elsewhere.iterdir()) == []
+
+
+def test_run_gives_up_on_owed_notices_an_hour_after_its_final_verdict(tmp_path: Path) -> None:
+    """Falsifier: a watcher that never returns while a notice cannot be delivered, or one that
+    gives up before the drain time."""
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    watched = _session(tmp_path / "lane", CLAUDE, None, 0)
+    _block(watched, "symlink", elsewhere)
+    verdict, polls = _run(watched, {
+        60: lambda: _ends_turn(watched, CLAUDE, "stop-reported", 1, at=50),
+        150: _exits(watched),
+    })
+    assert verdict == "exited"
+    assert lane_watchdog.TURN_NOTICE_DRAIN_S == 3600
+    assert 150 + 3600 <= polls[-1] < 150 + 3600 + 30
+    assert watched.texts() == [] and watched.undelivered() == 1
+    assert list(elsewhere.iterdir()) == []
+
+
+# -- 8. what the session wrappers write -------------------------------------------------------
+#
+# The real lane wrapper (harness/lane_agent.py) hosts a synthetic native program, as in
+# tests/test_persistent_lane.py and tests/test_native_codex_queue_contract.py. The program only
+# runs the wrapper's own hook commands with the reports each test asks for, in order; no model
+# runs and nothing here reads the wrapper's code.
+
+NATIVE = r"""
+import json, os, pathlib, select, subprocess, sys, tty
+folder = pathlib.Path(__file__).parent
+args = sys.argv[1:]
+if '--settings' in args:
+    settings = json.loads(pathlib.Path(args[args.index('--settings') + 1]).read_text())
+    flag = '--resume' if '--resume' in args else '--session-id'
+    session = args[args.index(flag) + 1]
+else:
+    settings = json.loads((pathlib.Path.cwd() / '.codex/hooks.json').read_text())
+    session = '12345678-1234-4234-8234-123456789abc'
+(folder / 'session').write_text(session)
+def commands(node, event, inside=False):
+    if isinstance(node, dict):
+        if inside and node.get('type') == 'command':
+            yield node['command']
+            return
+        for key, value in node.items():
+            yield from commands(value, event, inside or key == event)
+    elif isinstance(node, list):
+        for item in node:
+            yield from commands(item, event, inside)
+def report(event, **fields):
+    payload = dict(hook_event_name=event, session_id=session, cwd=os.getcwd(), **fields)
+    hooked, dialect = event, ''
+    if event == 'PreInvocation':  # Antigravity's prompt report, through the same hook
+        payload = dict(hookEventName=event, conversationId=session, **fields)
+        hooked, dialect = 'UserPromptSubmit', ' --dialect agy'
+    for command in commands(settings, hooked):
+        subprocess.run(command + dialect, shell=True, input=json.dumps(payload), text=True,
+                       check=True, timeout=10)
+tty.setraw(0)
+report('SessionStart', source='startup')
+if '--settings' not in args:  # Codex binds its session by the launch prompt's own report
+    report('UserPromptSubmit', turn_id='turn-initial', prompt=args[args.index('--') + 1])
+    report('Stop', turn_id='turn-initial', stop_hook_active=False,
+           last_assistant_message='initial reply')
+processed = 0
+while not (folder / 'exit').exists():
+    if select.select([0], [], [], .02)[0]:
+        if not os.read(0, 4096): break
+    requests = folder / 'reports.jsonl'
+    rows = requests.read_text().splitlines() if requests.exists() else []
+    for row in rows[processed:]:
+        payload = json.loads(row)
+        report(payload.pop('event'), **payload)
+        with (folder / 'reported').open('a') as out: out.write('.')
+    processed = len(rows)
+"""
+
+
+class Native:
+    """One real wrapper hosting the synthetic program: ``report`` makes the program report
+    hook events, ``stops`` reads the wrapper's stop report rows from the lane log."""
+
+    def __init__(self, tmp_path: Path, dialect: str) -> None:
+        from tests.test_native_codex_queue_contract import WRAPPER
+
+        harness = Path(__file__).resolve().parents[1] / "harness"
+        self.root = tmp_path / "run"
+        self.folder = self.root / "tmux-lanes"
+        self.folder.mkdir(parents=True)
+        (self.root / "harness.json").write_text(
+            json.dumps({"run_id": "r", "tmux_socket": "fixture"}))
+        project = tmp_path / "project"
+        project.mkdir()
+        subprocess.run(["git", "init", "-q", str(project)], check=True)
+        executable = self.folder / ("codex" if dialect == "codex" else "cl")
+        executable.write_text(f"#!{sys.executable}\n" + NATIVE)
+        executable.chmod(0o755)
+        (self.root / "prompt").write_text("initial literal native message")
+        home = tmp_path / "operator"
+        home.mkdir()
+        env = {**os.environ, "HOME": str(home), "CODEX_HOME": str(home / ".codex"),
+               "PATH": str(self.folder) + os.pathsep + os.environ["PATH"]}
+        if dialect == "codex":
+            command = [sys.executable, "-c", WRAPPER, str(harness), str(self.root),
+                       str(executable)]
+        else:
+            command = [sys.executable, str(harness / "lane_agent.py"), "run", "--slot", "coder",
+                       "--log", str(self.folder / "coder-log"),
+                       "--exits", str(self.folder / "coder-exits.jsonl"),
+                       "--prompt-arg", str(self.root / "prompt"),
+                       "--session-agent", "claude",
+                       "--session-file", str(self.folder / "coder-thread-id"),
+                       "--persistent", "--run-root", str(self.root), "--", str(executable)]
+        self.output = (self.root / "wrapper-output").open("w")
+        self.child = subprocess.Popen(command, cwd=project, env=env, stdout=self.output,
+                                      stderr=subprocess.STDOUT)
+        self.sent = 0
+        settled = "stop-reported" if dialect == "codex" else "started"
+        self.until(lambda: self.raw().get("phase") == settled, "the session start")
+
+    def until(self, condition: Any, what: str, timeout: float = 10) -> None:
+        deadline = time.monotonic() + timeout
+        while not condition():
+            if time.monotonic() > deadline:
+                output = (self.root / "wrapper-output").read_text(errors="replace")[-2000:]
+                raise AssertionError(f"no {what}: {self.raw()} {output}")
+            time.sleep(0.02)
+
+    def raw(self) -> dict[str, Any]:
+        path = self.folder / "coder-persistent.json"
+        try:
+            return dict(json.loads(path.read_text()))
+        except (OSError, ValueError):
+            return {}
+
+    def stops(self) -> list[dict[str, Any]]:
+        path = self.folder / "coder-log"
+        rows = []
+        for line in (path.read_bytes().splitlines() if path.exists() else []):
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict) and row.get("type") == "native-stop-report":
+                rows.append(row)
+        return rows
+
+    def report(self, event: str, **fields: Any) -> dict[str, Any]:
+        """The program reports one hook event; returns the record once the wrapper took it in
+        (a stop: its stop report row is in the log)."""
+        before = len(self.stops())
+        reports = self.raw().get("stop_reports", 0)
+        with (self.folder / "reports.jsonl").open("a") as out:
+            out.write(json.dumps({"event": event, **fields}) + "\n")
+        self.sent += 1
+        reported = self.folder / "reported"
+        self.until(lambda: reported.exists() and len(reported.read_text()) >= self.sent,
+                   f"report of {event}")
+        if event == "Stop":  # its row in the log and the record's count, in either order
+            self.until(lambda: len(self.stops()) > before, "stop report row")
+            self.until(lambda: self.raw().get("stop_reports", 0) > reports, "stop count")
+        else:
+            time.sleep(0.2)  # the wrapper reads its journal on its own time
+        return self.raw()
+
+    def prompt(self, text: str, **fields: Any) -> dict[str, Any]:
+        before = self.raw().get("turn_started_at")
+        self.report("UserPromptSubmit", prompt=text, **fields)
+        self.until(lambda: self.raw().get("turn_started_at") != before, "new turn")
+        return self.raw()
+
+    def stop(self, text: str, **fields: Any) -> dict[str, Any]:
+        self.report("Stop", stop_hook_active=fields.pop("stop_hook_active", False),
+                    last_assistant_message=text, **fields)
+        return self.stops()[-1]
+
+    def close(self) -> None:
+        (self.folder / "exit").touch()
+        try:
+            self.child.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self.child.terminate()
+            self.child.wait(timeout=5)
+        self.output.close()
+
+
+@pytest.fixture(params=["codex", "claude"])
+def native(tmp_path: Path, request: pytest.FixtureRequest) -> Any:
+    lane = Native(tmp_path, request.param)
+    lane.dialect = request.param  # type: ignore[attr-defined]
+    try:
+        yield lane
+    finally:
+        lane.close()
+
+
+def _turn_fields(record: dict[str, Any]) -> tuple[Any, Any, Any]:
+    return record.get("turn_stops"), record.get("turn_queued"), record.get("turn_generation")
+
+
+def test_a_new_session_record_starts_its_turn_fields_empty(tmp_path: Path) -> None:
+    """A Claude Code session that has started and reported no prompt. Falsifier: a new record
+    without the turn fields, or starting them otherwise."""
+
+    native = Native(tmp_path, "claude")
+    try:
+        assert _turn_fields(native.raw()) == (0, False, None)
+    finally:
+        native.close()
+
+
+def test_each_stop_report_row_names_the_current_turn_and_counts_the_turns_stops(
+    native: Native,
+) -> None:
+    """Falsifier: a stop row without the turn it arrived in, or naming another turn; the
+    record's stop count not reset by a prompt report."""
+
+    record = native.prompt("first")
+    assert _turn_fields(record)[:2] == (0, False)
+    first = native.stop("one")
+    assert first["turn_started_at"] == record["turn_started_at"]
+    assert native.raw()["turn_stops"] == 1
+    second = native.stop("two")
+    assert second["turn_started_at"] == record["turn_started_at"]
+    assert native.raw()["turn_stops"] == 2
+    later = native.prompt("second")
+    assert later["turn_started_at"] != record["turn_started_at"]
+    assert _turn_fields(later)[:2] == (0, False)
+    assert native.stop("three")["turn_started_at"] == later["turn_started_at"]
+
+
+def test_codexs_case_a_stop_from_before_a_queued_prompt_is_unbound(native: Native) -> None:
+    """Prompt B is reported while A still runs, then A's stop arrives with A's done line.
+    Falsifier: A's stop bound to B's turn (so A's done line would exempt B), or B's own stop
+    left unbound. With generations (Codex) the stops are told apart by them; without
+    (Claude Code), B was queued, so its first stop is unbound and its next bound."""
+
+    generation = native.dialect == "codex"  # type: ignore[attr-defined]
+    a = native.prompt("A", **({"turn_id": "turn-a"} if generation else {}))
+    assert _turn_fields(a) == (0, False, "turn-a" if generation else None)
+    b = native.prompt("B", **({"turn_id": "turn-b"} if generation else {}))
+    assert _turn_fields(b) == (0, True, "turn-b" if generation else None)
+    stop_a = native.stop(DONE_LINE, **({"turn_id": "turn-a"} if generation else {}))
+    assert stop_a["bound"] is False
+    assert stop_a["turn_started_at"] == b["turn_started_at"]
+    assert DONE_LINE in stop_a["last_assistant_message"]
+    stop_b = native.stop("B is done.", **({"turn_id": "turn-b"} if generation else {}))
+    assert stop_b["bound"] is True and stop_b["turn_started_at"] == b["turn_started_at"]
+    assert native.raw()["turn_stops"] == 2
+
+
+@pytest.mark.parametrize(("prompt_id", "stop_ids", "bound"), [
+    ("g1", ["g1", "g1"], [True, True]),
+    ("g1", ["g0", "g1"], [False, True]),
+    ("g1", ["g0", "g0"], [False, False]),
+    ("g1", [None, None], [True, True]),
+    (None, ["g1", "g1"], [True, True]),
+], ids=["same", "earlier-then-same", "earlier-twice", "stop-without", "prompt-without"])
+def test_a_stop_with_a_generation_is_bound_by_it_only_when_its_prompt_had_one(
+    tmp_path: Path, prompt_id: str | None, stop_ids: list[str | None], bound: list[bool],
+) -> None:
+    """Falsifier: a generation ignored (an earlier turn's stop bound to this one), or required
+    of a prompt or stop that carries none (a stop of an unqueued turn left unbound)."""
+
+    native = Native(tmp_path, "codex")
+    try:
+        record = native.prompt("work", **({"turn_id": prompt_id} if prompt_id else {}))
+        assert record["turn_generation"] == prompt_id
+        rows = [native.stop(f"stop {n}", **({"turn_id": stop} if stop else {}))
+                for n, stop in enumerate(stop_ids)]
+        assert [row["bound"] for row in rows] == bound
+    finally:
+        native.close()
+
+
+def test_without_generations_a_first_stop_is_bound_unless_queued_or_continued(
+    native: Native,
+) -> None:
+    """Falsifier: a first stop after a prompt queued behind a running turn bound to it; a stop
+    that ends a continuation (``stop_hook_active``) bound as the turn's own first stop; a
+    later stop of the turn left unbound."""
+
+    native.prompt("plain")
+    assert [native.stop("1")["bound"], native.stop("2")["bound"]] == [True, True]
+
+    native.prompt("running")
+    queued = native.prompt("queued behind it")
+    assert queued["turn_queued"] is True
+    assert [native.stop("1")["bound"], native.stop("2")["bound"]] == [False, True]
+
+    after = native.prompt("after a stop")
+    assert after["turn_queued"] is False
+    rows = [native.stop("1", stop_hook_active=True), native.stop("2", stop_hook_active=True)]
+    assert [row["bound"] for row in rows] == [False, True]
+
+
+def test_a_prompt_reported_while_the_operator_is_asked_is_queued(tmp_path: Path) -> None:
+    """Claude Code reports a permission question (``asking-operator``) mid-turn, then a new
+    prompt. Falsifier: the new turn's first stop bound, though it may end the questioned turn."""
+
+    native = Native(tmp_path, "claude")
+    try:
+        native.prompt("running")
+        native.report("Notification", notification_type="permission_prompt")
+        native.until(lambda: native.raw().get("phase") == "asking-operator", "the question")
+        queued = native.prompt("queued behind the question")
+        assert queued["turn_queued"] is True
+        assert [native.stop("1")["bound"], native.stop("2")["bound"]] == [False, True]
+    finally:
+        native.close()
+
+
+def test_an_antigravity_repeat_of_the_same_prompt_resets_nothing(tmp_path: Path) -> None:
+    """Antigravity reports the latest user message before every model call, numbered. The
+    same message again (same digest, with its invocation number) is not a new prompt.
+    Falsifier: a repeat starting a new turn (so the turn's later stop counts as its first and
+    the stop count, the queued mark or the turn timestamp are reset)."""
+
+    native = Native(tmp_path, "claude")
+    try:
+        native.report("PreInvocation", lastUserInput="same words", invocationNum=1)
+        native.until(lambda: native.raw().get("phase") == "prompt-observed", "the prompt")
+        first = native.raw()
+        assert native.stop("one")["bound"] is True
+        native.report("PreInvocation", lastUserInput="same words", invocationNum=2)
+        again = native.raw()
+        assert again["turn_started_at"] == first["turn_started_at"]
+        assert _turn_fields(again) == (1, False, None)
+        assert native.stop("two")["turn_started_at"] == first["turn_started_at"]
+        assert native.raw()["turn_stops"] == 2
+        later = native.prompt("other words")  # a different message is a new prompt
+        assert later["turn_started_at"] != first["turn_started_at"]
+        assert later["turn_stops"] == 0
+    finally:
+        native.close()
+
+
+def test_the_stream_wrapper_marks_no_turn_whose_input_cannot_be_encoded(tmp_path: Path) -> None:
+    """With the registry's real encoder (no agent has a stream transport) the first input
+    cannot be encoded and is never sent. Falsifier: a turn mark in the lane log for an input
+    that never reached the session."""
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "harness"))
+    import persistent_lane
+
+    root = tmp_path / "run"
+    folder = root / "tmux-lanes"
+    folder.mkdir(parents=True)
+    (root / "harness.json").write_text(json.dumps({"run_id": "r", "tmux_socket": "fixture"}))
+    child = subprocess.Popen([sys.executable, "-I", "-c", "import sys; sys.stdin.read()"],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT)
+
+    def started(pid: int) -> str:
+        return " ".join(lane_agent._started(pid).split())
+
+    (folder / "coder-process.json").write_text(json.dumps({
+        "schema": "factory-worker-process/1", "slot": "coder", "status": "running",
+        "wrapper": {"pid": os.getpid(), "started": started(os.getpid())},
+        "worker": {"pid": child.pid, "started": started(child.pid)}}))
+    emitted: list[bytes] = []
+    try:
+        with pytest.raises(ValueError, match="does not support persistent stream input"):
+            persistent_lane.run(child, root=root, slot="coder", agent="agy", prompt="initial",
+                                session_file=folder / "thread", emit=emitted.append)
+    finally:
+        child.kill()
+        child.wait(timeout=10)
+    assert not any(b"persistent-turn-start" in line for line in emitted), emitted
+
+
+def test_the_stream_wrapper_marks_a_turn_before_its_input_and_output(tmp_path: Path) -> None:
+    """``persistent_lane.run`` writes the turn mark, with the record's ``turn_started_at``, to
+    the lane log before the turn's input is sent and before any of its output. No registered
+    agent has a stream transport (harness/agents.py), so the registry's frame encoder is
+    stubbed at its seam. Falsifier: no mark, a mark after output, or one naming another turn."""
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "harness"))
+    import agents
+    import persistent_lane
+
+    root = tmp_path / "run"
+    folder = root / "tmux-lanes"
+    folder.mkdir(parents=True)
+    (root / "harness.json").write_text(json.dumps({"run_id": "r", "tmux_socket": "fixture"}))
+    program = (
+        "import json, sys\n"
+        "print(json.dumps({'type': 'output-before-input'}), flush=True)\n"
+        "for line in sys.stdin:\n"
+        "    print(json.dumps({'type': 'input', 'line': line}), flush=True)\n"
+    )
+    child = subprocess.Popen([sys.executable, "-I", "-c", program], stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+
+    def started(pid: int) -> str:
+        return " ".join(lane_agent._started(pid).split())
+
+    (folder / "coder-process.json").write_text(json.dumps({
+        "schema": "factory-worker-process/1", "slot": "coder", "status": "running",
+        "wrapper": {"pid": os.getpid(), "started": started(os.getpid())},
+        "worker": {"pid": child.pid, "started": started(child.pid)}}))
+    emitted: list[bytes] = []
+    original = agents.persistent_input
+    agents.persistent_input = lambda agent, text, message_id: {"type": "user", "text": text}
+    worker = threading.Thread(target=lambda: _quietly(persistent_lane.run, child, root=root,
+                                                      slot="coder", agent="agy",
+                                                      prompt="initial",
+                                                      session_file=folder / "thread",
+                                                      emit=emitted.append), daemon=True)
+    try:
+        worker.start()
+        deadline = time.monotonic() + 10
+        while not any(b'"input"' in line for line in emitted):
+            assert time.monotonic() < deadline, emitted
+            time.sleep(0.02)
+        rows = [json.loads(line) for line in emitted]
+        assert rows[0]["type"] == "persistent-turn-start"
+        record = json.loads((folder / "coder-persistent.json").read_text())
+        assert rows[0]["turn_started_at"] == record["turn_started_at"]
+        assert [row["type"] for row in rows].count("persistent-turn-start") == 1
+        assert rows.index(rows[0]) < [row["type"] for row in rows].index("output-before-input")
+    finally:
+        agents.persistent_input = original
+        child.kill()
+        worker.join(10)
+
+
+def _quietly(function: Any, *args: Any, **kwargs: Any) -> None:
+    try:
+        function(*args, **kwargs)
+    except Exception:  # noqa: BLE001 - the driver's end once its child is killed
+        pass

@@ -44,6 +44,10 @@ TERMINAL = "native-terminal"
 OBSERVED_TRANSPORT = "terminal-observed"
 
 
+# The lane-log row a stream session's wrapper writes as each turn starts.
+TURN_MARK = "persistent-turn-start"
+
+
 def read(path: pathlib.Path) -> dict:
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, "rb") as stream:
@@ -296,7 +300,12 @@ def run(
                 stream.write(value + "\n")
 
     def send(text):
-        write_frame(agents.persistent_input(agent, text, native_id))
+        frame = agents.persistent_input(agent, text, native_id)
+        # The turn's mark in the lane log, before any of its output: a reader credits what a
+        # response says to the turn whose mark precedes it (lane_watchdog.py).
+        emit((json.dumps({"type": TURN_MARK, "turn_started_at": state["turn_started_at"]})
+              + "\n").encode())
+        write_frame(frame)
 
     if agent == "claude":
         raise ValueError(
@@ -1015,6 +1024,11 @@ def run_terminal(
         "reported_active_s": carried["reported_active_s"],
         "turn_started_at": time.time(),
         "stop_reported_at": None,
+        # The current turn's stops so far, whether its prompt was queued behind an unfinished
+        # turn, and its provider generation: what binds a stop report to it (``stop_row``).
+        "turn_stops": 0,
+        "turn_queued": False,
+        "turn_generation": None,
         "current_message_id": handed or "initial",
         "current_input_id": (launched["typed_sha256"] if launched is not None
                              else native_session.text_digest(prompt)),
@@ -1070,8 +1084,23 @@ def run_terminal(
         # verdict, and another hook may make the session continue after it. The message is
         # what the session said last, which a reader may search for a claim, never a proof.
         text = row.get("last_assistant_message")
+        # Which turn this stop ended, for a reader crediting what it said (lane_watchdog.py):
+        # the current turn's start, and whether the stop can only be that turn's. A provider's
+        # per-prompt generation settles it. Otherwise a turn's first stop may be the turn
+        # before's when its prompt was reported before that turn reported any stop (queued
+        # behind it), or when the provider says the stop ends a continuation (Claude Code's
+        # stop_hook_active), which a new prompt does not start; a later stop is the turn's.
+        generation, current = row.get("generation"), state.get("turn_generation")
+        if isinstance(generation, str) and isinstance(current, str):
+            bound = generation == current
+        else:
+            bound = int(state.get("turn_stops", 0)) > 0 or not (
+                state.get("turn_queued") or row.get("stop_hook_active") is True)
+        state["turn_stops"] = int(state.get("turn_stops", 0)) + 1
         note((json.dumps({
             "type": "native-stop-report",
+            "turn_started_at": state["turn_started_at"],
+            "bound": bound,
             "stop_hook_active": row.get("stop_hook_active") is True,
             "last_assistant_message": text if isinstance(text, str) else "",
             **({"status": row["status"]} if isinstance(row.get("status"), str) else {}),
@@ -1149,6 +1178,8 @@ def run_terminal(
                 return
             state["last_prompt_sha256"] = reported
             state["prompt_reports"] += 1
+            # Reported before the turn before it reported any stop: queued behind that turn.
+            queued = state["phase"] in ("prompt-observed", "asking-operator")
             tokens = row.get("tokens") if isinstance(row.get("tokens"), list) else []
             submitted = [key for key, record in deliveries.items()
                          if record.get("state") == "submitted"]
@@ -1229,7 +1260,9 @@ def run_terminal(
                 state["foreign_inputs"] += 1  # the operator's own input, or an unmarked prompt
             # ``turn_started_at`` is when this prompt report arrived (the watchdog's clock).
             state.update(phase="prompt-observed", turn_started_at=time.time(),
-                         stop_reported_at=None)
+                         stop_reported_at=None, turn_queued=queued, turn_stops=0,
+                         turn_generation=(row["generation"] if isinstance(row.get("generation"),
+                                                                          str) else None))
         elif kind == "Stop":
             stop_row(row)
             # A stop report is the session's, not any message's: with a queued prompt taken
