@@ -476,17 +476,25 @@ def message(root: Path, recipient: str, sender: str, text: str, *, log: str = os
     append_record(directory / "inbox.jsonl", payload, wait_s=wait_s)
     if log != os.devnull:
         try:
-            append_record(Path(log), payload)
+            append_record(Path(log), payload, wait_s=wait_s)
         except OSError as error:
             print(f"factory: message queued; optional log failed: {error}", file=sys.stderr)
 
 
 def inbox_end(root: Path, recipient: str) -> int:
-    """The recipient's inbox size now: a message written after this is at or past it."""
+    """The recipient's inbox size now: a message written after this is at or past it.
+
+    An inbox that is not a regular file in a real directory (missing, a link, a folder) is 0:
+    a message can be written only once it is one, and then from its start.
+    """
+    directory = root / recipient
     try:
-        return (root / recipient / "inbox.jsonl").stat().st_size
+        if directory.is_symlink():
+            return 0
+        metadata = (directory / "inbox.jsonl").lstat()
     except OSError:
         return 0
+    return metadata.st_size if stat.S_ISREG(metadata.st_mode) else 0
 
 
 def delivered(root: Path, recipient: str, sender: str, text: str, *,

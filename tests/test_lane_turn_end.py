@@ -876,6 +876,56 @@ def test_a_new_log_offset_or_a_truncated_or_replaced_log_clears_the_last_turn_ma
     _stalls_at_the_boundary(watched, STALL_AT + (130 if change == "new-offset" else 0))
 
 
+@pytest.mark.parametrize("end", ["stall-boundary", "clean-exit"])
+@pytest.mark.parametrize("log", ["replaced", "truncated", "appended"])
+def test_a_done_line_in_a_replaced_log_before_any_mark_counts_for_no_turn(
+    tmp_path: Path, log: str, end: str,
+) -> None:
+    """One turn throughout: the record keeps its ``turn_started_at``, and the turn's mark is in
+    the original log, read at a check. The log is then replaced (or truncated in place) by a
+    shorter one with no mark, and a check sees it shrink; only then is a done-line response
+    written to the new log, and the turn ends. Falsifier: the mark kept over the replaced log,
+    so the done line counts for the record's unchanged turn: the notice says done, the lane is
+    spared the stall stop, and a clean exit is ``done``. Control (``appended``): the same done
+    line written to the original log is the turn's."""
+
+    watched = _session(tmp_path, CLAUDE_STREAM, None, 0, identities=False)
+    watched.tool_output("ran the suite: 412 passed, 3 skipped, 0 failed in 61.2 s")
+    watched.respond("Working on it; the report is next.")
+    assert watched.at(60) == "watching"  # the turn's mark has been read
+    original = watched.log.stat().st_size
+    if log == "replaced":
+        replacement = watched.log.with_name("replacement.log")
+        replacement.write_text(json.dumps({"type": "tool_result", "content": "restarted"})
+                               + "\n", encoding="utf-8")
+        os.replace(replacement, watched.log)
+    elif log == "truncated":
+        watched.log.write_text("", encoding="utf-8")
+    if log != "appended":
+        assert watched.log.stat().st_size < original
+        assert b"persistent-turn-start" not in watched.log.read_bytes()
+    assert watched.at(80) == "watching"  # this check sees the log shrink (or not)
+    watched.respond(DONE_LINE)  # written to the new log, with no mark before it
+    assert watched.record is not None and watched.record["turn_started_at"] == T0 - 5
+    watched.report(phase="idle", turns=1, turn_completed_at=T0 + 100)  # the same turn ends
+    assert watched.record["turn_started_at"] == T0 - 5
+    assert watched.at(120) == "watching"
+    [text] = watched.texts()
+    credited = log == "appended"
+    assert (DONE_SEEN in text) is credited and (DONE_UNSEEN in text) is not credited
+    assert (_deadline(100) in text) is not credited
+    if end == "stall-boundary":
+        if credited:
+            _spared_past_the_boundary(watched)
+        else:
+            _stalls_at_the_boundary(watched)
+    else:
+        lane_agent.record_exit(watched.exits, slot="tester", rc=0, stopped=False)
+        watched.kill()
+        assert watched.at(150) == ("done" if credited else "exited")
+        assert watched.stops == []
+
+
 def test_a_lane_without_a_session_record_counts_its_done_line_as_before(tmp_path: Path) -> None:
     """A lane that is not persistent has no turns and no marks. Falsifier: its done line
     counted for no turn, so its verified exit is reported as an exit, not done."""
@@ -1870,6 +1920,84 @@ def test_owed_notices_wait_on_a_flickering_lock_one_allowance_per_check(
     assert list(elsewhere.iterdir()) == []
 
 
+@pytest.mark.parametrize(("inbox_hold_s", "delivered", "bound"), [
+    (6.5, True, 9.0),
+    (9.5, False, 10.5),
+], ids=["within-its-own-allowance", "beyond-its-own-allowance"])
+def test_the_events_log_and_the_inbox_each_have_their_own_allowance(
+    tmp_path: Path, inbox_hold_s: float, delivered: bool, bound: float,
+) -> None:
+    """At a turn end another process holds the events log's lock about 3 s into the check and
+    the inbox's lock about ``inbox_hold_s``. The wake gets through after about 3 s; the message
+    then needs about 3.5 s more, within the inbox's own 5 s, and is delivered at that check.
+    Falsifier: one allowance shared by both locks (about 2 s left for the inbox, so the message
+    fails). Control: an inbox held about 6.5 s past the wake is beyond its own allowance, so the
+    message waits for the next check (the allowance is bounded, not merely separate)."""
+
+    watched = _session(tmp_path, CLAUDE, None, 0)
+    assert watched.at(30) == "watching"
+    _ends_turn(watched, CLAUDE, "stop-reported", 1, at=40)
+    inbox = watched.root / "validator" / "inbox.jsonl"
+    # The inbox holder starts first, so its hold, counted from the check, is if anything shorter.
+    holders = [HeldLock(inbox, hold_s=inbox_hold_s)]
+    try:
+        holders.append(HeldLock(watched.root / "events.jsonl", hold_s=3.0))
+        outcome, took = _timed_check(watched, 60)
+        assert outcome == "watching"
+        assert took < bound, took
+        assert _seen_order(watched.wakes("lane-turn-ended")) == [_seen(60)]
+        if delivered:
+            [text] = watched.texts()
+            assert f"(seen {_seen(60)})" in text
+            assert watched.undelivered() == 0
+        else:
+            assert watched.texts() == [] and watched.undelivered() == 1
+    finally:
+        for holder in holders:
+            holder.release()
+    assert watched.at(90) == "watching"
+    assert watched.notices() == 1 and watched.undelivered() == (0 if delivered else 1)
+
+
+@pytest.mark.parametrize("lock", ["inbox", "events-log"])
+def test_each_check_on_the_same_watcher_has_a_fresh_allowance_per_lock(
+    tmp_path: Path, lock: str,
+) -> None:
+    """Production runs every check on one ``LaneWatch``. Check 1: the lock is held through its
+    whole allowance, so the notice (its message, or its wake) is not given. Check 2, 30 s later
+    on the same object: the lock is held about 2 s and released. Falsifier: the allowance spent
+    once per watcher rather than per check, so check 2 starts with nothing left and fails."""
+
+    watched = _session(tmp_path, CLAUDE, None, 0)
+    watch = watched.watch
+    assert watched.at(30) == "watching"
+    _ends_turn(watched, CLAUDE, "stop-reported", 1, at=40)
+    path = (watched.root / "validator" / "inbox.jsonl" if lock == "inbox"
+            else watched.root / "events.jsonl")
+    holder = HeldLock(path)
+    try:
+        outcome, took = _timed_check(watched, 60)
+        assert outcome == "watching" and took < 8, took
+        if lock == "inbox":
+            assert watched.texts() == [] and watched.undelivered() == 1
+        else:
+            assert watched.wakes("lane-turn-ended") == [] and len(watched.texts()) == 1
+    finally:
+        holder.release()
+
+    holder = HeldLock(path, hold_s=2.0)
+    try:
+        outcome, took = _timed_check(watched, 90)
+    finally:
+        holder.release()
+    assert watched.watch is watch  # both checks ran on one watcher
+    assert outcome == "watching" and took < 7, took
+    assert watched.notices() == 1
+    assert [f"(seen {_seen(60)})" in text for text in watched.texts()] == [True]
+    assert _seen_order(watched.wakes("lane-turn-ended")) == [_seen(60)]
+    assert watched.undelivered() == (1 if lock == "inbox" else 0)
+
+
 def test_the_event_writer_gives_up_on_a_held_lock_only_when_asked(tmp_path: Path) -> None:
     """Falsifier: ``wait_s`` ignored (a supervisor blocks on another writer), a partial or late
     row written after giving up, or the default writer giving up too."""
@@ -2037,6 +2165,137 @@ def test_inbox_end_is_the_inboxs_size(tmp_path: Path) -> None:
     run_record.message(root, "validator", "host", "second")
     assert run_record.inbox_end(root, "validator") == inbox.stat().st_size
     assert run_record.inbox_end(root, "orchestrator") == 0
+
+
+@pytest.mark.parametrize("shape", ["folder", "symlinked-file", "symlinked-directory", "fifo"])
+def test_inbox_end_is_zero_for_an_inbox_that_is_not_a_regular_file_in_a_real_directory(
+    tmp_path: Path, shape: str,
+) -> None:
+    """Falsifier (agy's review of #124): a link followed, or a folder's own size taken, as the
+    offset a message will be written at (a retry would then search from past its row)."""
+
+    root = tmp_path / "run"
+    root.mkdir()
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "inbox.jsonl").write_text("x" * 5000)
+    validator = root / "validator"
+    if shape == "symlinked-directory":
+        validator.symlink_to(real, target_is_directory=True)
+    else:
+        validator.mkdir()
+        inbox = validator / "inbox.jsonl"
+        if shape == "folder":
+            inbox.mkdir()
+            for index in range(50):
+                (inbox / f"{index:03d}-{'n' * 100}").touch()
+            assert inbox.stat().st_size > 0
+        elif shape == "symlinked-file":
+            inbox.symlink_to(real / "inbox.jsonl")
+        else:
+            os.mkfifo(inbox)
+    assert run_record.inbox_end(root, "validator") == 0
+
+
+def _filled_folder(path: Path) -> int:
+    """A folder where the inbox should be, made large; returns its own size."""
+    path.mkdir(parents=True)
+    for index in range(200):
+        (path / f"{index:03d}-{'n' * 200}").touch()
+    return path.stat().st_size
+
+
+@pytest.mark.parametrize("after_commit", ["the-write-fails", "the-watchdog-dies"])
+def test_a_notice_first_tried_on_a_folder_inbox_is_found_once_committed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, after_commit: str,
+) -> None:
+    """Agy's case: the inbox is a folder at the notice's first attempt, so the offset saved for
+    its retry is taken then. Later the inbox is a regular file, the row is committed at offset
+    0, and the write fails (or the watchdog dies) after the commit; other messages then grow
+    the inbox past the folder's size. Falsifier: the folder's own size saved as the offset, so
+    the retry searches from past the committed row and sends the notice twice."""
+
+    watched = _session(tmp_path, CLAUDE, None, 0)
+    assert watched.at(30) == "watching"
+    _ends_turn(watched, CLAUDE, "stop-reported", 1, at=40)
+    assert watched.at(60) == "watching"
+    assert len(watched.texts()) == 1  # the watcher's inbox writer is loaded now
+    inbox = watched.root / "validator" / "inbox.jsonl"
+    os.replace(inbox, inbox.with_name("earlier.jsonl"))
+    folder_size = _filled_folder(inbox)
+    assert folder_size > 0
+
+    _new_turn(watched, CLAUDE, at=70)
+    assert watched.at(90) == "watching"
+    _ends_turn(watched, CLAUDE, "waiting-for-input", 2, at=100)
+    assert watched.at(120) == "watching"  # the first attempt meets the folder
+    assert watched.texts() == [] and watched.undelivered() == 1
+
+    import shutil
+    shutil.rmtree(inbox)  # a regular inbox from now on, written from its start
+
+    def make(real: Any, fired: list[str]) -> Any:
+        def late(*args: Any, **kwargs: Any) -> Any:
+            result = real(*args, **kwargs)
+            target = Path(args[0] if args else kwargs["path"])
+            if not fired and target.name == "inbox.jsonl":
+                fired.append(str(target))
+                if after_commit == "the-watchdog-dies":
+                    raise SystemExit("the watchdog was killed")
+                raise OSError("the disk went away after the row was written")
+            return result
+        return late
+
+    fired = _on_the_watchers_writer("append_record", monkeypatch, make)
+    try:
+        watched.at(150)
+    except SystemExit:
+        watched.watch = watched._watch()  # the next watcher process
+    assert fired, "the failure was never injected into the watcher's inbox writer"
+    [committed] = watched.texts()
+    assert f"(seen {_seen(120)})" in committed
+    assert json.loads(inbox.read_text().splitlines()[0])["text"] == committed  # at offset 0
+
+    filler = "z" * 1000
+    index = 0
+    while inbox.stat().st_size <= folder_size + 4096:  # past the folder's size, and then some
+        run_record.message(watched.root, "validator", "founder", f"{filler} {index}")
+        index += 1
+    for seconds in (180, 210, 240):
+        assert watched.at(seconds) == "watching"
+    assert watched.texts() == [committed]
+    assert watched.undelivered() == 1
+
+
+def test_a_message_with_a_wait_bounds_its_log_append_too(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str],
+) -> None:
+    """Falsifier (Codex's review of #124): ``wait_s`` bounding the inbox but not the optional
+    log append, so a caller that must not block waits on the log's lock without bound; or the
+    inbox row lost because the log was held."""
+
+    root = tmp_path / "run"
+    root.mkdir()
+    log = tmp_path / "messages.log"
+    holder = HeldLock(log, hold_s=20)
+    try:
+        start = time.monotonic()
+        run_record.message(root, "validator", "host", "while the log is held",
+                           log=str(log), wait_s=1.0)
+        took = time.monotonic() - start
+    finally:
+        holder.release()
+    assert took < 3.0, took
+    rows = [json.loads(line) for line in
+            (root / "validator" / "inbox.jsonl").read_text().splitlines()]
+    assert [row["text"] for row in rows] == ["while the log is held"]
+    assert log.read_bytes() == b""  # the append was skipped, not made around the lock
+    assert capfd.readouterr().err.strip()
+
+    run_record.message(root, "validator", "host", "with the log free", log=str(log),
+                       wait_s=1.0)
+    assert log.stat().st_size > 0  # positive control: a free log is appended to
+    assert len((root / "validator" / "inbox.jsonl").read_text().splitlines()) == 2
 
 
 def test_delivered_since_an_offset_finds_the_message_however_much_follows(
