@@ -714,6 +714,63 @@ def test_an_edited_odd_name_is_named_as_it_is(odd, name):
     assert _refusal(runs, dest) == CHANGES + "changed " + name
 
 
+MIB = 1024 * 1024
+# Pseudo-random, so no block of one file repeats another block: a read that compared the
+# wrong block, or the same block twice, would differ.
+LARGE = {"big/three.bin": hashlib.shake_256(b"three").digest(3 * MIB + 12345),
+         "big/two.bin": hashlib.shake_256(b"two").digest(2 * MIB)}
+
+
+@pytest.fixture
+def large(tmp_path):
+    """A Coder projection of files read in more than one block: ~3 MiB and exactly 2 MiB."""
+    repo = tmp_path / "source"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    _write(repo / "src/app.py", "IMPLEMENTATION\n")
+    for name, data in LARGE.items():
+        (repo / name).parent.mkdir(parents=True, exist_ok=True)
+        (repo / name).write_bytes(data)
+    _commit(repo, "large files")
+    dest, runs, result = _prepare_coder(tmp_path, repo)
+    for name, data in LARGE.items():
+        assert (dest / name).read_bytes() == data  # positive control: the raw bytes, in full
+    assert (dest / "big/two.bin").stat().st_size == 2 * MIB
+    return dest, runs, result
+
+
+def _flip(path, offset):
+    with path.open("r+b") as stream:
+        stream.seek(offset)
+        byte = stream.read(1)
+        stream.seek(offset)
+        stream.write(bytes([byte[0] ^ 0xFF]))
+
+
+@pytest.mark.parametrize("change,expected", [
+    ("none", None),
+    # Untouched beside a cause that refuses the launch: every block compared, none named.
+    ("link", LINKS + "zz_link"),
+    ("byte past 2 MiB", CHANGES + "changed big/three.bin"),
+    ("last byte", CHANGES + "changed big/two.bin"),
+    ("link+byte past 2 MiB+last byte",
+     LINKS + "zz_link" + BOTH + "changed big/three.bin, big/two.bin"),
+])
+def test_files_read_in_more_than_one_block_are_compared_in_full(large, change, expected):
+    dest, runs, result = large
+    kinds = change.split("+")
+    if "link" in kinds:
+        _link_dir(dest / "zz_link", "big")
+    if "byte past 2 MiB" in kinds:
+        _flip(dest / "big/three.bin", 2 * MIB + 777)
+    if "last byte" in kinds:
+        _flip(dest / "big/two.bin", 2 * MIB - 1)
+    if expected is None:
+        assert role_inputs.verify(runs, "task", "coder", dest) == result
+    else:
+        assert _refusal(runs, dest) == expected
+
+
 def _break_first_commit(dest):
     """Delete the clone's first commit's root tree object; HEAD still resolves to it."""
     tree = _git(dest, "rev-parse", "HEAD^{tree}")
