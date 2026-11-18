@@ -556,11 +556,12 @@ def inbox_end(root: Path, recipient: str, *, wait_s: float | None = None) -> int
 
 def delivered(root: Path, recipient: str, sender: str, text: str, *,
               since: int | None = None) -> bool:
-    """Whether the recipient's inbox already holds this message.
+    """Whether the recipient's inbox already holds this message, as a reader sees it.
 
-    For a writer that may already have written it: one retrying after an error that may have
-    come after its row was committed (the directory sync), or one that stopped mid-write. It
-    reads from ``since``, an ``inbox_end`` taken before the first attempt, however much was
+    It reads without the inbox's lock, so it can count a row another writer has appended but
+    not yet synced, which may still be rolled back: a writer that may already have written the
+    message decides under the lock instead (``message(..., once_since=)``). It reads from
+    ``since``, an ``inbox_end`` taken before the first attempt, however much was
     written after it; without one (or when the inbox is now shorter), the last 64 KiB. Only a
     regular file is read, where ``message`` would write it: never through a link, the file's
     or a directory's. Only complete rows count, as the inbox's reader takes them: a row a

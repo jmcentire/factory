@@ -764,19 +764,34 @@ class LaneWatch:
             detail += (f"; unless it commits or is continued, it is stopped as stalled "
                        f"{window / 60:.0f} min after {start}")
         state["turn_end_seen_at"] = self.now()
+        harness = str(pathlib.Path(__file__).resolve().parent)
+        if harness not in sys.path:
+            sys.path.insert(0, harness)
+        import run_record
+
+        # Where the inbox is checked for this notice before it is written, fixed before the
+        # notice is on record, so whichever round gives it (``_owed_elsewhere``) checks from the
+        # same place: the inbox's end read under its lock, without waiting; while another writer
+        # holds it, the inbox's start (the text, naming the lane and when its turn end was seen,
+        # is this notice's alone).
+        try:
+            inbox_from = run_record.inbox_end(self.root, "validator", wait_s=0)
+        except OSError:
+            inbox_from = 0
         state.setdefault("turn_notices", []).append({
             "text": (f"FACTORY_LANE_TURN_ENDED {lane}: {detail}. A turn's end is not acceptance "
                      "of its work. Evaluate it, then continue the lane or close it."),
-            "lane": lane, "slot": self.slot, "failed": False, "wake": detail})
+            "lane": lane, "slot": self.slot, "failed": False, "wake": detail,
+            "inbox_from": inbox_from})
         self._deliver_turn_notices(launch, state)
 
     def _deliver_turn_notices(self, launch: Mapping[str, Any], state: dict[str, Any]) -> None:
         """Make each pending turn-end notice: its wake, then its inbox message, oldest first.
 
-        Notices outlive the watch's life and status, so none is dropped. They are on record
-        before any is attempted, and each with the inbox's end (read under its lock) before its
-        message is, so a check that dies mid-way, or whose write failed after its row was
-        committed (the directory sync), does not tell one twice.
+        Notices outlive the watch's life and status, so none is dropped. Each is on record,
+        with where the inbox is checked for it (``_notice_turn_end``), before it is attempted,
+        and its message is written once-only from there, so a check that dies mid-way, or whose
+        write failed after its row was committed (the directory sync), does not tell one twice.
         What could not be done is retried at the next check. A check waits on each lock (the
         event log's, the inbox's) for at most ``SUPERVISOR_WAIT_S`` in all, however many notices
         it makes, and each message not delivered is recorded once as undelivered.
@@ -806,26 +821,16 @@ class LaneWatch:
                 notice["wake"] = None
             finally:
                 self._waking_for = None
-        # A notice's offset is the inbox's end read under its lock, on record before its message
-        # is first attempted; while it cannot be read, no message is attempted (they go in order).
-        for notice in notices:
-            if "inbox_from" not in notice and not getattr(self, "_inbox_failed", ""):
-                try:
-                    notice["inbox_from"] = run_record.inbox_end(
-                        self.root, "validator", wait_s=self._wait_left("inbox"))
-                except OSError as error:
-                    self._inbox_failed = str(error) or type(error).__name__
-        self._write_state(state)
         for notice in notices:
             if notice.get("sent") or getattr(self, "_inbox_failed", ""):
                 continue  # in order: none after one that failed
             text = str(notice.get("text"))
             try:
-                if not run_record.delivered(self.root, "validator", "host", text,
-                                            since=int(notice["inbox_from"])):
-                    run_record.message(self.root, "validator", "host", text,
-                                       wait_s=self._wait_left("inbox"),
-                                       once_since=int(notice["inbox_from"]))
+                # Decided under the inbox's lock only: a row another writer has appended but not
+                # yet synced can still be rolled back.
+                run_record.message(self.root, "validator", "host", text,
+                                   wait_s=self._wait_left("inbox"),
+                                   once_since=int(notice.get("inbox_from") or 0))
             except (OSError, ValueError) as error:
                 self._inbox_failed = str(error) or type(error).__name__
             else:

@@ -1515,8 +1515,11 @@ ROLLBACK = (
     "fd = os.open(sys.argv[1], os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)\n"
     "fcntl.flock(fd, fcntl.LOCK_EX)\n"
     "start = os.fstat(fd).st_size\n"
-    "body = b'x' * int(sys.argv[2])\n"
-    "os.write(fd, b'{\"sender\": \"coder\", \"text\": \"' + body + b'\"}\\n')\n"
+    "if sys.argv[2].startswith('@'):\n"
+    "    row = open(sys.argv[2][1:], 'rb').read()\n"
+    "else:\n"
+    "    row = b'{\"sender\": \"coder\", \"text\": \"' + b'x' * int(sys.argv[2]) + b'\"}\\n'\n"
+    "os.write(fd, row)\n"
     "print('locked', flush=True)\n"
     "select.select([sys.stdin], [], [], float(sys.argv[3]))\n"
     "os.ftruncate(fd, start)\n"
@@ -1526,13 +1529,16 @@ ROLLBACK = (
 
 class RollingBackWriter:
     """Another writer mid-append, as ``append_record`` is from its append to its rollback: it
-    holds the file's exclusive lock with a row of about ``size`` bytes appended but not
-    committed, and on release truncates the file back and lets the lock go."""
+    holds the file's exclusive lock with a row of about ``size`` bytes (or the exact ``row``)
+    appended but not committed, and on release, or after ``hold_s``, truncates the file back
+    and lets the lock go."""
 
-    def __init__(self, path: Path, size: int, hold_s: float = 60.0) -> None:
+    def __init__(self, path: Path, size: int = 0, hold_s: float = 60.0,
+                 row: Path | None = None) -> None:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        what = f"@{row}" if row is not None else str(size)
         self.process = subprocess.Popen(
-            [sys.executable, "-I", "-c", ROLLBACK, str(path), str(size), str(hold_s)],
+            [sys.executable, "-I", "-c", ROLLBACK, str(path), what, str(hold_s)],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         assert self.process.stdout is not None
         assert self.process.stdout.readline().strip() == "locked"
@@ -3827,15 +3833,16 @@ def test_two_watchers_retrying_one_notice_at_once_give_it_once(tmp_path: Path) -
 
 @pytest.mark.parametrize("first", [False, True], ids=["after-a-row", "as-the-first-row"])
 @pytest.mark.parametrize("taker", ["next-check", "restart", "next-round"])
-def test_a_notice_gets_no_offset_while_another_writers_append_is_uncommitted(
+def test_a_notice_created_while_another_writers_append_is_uncommitted_checks_from_the_start(
     tmp_path: Path, taker: str, first: bool,
 ) -> None:
     """Codex's case at the watcher: another writer holds the inbox's lock with an 8 KiB append
-    not yet committed when r1 announces a turn end. The notice gets no offset (``inbox_end``
-    waits for the lock) and so no message; the writer rolls back and lets the lock go; then
-    r1's next check, a restart of r1's watcher, or the next round takes the committed offset
-    and gives the notice once. With ``first`` the inbox was empty before the other writer's
-    row. Falsifier: an offset counting the uncommitted append (so the notice, written at the
+    not yet committed when r1 announces a turn end. The notice's offset, fixed at its creation
+    without waiting, is 0 (the inbox's start), and it gets no message while the lock is held;
+    the writer rolls back and lets the lock go; then r1's next check, a restart of r1's
+    watcher, or the next round gives it once, and later traffic past the rolled-back mark
+    hides nothing. With ``first`` the inbox was empty before the other writer's row.
+    Falsifier: an offset counting the uncommitted append (so the notice, written at the
     restored end, lies wholly before it and later traffic hides it), or the notice given
     twice."""
 
@@ -3857,7 +3864,7 @@ def test_a_notice_gets_no_offset_while_another_writers_append_is_uncommitted(
         writer.release()
     assert inbox.stat().st_size == committed  # rolled back
     [notice] = _watch_record(r1)["turn_notices"]
-    assert notice.get("inbox_from") is None
+    assert notice["inbox_from"] == 0
     assert r1.texts() == [] and r1.undelivered() == 1
     if taker == "next-check":
         taking = r1
@@ -3880,15 +3887,16 @@ def test_a_notice_gets_no_offset_while_another_writers_append_is_uncommitted(
 
 
 @pytest.mark.parametrize("queued", [False, True], ids=["alone", "behind-an-owed-notice"])
-def test_a_check_that_cannot_read_an_offset_sends_nothing_and_waits_once(
+def test_a_check_that_cannot_take_the_inbox_lock_sends_nothing_and_waits_once(
     tmp_path: Path, queued: bool,
 ) -> None:
-    """The inbox's lock is held through a check in which a turn notice has no offset yet. In
-    ``behind-an-owed-notice`` an earlier notice, with its offset, is still owed (its inbox was
-    a link). Falsifier: a message sent at that check (the notices go in order, so none is);
-    the unsent notice recorded undelivered more than once; a wait on the inbox's lock longer
-    than about 5 s in all (one per notice, or the offsets' wait and the messages' each);
-    the notices not given, once each and in order, at the next check."""
+    """The inbox's lock is held through a check in which a turn notice is created: its offset
+    is 0 (the lock was held), not the inbox's end. In ``behind-an-owed-notice`` an earlier
+    notice, with its offset, is still owed (its inbox was a link). Falsifier: a message sent
+    at that check (the notices go in order, so none is); the unsent notice recorded
+    undelivered more than once; a wait on the inbox's lock longer than about 5 s in all (one
+    per notice, or the offset's wait and the messages' each); the notices not given, once each
+    and in order, at the next check."""
 
     watched = _session(tmp_path / "lane", CLAUDE, None, 0)
     inbox = watched.root / "validator" / "inbox.jsonl"
@@ -3907,6 +3915,7 @@ def test_a_check_that_cannot_read_an_offset_sends_nothing_and_waits_once(
         _new_turn(watched, CLAUDE, at=70)
     else:
         assert watched.at(90) == "watching"
+    run_record.message(watched.root, "validator", "coder", "a foreign message")
     count += 1
     _ends_turn(watched, CLAUDE, "stop-reported", count, at=100)
     undelivered = watched.undelivered()
@@ -3920,7 +3929,7 @@ def test_a_check_that_cannot_read_an_offset_sends_nothing_and_waits_once(
     assert watched.texts() == []
     assert watched.undelivered() == undelivered + 1
     *_, unsent = _watch_record(watched)["turn_notices"]
-    assert unsent.get("inbox_from") is None
+    assert unsent["inbox_from"] == 0 < inbox.stat().st_size
     assert _seen_order(watched.wakes("lane-turn-ended"))[-1] == _seen(120)  # woken all the same
     assert watched.at(150) == "watching"
     expected = ([_seen(60)] if queued else []) + [_seen(120)]
@@ -3928,6 +3937,131 @@ def test_a_check_that_cannot_read_an_offset_sends_nothing_and_waits_once(
     assert watched.undelivered() == undelivered + 1
     assert _watch_record(watched)["turn_notices"] == []
 
+
+def test_a_notice_created_while_the_inbox_is_locked_is_woken_without_waiting_for_it(
+    tmp_path: Path,
+) -> None:
+    """The offset is fixed at the notice's creation with one attempt at the inbox's lock, not
+    a wait. Falsifier: the turn end's wake held back behind a wait on the inbox (its offset
+    read under a held lock), or the check waiting on the inbox longer than about 5 s in
+    all."""
+
+    watched = _session(tmp_path / "lane", CLAUDE, None, 0)
+    inbox = watched.root / "validator" / "inbox.jsonl"
+    run_record.message(watched.root, "validator", "coder", "a foreign message")
+    assert watched.at(30) == "watching"
+    _ends_turn(watched, CLAUDE, "stop-reported", 1, at=40)
+    wake_log = watched.lanes / "wake.jsonl"
+    seen: list[float] = []
+    done = threading.Event()
+
+    def watch_the_wake() -> None:
+        while not done.is_set():
+            if any(row.get("kind") == "lane-turn-ended" for row in watched._rows(wake_log)):
+                seen.append(time.monotonic())
+                return
+            time.sleep(0.02)
+
+    holder = HeldLock(inbox, hold_s=60)
+    watcher = threading.Thread(target=watch_the_wake)
+    try:
+        watcher.start()
+        started = time.monotonic()
+        outcome, took = _timed_check(watched, 60)
+    finally:
+        done.set()
+        holder.release()
+        watcher.join(timeout=10)
+    assert outcome == "watching"
+    assert seen and seen[0] - started < 1.5, (seen, started)
+    assert 4.5 <= took < 8.0, took
+    [notice] = _watch_record(watched)["turn_notices"]
+    assert notice["inbox_from"] == 0
+    assert watched.at(90) == "watching"
+    assert len(watched.texts()) == 1
+
+
+def test_a_notice_is_not_marked_sent_for_another_writers_unsynced_copy(tmp_path: Path) -> None:
+    """Codex's #124 finding: the notice is owed (with its offset) when another writer holds
+    the inbox's lock with a complete row of exactly this notice appended but not synced, and
+    rolls it back about 1 s later. Falsifier: a lock-free check counting that row, so the
+    notice is marked sent and then the row disappears."""
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    watched = _session(tmp_path / "lane", CLAUDE, None, 0)
+    inbox = watched.root / "validator" / "inbox.jsonl"
+    _block(watched, "symlink", elsewhere)
+    assert watched.at(30) == "watching"
+    _ends_turn(watched, CLAUDE, "stop-reported", 1, at=40)
+    assert watched.at(60) == "watching"
+    [notice] = _watch_record(watched)["turn_notices"]
+    _unblock(watched, "symlink")
+    row = tmp_path / "row"
+    row.write_bytes(_message_row(tmp_path, "host", notice["text"]))
+    writer = RollingBackWriter(inbox, row=row, hold_s=1.0)
+    try:
+        assert _read_rows(watched.root) == [("host", notice["text"])]  # visible, unsynced
+        outcome, took = _timed_check(watched, 90)
+    finally:
+        writer.release()
+    assert outcome == "watching"
+    assert 0.5 <= took < 5.0, took  # it waited for the rollback, within its 5 s
+    assert _read_rows(watched.root) == [("host", notice["text"])]  # its own copy
+    assert _watch_record(watched)["turn_notices"] == []
+    assert watched.at(120) == "watching"
+    assert _read_rows(watched.root) == [("host", notice["text"])]
+
+
+def test_a_notice_given_by_the_next_round_while_its_old_watcher_runs_on_is_given_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex's case: r1's notice is on record (created while another writer held the inbox's
+    lock, so not yet given), and r1's watcher, which survived its kill, is mid-check when r2
+    arms, adopts the notice and gives it; r1 then goes on to its own attempt. The pause is at
+    r1's first inbox call in that check (an offset, a lock-free look or the message).
+    Falsifier: r1 and r2 each checking from an offset of its own, r1's past r2's committed
+    copy, so the notice is written twice."""
+
+    r1 = _round(tmp_path, "tester.r1")
+    root = r1.root
+    inbox = root / "validator" / "inbox.jsonl"
+    run_record.message(root, "validator", "coder", "a foreign message")
+    assert r1.at(30) == "watching"
+    _ends_turn(r1, CLAUDE, "stop-reported", 1, at=40)
+    holder = HeldLock(inbox, hold_s=60)
+    try:
+        assert r1.at(60) == "watching"
+    finally:
+        holder.release()
+    [notice] = _watch_record(r1)["turn_notices"]
+    assert _read_rows(root) == [("coder", "a foreign message")]
+    pause = {"armed": False}
+    rounds: dict[str, Lane] = {}
+
+    def make(real: Any, fired: list[str]) -> Any:
+        def paused(*args: Any, **kwargs: Any) -> Any:
+            if pause["armed"]:
+                pause["armed"] = False
+                fired.append(real.__name__)
+                _close(root, "tester", "tester.r2")
+                rounds["r2"] = _round(tmp_path, "tester.r2", root=root)
+                assert rounds["r2"].at(30) == "watching"
+            return real(*args, **kwargs)
+        return paused
+
+    fired: list[str] = []
+    for name in ("inbox_end", "delivered", "message"):
+        _on_the_watchers_writer(name, monkeypatch, lambda real, _: make(real, fired))
+    pause["armed"] = True
+    assert r1.at(90) == "watching"
+    assert len(fired) == 1 and "r2" in rounds, fired  # r2 ran inside r1's check
+    assert _read_rows(root) == [("coder", "a foreign message"), ("host", notice["text"])]
+    assert _watch_record(rounds["r2"])["turn_notices"] == []
+    monkeypatch.undo()
+    for lane in (r1, rounds["r2"]):
+        assert lane.at(120) == "watching"
+    assert _read_rows(root).count(("host", notice["text"])) == 1
 
 def test_a_new_round_takes_the_notice_of_a_round_whose_watcher_died_before_its_verdict(
     tmp_path: Path,
