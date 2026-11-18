@@ -154,22 +154,24 @@ class Lane:
                  agent: str = "cursor-agent", terminal: bool = False,
                  lane: str | None = "tester.r2", caps: dict[str, object] | None = None,
                  watch: dict[str, object] | None = None, thread: bool = False,
-                 alive: bool = True, identities: bool = True) -> None:
+                 alive: bool = True, identities: bool = True, slot: str = "tester",
+                 root: Path | None = None) -> None:
         tmp_path.mkdir(parents=True, exist_ok=True)
-        self.root = tmp_path / "run"
+        self.slot = slot
+        self.root = root or tmp_path / "run"  # another lane's run root, when given
         self.lanes = self.root / "tmux-lanes"
-        self.lanes.mkdir(parents=True)
+        self.lanes.mkdir(parents=True, exist_ok=True)
         self.repo = tmp_path / "clone"
         subprocess.run(["git", "init", "-q", "-b", "main", str(self.repo)], check=True)
-        self.log = self.lanes / "tester-lane.log"
+        self.log = self.lanes / f"{slot}-lane.log"
         self.log.touch()
-        self.exits = self.lanes / "tester-exits.jsonl"
+        self.exits = self.lanes / f"{slot}-exits.jsonl"
         self.agent = agent
         self.identities = identities
         row: dict[str, object] = {
             "status": "active",
             "ts": datetime.datetime.fromtimestamp(T0, datetime.UTC).isoformat(),
-            "run_id": "r1", "role": "tester", "slot": "tester",
+            "run_id": "r1", "role": "tester", "slot": slot,
             "agent": agent, "model": "fixture-model", "terminal": terminal,
             "repository": str(self.repo), "lane_log": str(self.log),
             "lane_exits": str(self.exits), "tmux_target": TARGET,
@@ -179,11 +181,11 @@ class Lane:
         }
         if lane is not None:
             row["lane"] = lane
-        (self.lanes / "tester-launch.jsonl").write_text(json.dumps(row) + "\n")
+        (self.lanes / f"{slot}-launch.jsonl").write_text(json.dumps(row) + "\n")
         if thread:
-            (self.lanes / "tester-thread-id").write_text(
+            (self.lanes / f"{slot}-thread-id").write_text(
                 "12345678-1234-4234-8234-123456789abc\n")
-            delivery = self.lanes / "tester-delivery.env"
+            delivery = self.lanes / f"{slot}-delivery.env"
             delivery.write_text("PATH=/usr/bin:/bin\n")
             delivery.chmod(0o600)
         # The modelled pane and process table.
@@ -192,7 +194,7 @@ class Lane:
         self.snapshot_available = True
         self.stop_kills = True
         self.table: dict[int, dict[str, Any]] = _tree() if alive else dict(INIT)
-        self.record_path = self.lanes / "tester-persistent.json"
+        self.record_path = self.lanes / f"{slot}-persistent.json"
         self.record: dict[str, Any] | None = None
         if record is not None:
             self.report(**record)
@@ -208,7 +210,7 @@ class Lane:
 
     def _watch(self) -> lane_watchdog.LaneWatch:
         return lane_watchdog.LaneWatch(
-            root=self.root, slot="tester", now=self.clock, stop=self._stop, tmux=self._tmux,
+            root=self.root, slot=self.slot, now=self.clock, stop=self._stop, tmux=self._tmux,
             echo=self.said.append, deliver=self._deliver, processes=self._processes,
         )
 
@@ -255,7 +257,7 @@ class Lane:
         before the launch row was written."""
         base: dict[str, Any] = {
             "schema": "factory-persistent-lane/2", "root": str(self.root.resolve()),
-            "slot": "tester", "agent": self.agent, "turn_started_at": T0 - 5,
+            "slot": self.slot, "agent": self.agent, "turn_started_at": T0 - 5,
         }
         if self.identities:
             base.update(wrapper=dict(WRAPPER), worker=dict(WORKER))
@@ -755,21 +757,36 @@ def test_a_turn_that_starts_and_claims_done_between_two_checks_is_credited(
     _spared_past_the_boundary(watched)
 
 
-@pytest.mark.parametrize("read", ["in-one-check", "turn-k-before-k-plus-1-began"])
+@pytest.mark.parametrize("read", [
+    "in-one-check", "turn-k-before-k-plus-1-began", "turn-k-ended-before-its-response-was-read",
+])
 def test_turn_ks_done_line_read_after_turn_k_plus_1_began_counts_for_k_never_k_plus_1(
     tmp_path: Path, read: str,
 ) -> None:
-    """Turn 1 prints its done line and ends; turn 2 starts and ends without one. Falsifier
+    """Turn 1 prints its done line and ends; turn 2 starts (the wrapper writes its turn mark)
+    and ends without one. In ``in-one-check`` and in the late-response case, turn 1's response
+    and turn 2's mark are read in the same check, in that order (agy's test point). Falsifier
     (Codex's review): turn 1's done line, read after turn 2 began, credited to turn 2, so its
     notice says done and the lane that never finished its new work is spared the stall stop."""
 
     watched = _session(tmp_path, CLAUDE_STREAM, None, 0, identities=False)
     assert watched.at(60) == "watching"
-    _ends_turn(watched, CLAUDE_STREAM, "idle", 1, at=100, done=True)
+    if read == "turn-k-ended-before-its-response-was-read":
+        _ends_turn(watched, CLAUDE_STREAM, "idle", 1, at=100)
+        assert watched.at(120) == "watching"
+        [first] = watched.texts()
+        assert DONE_UNSEEN in first
+        watched.respond(DONE_LINE)  # turn 1's response, flushed late
+    else:
+        _ends_turn(watched, CLAUDE_STREAM, "idle", 1, at=100, done=True)
     if read == "turn-k-before-k-plus-1-began":
         assert watched.at(120) == "watching"
         assert DONE_SEEN in watched.texts()[0]
     _new_turn(watched, CLAUDE_STREAM, at=150)
+    if read != "turn-k-before-k-plus-1-began":  # both unread until the next check
+        rows = [json.loads(line) for line in watched.log.read_text().splitlines()][-2:]
+        assert [row["type"] for row in rows] == ["result", "persistent-turn-start"]
+        assert DONE_LINE in rows[0]["result"] and rows[1]["turn_started_at"] == T0 + 150
     assert watched.at(180) == "watching"
     _ends_turn(watched, CLAUDE_STREAM, "idle", 2, at=200)
     assert watched.at(210) == "watching"
@@ -996,6 +1013,43 @@ def test_a_stop_that_arrives_after_a_queued_prompt_does_not_exempt_the_queued_tu
     second = watched.texts()[-1]
     assert DONE_UNSEEN in second and _deadline(1300) in second
     _stalls_at_the_boundary(watched, 1320 + STALL_WINDOW_S)
+
+
+@pytest.mark.parametrize("end", ["turn-end", "clean-exit"])
+def test_a_queued_turn_is_not_exempted_by_the_continuation_of_the_turn_ahead(
+    tmp_path: Path, end: str,
+) -> None:
+    """Codex's case at the watcher: prompt B is queued while A runs; A's stop has no done line
+    and A's continuation carries it; then B's session ends its turn, or exits cleanly. The
+    wrapper writes every stop under B's record unbound. Falsifier: the continuation's done line
+    credited to B, so its notice says done, it is spared the stall stop, or it exits ``done``."""
+
+    watched = _session(tmp_path, CLAUDE, None, 0, identities=False)
+    assert watched.at(60) == "watching"
+    _new_turn(watched, CLAUDE, at=90)  # A
+    assert watched.at(120) == "watching"
+    _new_turn(watched, CLAUDE, at=150)  # B, queued behind A
+    watched.report(turn_queued=True, turn_stops=0, turn_bound=None, turn_generation=None)
+    watched.stop_report("A: ran the suite.", bound=False)
+    watched.report(phase="stop-reported", stop_reports=1, stop_reported_at=T0 + 160,
+                   turn_stops=1, turn_bound=False)
+    watched.stop_report(DONE_LINE, bound=False)  # A's continuation, with A's done line
+    watched.report(stop_reports=2, turn_stops=2)
+    assert watched.at(180) == "watching"
+    [first] = watched.texts()
+    assert DONE_UNSEEN in first and DONE_SEEN not in first and _deadline(160) in first
+    if end == "turn-end":
+        watched.stop_report("B: stopping here.", bound=False)
+        watched.report(stop_reports=3, turn_stops=3)
+        assert watched.at(300) == "watching"
+        later = watched.texts()[-1]
+        assert DONE_UNSEEN in later and DONE_SEEN not in later
+        _stalls_at_the_boundary(watched)
+    else:
+        lane_agent.record_exit(watched.exits, slot="tester", rc=0, stopped=False)
+        watched.kill()
+        assert watched.at(300) == "exited"
+        assert watched.stops == []
 
 
 @pytest.mark.parametrize(("kind", "busy", "settled"), [
@@ -2197,6 +2251,34 @@ def test_inbox_end_is_zero_for_an_inbox_that_is_not_a_regular_file_in_a_real_dir
     assert run_record.inbox_end(root, "validator") == 0
 
 
+@pytest.mark.parametrize("linked", ["run-folder", "recipient-folder"])
+def test_a_linked_run_or_recipient_folder_has_no_inbox_end_and_no_delivered_message(
+    tmp_path: Path, linked: str,
+) -> None:
+    """The link's target holds the exact message. Falsifier: a link followed, so a retry takes
+    a message in another folder for its own (and marks a notice sent that was never written
+    where it belongs)."""
+
+    real = tmp_path / "real-run"
+    real.mkdir()
+    run_record.message(real, "validator", "host", "the exact message")
+    assert run_record.delivered(real, "validator", "host", "the exact message")  # control
+    assert run_record.inbox_end(real, "validator") > 0
+    if linked == "run-folder":
+        root = tmp_path / "linked-run"
+        root.symlink_to(real, target_is_directory=True)
+    else:
+        root = tmp_path / "run"
+        root.mkdir()
+        (root / "validator").symlink_to(real / "validator", target_is_directory=True)
+    assert run_record.inbox_end(root, "validator") == 0
+    for since in (None, 0):
+        assert run_record.delivered(root, "validator", "host", "the exact message",
+                                    since=since) is False
+    with pytest.raises(ValueError):  # the writer refuses the same links
+        run_record.message(root, "validator", "host", "another message")
+    assert len((real / "validator" / "inbox.jsonl").read_text().splitlines()) == 1
+
 def _filled_folder(path: Path) -> int:
     """A folder where the inbox should be, made large; returns its own size."""
     path.mkdir(parents=True)
@@ -2266,6 +2348,40 @@ def test_a_notice_first_tried_on_a_folder_inbox_is_found_once_committed(
     assert watched.texts() == [committed]
     assert watched.undelivered() == 1
 
+
+def test_a_decoy_behind_a_linked_inbox_folder_never_counts_as_the_notice_delivered(
+    tmp_path: Path,
+) -> None:
+    """Codex's case: ``validator`` is linked to a decoy folder that holds an exact copy of the
+    pending notice. Falsifier: the retry finding the copy through the link and marking the
+    notice sent, so it is never written to the Validator's real inbox."""
+
+    import shutil
+
+    decoy = tmp_path / "decoy"
+    decoy.mkdir()
+    watched = _session(tmp_path / "lane", CLAUDE, None, 0)
+    validator = watched.root / "validator"
+    validator.symlink_to(decoy, target_is_directory=True)
+    assert watched.at(30) == "watching"
+    _ends_turn(watched, CLAUDE, "stop-reported", 1, at=40)
+    assert watched.at(60) == "watching"  # the message is refused: its folder is a link
+    [notice] = _watch_record(watched)["turn_notices"]
+    copy = tmp_path / "copy"
+    copy.mkdir()
+    run_record.message(copy, "validator", "host", notice["text"])  # as the watcher writes it
+    shutil.copy(copy / "validator" / "inbox.jsonl", decoy / "inbox.jsonl")
+    assert run_record.delivered(copy, "validator", "host", notice["text"])
+    for seconds in (90, 120):
+        assert watched.at(seconds) == "watching"
+        assert [entry["text"] for entry in _watch_record(watched)["turn_notices"]] == [
+            notice["text"]]  # still owed: not marked sent
+    validator.unlink()  # a real folder again
+    for seconds in (150, 180):
+        assert watched.at(seconds) == "watching"
+    assert watched.texts() == [notice["text"]]
+    assert _watch_record(watched)["turn_notices"] == []
+    assert len((decoy / "inbox.jsonl").read_text().splitlines()) == 1  # the decoy untouched
 
 def test_a_message_with_a_wait_bounds_its_log_append_too(
     tmp_path: Path, capfd: pytest.CaptureFixture[str],
@@ -2970,6 +3086,240 @@ def test_run_gives_up_on_owed_notices_an_hour_after_its_final_verdict(tmp_path: 
     assert list(elsewhere.iterdir()) == []
 
 
+# -- 7b. a new round takes over a finished round's owed notices --------------------------------
+#
+# Rounds of one lane run under slots ``<lane>.<round>`` and share the run root; the launcher
+# runs ``lane_watchdog.py close --lane <lane> --by <new slot>`` before the new round's watcher.
+
+
+def _watch_record(watched: Lane) -> dict[str, Any]:
+    return dict(json.loads((watched.lanes / f"{watched.slot}-watch.json").read_text()))
+
+
+def _round(tmp_path: Path, slot: str, root: Path | None = None, lane: str = "tester",
+           **options: Any) -> Lane:
+    return _session(tmp_path / slot, CLAUDE, None, 0, slot=slot, lane=lane, root=root,
+                    **options)
+
+
+def _close(root: Path, lane: str, by: str) -> None:
+    harness = Path(__file__).resolve().parents[1] / "harness"
+    subprocess.run([sys.executable, str(harness / "lane_watchdog.py"), "close", "--root",
+                    str(root), "--lane", lane, "--by", by], check=True, capture_output=True,
+                   text=True, timeout=60)
+
+
+def _owes_a_notice(watched: Lane, at: float) -> dict[str, Any]:
+    """A turn end announced at ``at`` that is still owed (the inbox is unusable)."""
+    _ends_turn(watched, CLAUDE, "stop-reported", 1, at=at - 20)
+    assert watched.at(at) == "watching"
+    [notice] = _watch_record(watched)["turn_notices"]
+    return dict(notice)
+
+
+def _finishes(watched: Lane, at: float) -> None:
+    lane_agent.record_exit(watched.exits, slot=watched.slot, rc=0, stopped=False)
+    watched.kill()
+    assert watched.at(at) == "exited"
+
+
+def test_a_new_round_takes_over_a_finished_rounds_owed_notice(tmp_path: Path) -> None:
+    """Codex's case: ``tester.r1`` finishes while the inbox is unusable, its notice owed; the
+    launcher closes it for ``tester.r2`` and r2's watcher starts; the inbox is mended. Falsifier:
+    r1's notice lost with its killed watcher, given twice, recorded undelivered twice, or left
+    in r1's record."""
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    r1 = _round(tmp_path, "tester.r1")
+    _block(r1, "symlink", elsewhere)
+    assert r1.at(30) == "watching"
+    owed = _owes_a_notice(r1, 60)
+    _finishes(r1, 90)
+    assert r1.undelivered() == 1
+    _close(r1.root, "tester", "tester.r2")
+    r2 = _round(tmp_path, "tester.r2", root=r1.root)
+    assert _watch_record(r2)["turn_notices"] == [owed]  # its state kept
+    left = _watch_record(r1)
+    assert left["turn_notices"] == [] and left["turn_notices_to"] == "tester.r2"
+    assert left["status"] == "exited"
+    assert r2.at(120) == "watching"  # still unusable: no second undelivered row
+    assert r2.texts() == [] and r2.undelivered() == 1
+    _unblock(r2, "symlink")
+    for seconds in (150, 180):
+        assert r2.at(seconds) == "watching"
+    assert r2.texts() == [owed["text"]] and f"(seen {_seen(60)})" in owed["text"]
+    assert r2.undelivered() == 1 and _watch_record(r2)["turn_notices"] == []
+    assert _watch_record(r1)["turn_notices"] == []
+    assert list(elsewhere.iterdir()) == []
+
+
+def test_a_finished_rounds_drain_ends_once_its_notice_is_taken_over(tmp_path: Path) -> None:
+    """r1's ``run`` drains its owed notice after its verdict; r2 starts and takes it over.
+    Falsifier: r1 draining on for the hour, or writing its stale notice back into its record
+    (so the notice is given twice, or by a watcher about to be killed)."""
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    r1 = _round(tmp_path, "tester.r1")
+    _block(r1, "symlink", elsewhere)
+    rounds: dict[str, Lane] = {}
+
+    def next_round() -> None:
+        _close(r1.root, "tester", "tester.r2")
+        rounds["r2"] = _round(tmp_path, "tester.r2", root=r1.root)
+
+    verdict, polls = _run(r1, {
+        60: lambda: _ends_turn(r1, CLAUDE, "stop-reported", 1, at=50),
+        150: lambda: (lane_agent.record_exit(r1.exits, slot="tester.r1", rc=0, stopped=False),
+                      r1.kill()),
+        600: next_round,
+    })
+    assert verdict == "exited"
+    assert polls[-1] == 600  # its next loop after the takeover
+    left = _watch_record(r1)
+    assert left["turn_notices"] == [] and left["turn_notices_to"] == "tester.r2"
+    r2 = rounds["r2"]
+    _unblock(r2, "symlink")
+    for seconds in (30, 60):
+        assert r2.at(seconds) == "watching"
+    [text] = r2.texts()
+    assert f"(seen {_seen(60)})" in text
+    assert _watch_record(r1)["turn_notices"] == []
+
+
+def test_a_taken_over_notice_whose_wake_was_not_made_gets_its_wake_once(tmp_path: Path) -> None:
+    """r1's turn end met a held events log, still held at its final check: its message was
+    written, its wake not. Falsifier: the wake lost in the takeover, or the message written
+    again."""
+
+    r1 = _round(tmp_path, "tester.r1")
+    assert r1.at(30) == "watching"
+    _ends_turn(r1, CLAUDE, "stop-reported", 1, at=40)
+    # The verdict's own event waits for the events log (about 20 s here); the retried wake
+    # before it gets one allowance and stays owed.
+    holder = HeldLock(r1.root / "events.jsonl", hold_s=20)
+    try:
+        assert r1.at(60) == "watching"
+        _finishes(r1, 90)
+    finally:
+        holder.release()
+    assert len(r1.texts()) == 1 and r1.wakes("lane-turn-ended") == []
+    assert len(_watch_record(r1)["turn_notices"]) == 1  # its wake still owed
+    _close(r1.root, "tester", "tester.r2")
+    r2 = _round(tmp_path, "tester.r2", root=r1.root)
+    for seconds in (30, 60):
+        assert r2.at(seconds) == "watching"
+    assert _seen_order(r2.wakes("lane-turn-ended")) == [_seen(60)]
+    assert _seen_order(r2.events("lane-turn-ended")) == [_seen(60)]
+    assert len(r2.texts()) == 1 and r2.undelivered() == 0
+    assert _watch_record(r1)["turn_notices"] == []
+
+
+@pytest.mark.parametrize("taker", ["new-life", "next-round"])
+def test_a_notice_left_in_both_records_by_a_crash_is_given_once(
+    tmp_path: Path, taker: str,
+) -> None:
+    """The takeover writes the new record first, then the old; a crash between them leaves the
+    notice in both. Falsifier: the leftover given again when it is next taken over."""
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    r1 = _round(tmp_path, "tester.r1")
+    _block(r1, "symlink", elsewhere)
+    assert r1.at(30) == "watching"
+    owed = _owes_a_notice(r1, 60)
+    _finishes(r1, 90)
+    path = r1.lanes / "tester.r1-watch.json"
+    before = path.read_bytes()
+    _close(r1.root, "tester", "tester.r2")
+    r2 = _round(tmp_path, "tester.r2", root=r1.root)
+    path.write_bytes(before)  # the crash: r1's record was never rewritten
+    assert _watch_record(r1)["turn_notices"] == [owed]
+    _unblock(r2, "symlink")
+    assert r2.at(120) == "watching"
+    assert r2.texts() == [owed["text"]]
+    if taker == "new-life":
+        r2.clock.value = T0 + 150
+        r2.watch.arm(new_life=True)
+        taking = r2
+    else:
+        _finishes(r2, 150)
+        _close(r1.root, "tester", "tester.r3")
+        taking = _round(tmp_path, "tester.r3", root=r1.root)
+    for seconds in (180, 210):
+        assert taking.at(seconds) == "watching"
+    assert taking.texts() == [owed["text"]]
+    assert _watch_record(r1)["turn_notices"] == []
+    assert _watch_record(taking)["turn_notices"] == []
+
+
+def test_a_new_round_leaves_another_lanes_notices_and_an_unfinished_rounds(
+    tmp_path: Path,
+) -> None:
+    """Falsifier: a notice taken from another lane's finished round, or from a round of this
+    lane whose watcher is still running (it would be given twice)."""
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    other = _round(tmp_path, "coder.r1", lane="coder")
+    root = other.root
+    _block(other, "symlink", elsewhere)
+    assert other.at(30) == "watching"
+    others = _owes_a_notice(other, 60)
+    _finishes(other, 90)
+    running = _round(tmp_path, "tester.r0", root=root)
+    assert running.at(30) == "watching"
+    owed = _owes_a_notice(running, 120)
+    _round(tmp_path, "tester.r2", root=root)
+    assert _watch_record(other)["turn_notices"] == [others]
+    assert "turn_notices_to" not in _watch_record(other)
+    assert _watch_record(running)["turn_notices"] == [owed]
+    assert "turn_notices_to" not in _watch_record(running)
+
+
+def test_taken_over_notices_come_in_file_name_order_ahead_of_the_rounds_own(
+    tmp_path: Path,
+) -> None:
+    """r0 and r1 still run, each owing a notice (r1's is the older), when r2 starts; r2 then
+    owes its own. Once r0 and r1 have finished, a restart of r2's watcher (its record still
+    ``watching``) keeps its record, and r2's next life takes theirs. Falsifier: their notices
+    taken in time order or behind r2's own, taken while their rounds still ran, or taken by a
+    restart that keeps the record."""
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    r1 = _round(tmp_path, "tester.r1")
+    root = r1.root
+    _block(r1, "symlink", elsewhere)
+    assert r1.at(30) == "watching"
+    r0 = _round(tmp_path, "tester.r0", root=root)
+    assert r0.at(30) == "watching"
+    from_r1 = _owes_a_notice(r1, 60)
+    from_r0 = _owes_a_notice(r0, 90)
+    r2 = _round(tmp_path, "tester.r2", root=root)
+    assert r2.at(30) == "watching"
+    own = _owes_a_notice(r2, 120)
+    assert _watch_record(r2)["turn_notices"] == [own]  # theirs still run: left alone
+    _finishes(r0, 150)
+    _finishes(r1, 150)
+    r2.clock.value = T0 + 170
+    r2.restart()
+    assert _watch_record(r2)["turn_notices"] == [own]
+    assert [len(_watch_record(left)["turn_notices"]) for left in (r0, r1)] == [1, 1]
+    r2.clock.value = T0 + 200
+    r2.watch.arm(new_life=True)
+    for left in (r0, r1):
+        assert _watch_record(left)["turn_notices"] == []
+        assert _watch_record(left)["turn_notices_to"] == "tester.r2"
+    assert [notice["text"] for notice in _watch_record(r2)["turn_notices"]] == [
+        from_r0["text"], from_r1["text"], own["text"]]
+    _unblock(r2, "symlink")
+    assert r2.at(230) == "watching"
+    assert r2.texts() == [from_r0["text"], from_r1["text"], own["text"]]
+    assert _seen_order([{"detail": text} for text in r2.texts()]) == [
+        _seen(90), _seen(60), _seen(120)]  # file-name order, not time order
+
 # -- 8. what the session wrappers write -------------------------------------------------------
 #
 # The real lane wrapper (harness/lane_agent.py) hosts a synthetic native program, as in
@@ -3156,7 +3506,9 @@ def test_a_new_session_record_starts_its_turn_fields_empty(tmp_path: Path) -> No
 
     native = Native(tmp_path, "claude")
     try:
-        assert _turn_fields(native.raw()) == (0, False, None)
+        record = native.raw()
+        assert _turn_fields(record) == (0, False, None)
+        assert "turn_bound" in record and record["turn_bound"] is None
     finally:
         native.close()
 
@@ -3168,24 +3520,24 @@ def test_each_stop_report_row_names_the_current_turn_and_counts_the_turns_stops(
     record's stop count not reset by a prompt report."""
 
     record = native.prompt("first")
-    assert _turn_fields(record)[:2] == (0, False)
+    assert _turn_fields(record)[:2] == (0, False) and record["turn_bound"] is None
     first = native.stop("one")
     assert first["turn_started_at"] == record["turn_started_at"]
-    assert native.raw()["turn_stops"] == 1
+    assert native.raw()["turn_stops"] == 1 and native.raw()["turn_bound"] is True
     second = native.stop("two")
     assert second["turn_started_at"] == record["turn_started_at"]
     assert native.raw()["turn_stops"] == 2
     later = native.prompt("second")
     assert later["turn_started_at"] != record["turn_started_at"]
-    assert _turn_fields(later)[:2] == (0, False)
+    assert _turn_fields(later)[:2] == (0, False) and later["turn_bound"] is None
     assert native.stop("three")["turn_started_at"] == later["turn_started_at"]
 
 
 def test_codexs_case_a_stop_from_before_a_queued_prompt_is_unbound(native: Native) -> None:
     """Prompt B is reported while A still runs, then A's stop arrives with A's done line.
-    Falsifier: A's stop bound to B's turn (so A's done line would exempt B), or B's own stop
-    left unbound. With generations (Codex) the stops are told apart by them; without
-    (Claude Code), B was queued, so its first stop is unbound and its next bound."""
+    Falsifier: A's stop bound to B's turn (so A's done line would exempt B). With generations
+    (Codex) the stops are told apart by them, so B's own stop is bound; without (Claude Code),
+    B was queued and nothing tells its stops from A's, so no stop under B's record is bound."""
 
     generation = native.dialect == "codex"  # type: ignore[attr-defined]
     a = native.prompt("A", **({"turn_id": "turn-a"} if generation else {}))
@@ -3197,8 +3549,8 @@ def test_codexs_case_a_stop_from_before_a_queued_prompt_is_unbound(native: Nativ
     assert stop_a["turn_started_at"] == b["turn_started_at"]
     assert DONE_LINE in stop_a["last_assistant_message"]
     stop_b = native.stop("B is done.", **({"turn_id": "turn-b"} if generation else {}))
-    assert stop_b["bound"] is True and stop_b["turn_started_at"] == b["turn_started_at"]
-    assert native.raw()["turn_stops"] == 2
+    assert stop_b["bound"] is generation and stop_b["turn_started_at"] == b["turn_started_at"]
+    assert native.raw()["turn_stops"] == 2 and native.raw()["turn_bound"] is generation
 
 
 @pytest.mark.parametrize(("prompt_id", "stop_ids", "bound"), [
@@ -3225,30 +3577,58 @@ def test_a_stop_with_a_generation_is_bound_by_it_only_when_its_prompt_had_one(
         native.close()
 
 
-def test_without_generations_a_first_stop_is_bound_unless_queued_or_continued(
+def test_with_generations_on_both_sides_a_stop_is_bound_by_its_generation_alone(
+    tmp_path: Path,
+) -> None:
+    """Falsifier: a continuation (``stop_hook_active``) with the turn's own generation left
+    unbound, or one with another generation bound, when both sides carry generations."""
+
+    native = Native(tmp_path, "codex")
+    try:
+        native.prompt("work", turn_id="g1")
+        rows = [native.stop("1", turn_id="g1", stop_hook_active=True),
+                native.stop("2", turn_id="g0", stop_hook_active=True),
+                native.stop("3", turn_id="g1")]
+        assert [row["bound"] for row in rows] == [True, False, True]
+    finally:
+        native.close()
+
+
+def test_without_generations_a_queued_turn_binds_no_stop_and_a_continuation_follows_its_stop(
     native: Native,
 ) -> None:
-    """Falsifier: a first stop after a prompt queued behind a running turn bound to it; a stop
-    that ends a continuation (``stop_hook_active``) bound as the turn's own first stop; a
-    later stop of the turn left unbound."""
+    """Without generations on both sides: a prompt reported while a turn ran binds no stop under
+    its record, continuations included, however many came before; otherwise a stop that ends a
+    continuation (``stop_hook_active``) takes the binding of the stop before it (unbound when it
+    comes first), and any other stop is bound. ``turn_bound`` is the last stop's binding, null
+    at each prompt. Falsifier (Codex's review): a second continuation bound as if it were the
+    turn's own stop; a queued turn's later stop bound."""
 
-    native.prompt("plain")
+    plain = native.prompt("plain")
+    assert plain["turn_bound"] is None
     assert [native.stop("1")["bound"], native.stop("2")["bound"]] == [True, True]
+    assert native.raw()["turn_bound"] is True
 
     native.prompt("running")
     queued = native.prompt("queued behind it")
-    assert queued["turn_queued"] is True
-    assert [native.stop("1")["bound"], native.stop("2")["bound"]] == [False, True]
+    assert queued["turn_queued"] is True and queued["turn_bound"] is None
+    rows = [native.stop("1"), native.stop("2", stop_hook_active=True), native.stop("3")]
+    assert [row["bound"] for row in rows] == [False, False, False]
+    assert native.raw()["turn_bound"] is False and native.raw()["turn_stops"] == 3
 
     after = native.prompt("after a stop")
-    assert after["turn_queued"] is False
-    rows = [native.stop("1", stop_hook_active=True), native.stop("2", stop_hook_active=True)]
-    assert [row["bound"] for row in rows] == [False, True]
+    assert after["turn_queued"] is False and after["turn_bound"] is None
+    bindings = []
+    for text, active in (("1", True), ("2", True), ("3", False), ("4", True)):
+        bindings.append(native.stop(text, stop_hook_active=active)["bound"])
+        assert native.raw()["turn_bound"] is bindings[-1]
+    assert bindings == [False, False, True, True]
 
 
 def test_a_prompt_reported_while_the_operator_is_asked_is_queued(tmp_path: Path) -> None:
     """Claude Code reports a permission question (``asking-operator``) mid-turn, then a new
-    prompt. Falsifier: the new turn's first stop bound, though it may end the questioned turn."""
+    prompt. Falsifier: any stop under the new turn's record bound, though it may end the
+    questioned turn."""
 
     native = Native(tmp_path, "claude")
     try:
@@ -3257,10 +3637,31 @@ def test_a_prompt_reported_while_the_operator_is_asked_is_queued(tmp_path: Path)
         native.until(lambda: native.raw().get("phase") == "asking-operator", "the question")
         queued = native.prompt("queued behind the question")
         assert queued["turn_queued"] is True
-        assert [native.stop("1")["bound"], native.stop("2")["bound"]] == [False, True]
+        assert [native.stop("1")["bound"], native.stop("2")["bound"]] == [False, False]
     finally:
         native.close()
 
+
+def test_codexs_continuation_case_leaves_every_stop_under_a_queued_turn_unbound(
+    tmp_path: Path,
+) -> None:
+    """Without generations: prompt B is queued while A runs; A's stop carries no done line,
+    A's continuation (``stop_hook_active``) carries it, then B's own stop. Falsifier: the
+    continuation (or B's stop) bound to B's turn, so A's done line would exempt B."""
+
+    native = Native(tmp_path, "claude")
+    try:
+        native.prompt("A")
+        b = native.prompt("B, queued behind A")
+        assert b["turn_queued"] is True
+        rows = [native.stop("A: ran the suite."),
+                native.stop(DONE_LINE, stop_hook_active=True),
+                native.stop("B: stopping here.")]
+        assert [row["bound"] for row in rows] == [False, False, False]
+        assert {row["turn_started_at"] for row in rows} == {b["turn_started_at"]}
+        assert native.raw()["turn_bound"] is False
+    finally:
+        native.close()
 
 def test_an_antigravity_repeat_of_the_same_prompt_resets_nothing(tmp_path: Path) -> None:
     """Antigravity reports the latest user message before every model call, numbered. The

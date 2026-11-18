@@ -937,6 +937,7 @@ class LaneWatch:
             raise LaneWatchError("cannot resume a lane whose requested stop is unverified")
         if prior.get("status") in {"watching", "paused", "wrapping", "stopping"} and not new_life:
             return prior
+        adopted = self._owed_elsewhere(launch)
         # A turn resumed after this watcher's own pause or wrap-up continues the same work: the
         # stall window carries on from where it stood, with no fresh read allowance.
         continued = prior.get("status") in {"paused", "wrapping"}
@@ -971,13 +972,51 @@ class LaneWatch:
             "continued": continued,
             "completion_claim": False,
             "turn_ends_noticed": self._turn_end_baseline(prior),
-            "turn_notices": [notice for notice in prior.get("turn_notices", [])
-                             if isinstance(notice, dict)],
+            "turn_notices": [*(notice for _, _, owed in adopted for notice in owed),
+                             *(notice for notice in prior.get("turn_notices", [])
+                               if isinstance(notice, dict))],
             "stall_carry_s": float(prior.get("stall_carry_s", 0.0)) if continued else 0.0,
             "status": "watching",
         }
         self._write_state(state)
+        # Only once this record holds them: a check that dies in between leaves them in both,
+        # and the inbox's own record keeps either from telling one twice.
+        for state_path, other, owed in adopted:
+            other["turn_notices"] = [notice for notice in other["turn_notices"]
+                                     if notice not in owed]
+            other["turn_notices_to"] = self.slot
+            temporary = state_path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(other, indent=1, sort_keys=True) + "\n",
+                                 encoding="utf-8")
+            temporary.replace(state_path)
         return state
+
+    def _owed_elsewhere(self, launch: Mapping[str, Any]
+                        ) -> list[tuple[pathlib.Path, dict[str, Any], list[dict[str, Any]]]]:
+        """The turn-end notices this lane's finished rounds still owe, which a new life takes
+        over (``arm``): each round's record, and its notices for this lane.
+
+        A new round replaces the lane's watcher (tmux_lane.sh), which may still have been
+        delivering notices after its round finished (``run``). They move with what was already
+        done for each, so none is stranded and none is told twice: a message already in the
+        inbox is found from its retry offset. The finished round's record then keeps none and
+        names the slot that took them."""
+        lane = launch.get("lane")
+        adopted: list[tuple[pathlib.Path, dict[str, Any], list[dict[str, Any]]]] = []
+        if not isinstance(lane, str) or not lane:
+            return adopted
+        for state_path in sorted(self.lanes.glob("*-watch.json")):
+            if state_path == self.state_path:
+                continue
+            state = _load_json(state_path)
+            notices = state.get("turn_notices")
+            if state.get("status") not in LANE_FINAL or not isinstance(notices, list):
+                continue
+            owed = [notice for notice in notices
+                    if isinstance(notice, dict) and notice.get("lane") == lane]
+            if owed:
+                adopted.append((state_path, state, owed))
+        return adopted
 
     def _turn_end_baseline(self, prior: Mapping[str, Any]) -> int:
         """The turn ends already told when a life starts.
@@ -1398,8 +1437,8 @@ class LaneWatch:
         self.arm(new_life=new_life, log_offset=log_offset)
         poll = float((self.launch().get("watch") or {}).get("poll_s", DEFAULT_POLL_S))
         # A final verdict ends supervision, not the turn-end notices still owed: each check
-        # retries them first. The watcher stays for them up to TURN_NOTICE_DRAIN_S, until a new
-        # round replaces it (its new life carries them).
+        # retries them first. The watcher stays for them up to TURN_NOTICE_DRAIN_S, or until a
+        # new round of the lane replaces it and takes them over (``_owed_elsewhere``).
         drained = 0.0
         while True:
             verdict = self.check()

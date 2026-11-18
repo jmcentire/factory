@@ -481,19 +481,31 @@ def message(root: Path, recipient: str, sender: str, text: str, *, log: str = os
             print(f"factory: message queued; optional log failed: {error}", file=sys.stderr)
 
 
+def _inbox_directory(root: Path, recipient: str) -> int:
+    """The recipient's directory, opened only where ``message`` writes: not through a linked
+    run directory or a linked recipient directory. Raises OSError otherwise."""
+    if root.is_symlink():
+        raise OSError(f"{root} is a symlink")
+    return os.open(root / recipient, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+
+
 def inbox_end(root: Path, recipient: str) -> int:
     """The recipient's inbox size now: a message written after this is at or past it.
 
-    An inbox that is not a regular file in a real directory (missing, a link, a folder) is 0:
-    a message can be written only once it is one, and then from its start.
+    An inbox that is not a regular file in a real directory (missing, a link, a folder, or
+    under a linked directory) is 0: a message can be written only once it is one, and then
+    from its start.
     """
-    directory = root / recipient
     try:
-        if directory.is_symlink():
-            return 0
-        metadata = (directory / "inbox.jsonl").lstat()
+        directory = _inbox_directory(root, recipient)
     except OSError:
         return 0
+    try:
+        metadata = os.stat("inbox.jsonl", dir_fd=directory, follow_symlinks=False)
+    except OSError:
+        return 0
+    finally:
+        os.close(directory)
     return metadata.st_size if stat.S_ISREG(metadata.st_mode) else 0
 
 
@@ -505,14 +517,21 @@ def delivered(root: Path, recipient: str, sender: str, text: str, *,
     come after its row was committed (the directory sync), or one that stopped mid-write. It
     reads from ``since``, an ``inbox_end`` taken before the first attempt, however much was
     written after it; without one (or when the inbox is now shorter), the last 64 KiB. Only a
-    regular file is read, never through a link.
+    regular file is read, where ``message`` would write it: never through a link, the file's
+    or a directory's.
     """
-    path = root / recipient / "inbox.jsonl"
     digest = hashlib.sha256(text.encode()).hexdigest()
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        directory = _inbox_directory(root, recipient)
     except OSError:
         return False
+    try:
+        fd = os.open("inbox.jsonl", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                     dir_fd=directory)
+    except OSError:
+        return False
+    finally:
+        os.close(directory)
     try:
         metadata = os.fstat(fd)
         if not stat.S_ISREG(metadata.st_mode):

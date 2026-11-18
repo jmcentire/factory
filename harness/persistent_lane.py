@@ -1027,6 +1027,7 @@ def run_terminal(
         # The current turn's stops so far, whether its prompt was queued behind an unfinished
         # turn, and its provider generation: what binds a stop report to it (``stop_row``).
         "turn_stops": 0,
+        "turn_bound": None,
         "turn_queued": False,
         "turn_generation": None,
         "current_message_id": handed or "initial",
@@ -1086,16 +1087,22 @@ def run_terminal(
         text = row.get("last_assistant_message")
         # Which turn this stop ended, for a reader crediting what it said (lane_watchdog.py):
         # the current turn's start, and whether the stop can only be that turn's. A provider's
-        # per-prompt generation settles it. Otherwise a turn's first stop may be the turn
-        # before's when its prompt was reported before that turn reported any stop (queued
-        # behind it), or when the provider says the stop ends a continuation (Claude Code's
-        # stop_hook_active), which a new prompt does not start; a later stop is the turn's.
+        # per-prompt generation settles it. Without one, a prompt reported while the turn
+        # before it was still running (queued behind it) binds no stop: that turn's stops,
+        # continuations included, arrive under this prompt's record, and nothing in a stop
+        # tells them from this turn's own. Otherwise a stop that ends a continuation (Claude
+        # Code's stop_hook_active) is the stop before it's, so a continuation that comes first
+        # is the turn before's; any other stop is this turn's.
         generation, current = row.get("generation"), state.get("turn_generation")
         if isinstance(generation, str) and isinstance(current, str):
             bound = generation == current
+        elif state.get("turn_queued"):
+            bound = False
+        elif row.get("stop_hook_active") is True:
+            bound = state.get("turn_bound") is True
         else:
-            bound = int(state.get("turn_stops", 0)) > 0 or not (
-                state.get("turn_queued") or row.get("stop_hook_active") is True)
+            bound = True
+        state["turn_bound"] = bound
         state["turn_stops"] = int(state.get("turn_stops", 0)) + 1
         note((json.dumps({
             "type": "native-stop-report",
@@ -1261,6 +1268,7 @@ def run_terminal(
             # ``turn_started_at`` is when this prompt report arrived (the watchdog's clock).
             state.update(phase="prompt-observed", turn_started_at=time.time(),
                          stop_reported_at=None, turn_queued=queued, turn_stops=0,
+                         turn_bound=None,
                          turn_generation=(row["generation"] if isinstance(row.get("generation"),
                                                                           str) else None))
         elif kind == "Stop":
