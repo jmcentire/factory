@@ -647,29 +647,79 @@ def test_a_new_wrappers_first_turn_end_before_the_first_check_is_told(tmp_path: 
     assert watched.at(150) == "watching" and watched.notices() == 2
 
 
-@pytest.mark.parametrize("name", list(WAITING_LANES))
-def test_an_uncapped_waiting_lane_is_stall_stopped_at_the_hold_limit(
-    tmp_path: Path, name: str,
+def _status_notices(watched: Lane) -> list[str]:
+    rows = watched._rows(watched.root / "validator" / "inbox.jsonl")
+    return [str(row["text"]) for row in rows if str(row["text"]).startswith("FACTORY_LANE_STATUS")]
+
+
+@pytest.mark.parametrize("held_by", ["question", *WAITING_LANES])
+def test_a_long_hold_is_diagnosed_and_escalated_each_period_and_never_stopped(
+    tmp_path: Path, held_by: str,
 ) -> None:
-    """Review: a lane with no wall or spend cap (plan-billed) has the stall stop as its only
-    bound, so a wait may not exempt it forever."""
+    """Jeremy, on merged #125: elapsed time should trigger diagnosis and escalation, not
+    termination as stalled regardless of lane status."""
 
-    watched = _waiting(tmp_path, name)
-    assert watched.at(lane_watchdog.HOLD_LIMIT_S) == "watching"
-    _settle(watched, READ_ALLOWANCE_S + lane_watchdog.HOLD_LIMIT_S + 1, "stalled")
-    [stall] = watched.events("refusal-lane-stall")
-    assert "hold limit" in str(stall)
+    if held_by == "question":
+        watched = Lane(tmp_path, record=None, lane=None)
+        lane_dialogue.record_question(watched.root, "tester", "Which stay types are valid?")
+    else:
+        watched = _waiting(tmp_path, held_by)
+    period = lane_watchdog.HOLD_ESCALATE_S
+    for seconds in (period, READ_ALLOWANCE_S + period + 1, READ_ALLOWANCE_S + period + 60,
+                    READ_ALLOWANCE_S + 2 * period + 1, READ_ALLOWANCE_S + 2 * period + 60):
+        assert watched.at(seconds) == "watching"
+    assert watched.stops == [] and watched.stalls() == 0
+    assert len(watched.wakes("lane-hold-escalated")) == 2
+    first = _status_notices(watched)[0]
+    assert ("FACTORY_QUESTION has no answer" if held_by == "question" else "its session reports"
+            ) in first and "elapsed time alone stops no lane" in first
 
 
-def test_an_uncapped_lane_held_by_a_pending_question_is_stopped_at_the_hold_limit(
-    tmp_path: Path,
-) -> None:
-    """Review: the hold limit is absolute: an unanswered question holds a lane no longer."""
+def _ledger_unwritable(watched: Lane) -> Path:
+    """The Validator's notice record cannot be written: every post fails until it is removed."""
+    ledger = watched.root / "validator" / "notices.jsonl"
+    ledger.mkdir(parents=True)
+    return ledger
 
-    watched = Lane(tmp_path, record=None, lane=None)
-    lane_dialogue.record_question(watched.root, "tester", "Which stay types are valid?")
-    assert watched.at(STALL_AT + 3600) == "watching"
-    _settle(watched, READ_ALLOWANCE_S + lane_watchdog.HOLD_LIMIT_S + 1, "stalled")
+
+def test_a_turn_end_whose_notice_failed_is_told_after_the_next_turn_ends(tmp_path: Path) -> None:
+    """Jeremy, on merged #125: the count advanced before the notice was posted, and the next turn
+    end replaced the one unposted event. Both are told, in order, once the record is writable."""
+
+    watched = _session(tmp_path, STREAM, None, 0)
+    assert watched.at(60) == "watching"
+    ledger = _ledger_unwritable(watched)
+    _ends_turn(watched, STREAM, "idle", 1, at=100)
+    assert watched.at(120) == "watching"
+    watched.report(phase="working", turn_started_at=T0 + 130, turn_completed_at=None)
+    assert watched.at(150) == "watching"
+    _ends_turn(watched, STREAM, "idle", 2, at=170)
+    assert watched.at(180) == "watching" and watched.notices() == 0
+    ledger.rmdir()
+    assert watched.at(210) == "watching"
+    assert watched.notices() == 2 and len(watched.wakes("lane-turn-ended")) == 2
+    assert watched.at(240) == "watching" and watched.notices() == 2
+
+
+@pytest.mark.parametrize("arm", ["new-life", "rearm-after-exit"])
+def test_a_turn_end_whose_notice_failed_is_told_after_a_rearm(tmp_path: Path, arm: str) -> None:
+    """Jeremy, on merged #125: a rearm rebuilt the watch state without the unposted event."""
+
+    watched = _session(tmp_path, STREAM, None, 0)
+    assert watched.at(60) == "watching"
+    ledger = _ledger_unwritable(watched)
+    _ends_turn(watched, STREAM, "idle", 1, at=100)
+    assert watched.at(120) == "watching" and watched.notices() == 0
+    if arm == "rearm-after-exit":
+        lane_agent.record_exit(watched.exits, slot="tester", rc=1, stopped=False)
+        watched.kill()
+        assert watched.at(150) == "exited"
+        watched.revive()
+    watched.clock.value = T0 + 160
+    watched.watch.arm(new_life=arm == "new-life")
+    ledger.rmdir()
+    assert watched.at(180) == "watching"
+    assert watched.notices() == 1 and len(watched.wakes("lane-turn-ended")) == 1
 
 
 @pytest.mark.parametrize("then", ["record-gone", "new-turn-then-record-gone"])
