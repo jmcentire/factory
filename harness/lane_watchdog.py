@@ -767,7 +767,7 @@ class LaneWatch:
         state.setdefault("turn_notices", []).append({
             "text": (f"FACTORY_LANE_TURN_ENDED {lane}: {detail}. A turn's end is not acceptance "
                      "of its work. Evaluate it, then continue the lane or close it."),
-            "lane": lane, "failed": False, "wake": detail})
+            "lane": lane, "slot": self.slot, "failed": False, "wake": detail})
         self._deliver_turn_notices(launch, state)
 
     def _deliver_turn_notices(self, launch: Mapping[str, Any], state: dict[str, Any]) -> None:
@@ -796,6 +796,9 @@ class LaneWatch:
         for notice in notices:
             if notice.get("wake") is None or getattr(self, "_events_failed", False):
                 continue
+            # A notice taken over from another round is that round's turn end: its wake names
+            # the round that produced it, not this one.
+            self._waking_for: str | None = str(notice.get("slot") or self.slot)
             try:
                 self._wake(launch, "lane-turn-ended", str(notice["wake"]), refusal=False,
                            wait_s=self._wait_left("events"))
@@ -803,6 +806,8 @@ class LaneWatch:
                 self._events_failed = True  # the event log stayed locked: woken at a later check
             else:
                 notice["wake"] = None
+            finally:
+                self._waking_for = None
         for notice in notices:
             if notice.get("sent") or getattr(self, "_inbox_failed", ""):
                 continue  # in order: none after one that failed
@@ -1048,7 +1053,8 @@ class LaneWatch:
             sys.path.insert(0, harness)
         from attention_gate import _append_jsonl, append_refusal_event
 
-        message = f"{self.slot}: {detail}"
+        slot = getattr(self, "_waking_for", None) or self.slot
+        message = f"{slot}: {detail}"
         if refusal:
             append_refusal_event(self.root, kind=kind, source="watchdog.py lane",
                                  detail=message, exit_code=70)
@@ -1058,7 +1064,7 @@ class LaneWatch:
                 "source": "watchdog.py lane", "detail": message[:4096], "wake": True,
             }, wait_s=wait_s)
         _append_row(self.lanes / "wake.jsonl", {
-            "ts": _iso(self.now()), "kind": kind, "slot": self.slot, "detail": detail[:4096],
+            "ts": _iso(self.now()), "kind": kind, "slot": slot, "detail": detail[:4096],
         })
         self.echo(f"FACTORY_WAKE {kind} {message}")
         session = str(launch.get("tmux_target", "")).split(":", 1)[0]
@@ -1297,6 +1303,12 @@ class LaneWatch:
         wall_cap = caps.get("wall_cap_s")
         wrap_s = float(watch.get("wrap_s") or 0)
         review_s = float(watch.get("review_every_s") or 0)
+        # Waiting at the last check holds the time since only if the session did no turn in
+        # between: a turn begun or ended since is work, though this check sees it waiting again.
+        turn_marker = [native.get("turn_started_at"), _turn_ends(native)]
+        if state.get("review_waiting_turn") != turn_marker:
+            (state.get("review_held_by") or {}).pop("waiting", None)
+        state["review_waiting_turn"] = turn_marker
         self._held_for_reviews(state, active, "waiting", waiting)
         resumable = self._resumable(launch) and not waiting
         if (

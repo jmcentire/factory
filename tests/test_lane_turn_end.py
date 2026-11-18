@@ -3076,10 +3076,12 @@ def test_a_busy_resumable_lane_is_still_paused_for_review(tmp_path: Path, name: 
 def test_a_review_that_fell_due_while_the_lane_waited_is_not_owed_afterwards(
     tmp_path: Path,
 ) -> None:
-    """Review every 900 s; the lane waits from 180 s to 1080 s of active time and is then
-    continued, so its next review is at 1800 s. Falsifier: the review that fell due at 900 s
-    paused the lane the moment it was continued (interrupting the work the Validator just
-    gave it); or the schedule restarted at the continuation (no review until 1980 s)."""
+    """Review every 900 s. The lane's checks see it waiting from 180 s to 1000 s with no new
+    turn, so those 820 s are held; it is continued at 1080 s, and the interval from 1000 s, in
+    which a turn began, is work. So its next review is at 1720 s (900 s of work). Falsifier:
+    the review that fell due at 900 s of active time paused the lane the moment it was
+    continued (interrupting the work the Validator just gave it); the schedule restarted at the
+    continuation (no review until 1980 s); or the interval of the continuation held (1800 s)."""
 
     watched = _session(tmp_path, CLAUDE, None, 0,
                        watch={"runs_dir": "/runs", "review_every_s": 900}, thread=True)
@@ -3090,46 +3092,50 @@ def test_a_review_that_fell_due_while_the_lane_waited_is_not_owed_afterwards(
     assert watched.stops == [] and watched.events("lane-review-due") == []
 
     _new_turn(watched, CLAUDE, at=1080)  # the Validator continues the lane
-    for seconds in (1080, 1110, 1500, 1799):
+    for seconds in (1080, 1110, 1500, 1719):
         assert watched.at(seconds) == "watching"
     assert watched.stops == [] and watched.events("lane-review-due") == []
-    assert watched.at(1800) == "paused"
+    assert watched.at(1720) == "paused"
     assert watched.stops == [TARGET]
     assert len(watched.events("lane-review-due")) == 1
 
 
 def test_waiting_time_is_not_work_a_review_is_owed_for(tmp_path: Path) -> None:
-    """Review every 1200 s, checks every 30 s; the lane waits from 60 s and is continued at
-    1180 s, so 1140 s of its active time was waiting and its first review is due at about
-    2340 s. Falsifier: the review owed at 1200 s of active time regardless (the old rule
-    paused there, 20 s into the new work), or waiting time counted otherwise."""
+    """Review every 1200 s, checks every 30 s; the lane waits from 45 s and is continued at
+    1180 s. Its checks from 60 s to 1170 s see it waiting with no new turn, so those 1110 s are
+    held; the interval from 1170 s, in which the continued turn began, is work. Its first review
+    is due at 2310 s. Falsifier: the review owed at 1200 s of active time regardless (the old
+    rule paused there, 20 s into the new work), or waiting time counted otherwise (the interval
+    of the continuation held: 2340 s)."""
 
     watched = _session(tmp_path, CLAUDE, None, 0,
                        watch={"runs_dir": "/runs", "review_every_s": 1200}, thread=True)
-    for seconds in range(30, 2341, 30):
+    for seconds in range(30, 2311, 30):
         if seconds == 60:
             _ends_turn(watched, CLAUDE, "waiting-for-input", 1, at=45)
         if seconds == 1200:
             _new_turn(watched, CLAUDE, at=1180)  # the Validator continues the lane
-        expected = "paused" if seconds == 2340 else "watching"
+        expected = "paused" if seconds == 2310 else "watching"
         assert watched.at(seconds) == expected, seconds
     assert watched.stops == [TARGET]
     assert len(watched.events("lane-review-due")) == 1
 
 
 def test_waiting_time_carries_into_a_new_life_after_a_review(tmp_path: Path) -> None:
-    """Review every 600 s; 300 s of waiting puts the first pause at 900 s of active time, and
-    the reviewed lane's next life owes its second review at 1500 s of active time (1200 s of
-    work), not at 1200 s. Falsifier: the new life forgetting the waiting time."""
+    """Review every 600 s; the checks from 60 s to 330 s see the lane waiting with no new turn
+    (270 s held; the interval from 330 s, in which the continued turn began, is work), so the
+    first pause is at 870 s of active time. The reviewed lane's next life owes its second
+    review at 1470 s of active time (1200 s of work): at 2100 s, not at 1830 s. Falsifier:
+    the new life forgetting the held time."""
 
     watched = _session(tmp_path, CLAUDE, None, 0,
                        watch={"runs_dir": "/runs", "review_every_s": 600}, thread=True)
-    for seconds in range(30, 901, 30):
+    for seconds in range(30, 871, 30):
         if seconds == 60:
             _ends_turn(watched, CLAUDE, "waiting-for-input", 1, at=45)
         if seconds == 360:
             _new_turn(watched, CLAUDE, at=345)
-        expected = "paused" if seconds == 900 else "watching"
+        expected = "paused" if seconds == 870 else "watching"
         assert watched.at(seconds) == expected, seconds
 
     # The Validator reviews the lane and continues it: a new life of the watcher.
@@ -3137,7 +3143,7 @@ def test_waiting_time_carries_into_a_new_life_after_a_review(tmp_path: Path) -> 
     _new_turn(watched, CLAUDE, at=1500)
     watched.clock.value = T0 + 1500
     watched.watch.arm(new_life=True)
-    for seconds in range(1530, 2101, 30):  # active time 930 s .. 1500 s
+    for seconds in range(1530, 2101, 30):  # active time 900 s .. 1470 s
         expected = "paused" if seconds == 2100 else "watching"
         assert watched.at(seconds) == expected, seconds
     assert len(watched.events("lane-review-due")) == 2
@@ -3167,6 +3173,42 @@ def test_a_new_life_counts_the_time_since_a_held_last_check_as_held(tmp_path: Pa
             paused = seconds
             break
     assert paused is not None and 1680 <= paused <= 1800, paused
+    assert len(watched.events("lane-review-due")) == 1
+
+
+SHORT_TURNS: dict[str, tuple[Kind, str, bool]] = {
+    "claude-turns": (CLAUDE, "stop-reported", True),
+    "claude-continuations": (CLAUDE, "stop-reported", False),  # only its stop count changes
+    "codex-stream-turns": (CODEX_STREAM, "idle", True),
+}
+
+
+@pytest.mark.parametrize("busy_at", [630, 1890])
+@pytest.mark.parametrize("name", list(SHORT_TURNS))
+def test_short_turns_between_waiting_checks_are_work_a_review_is_owed_for(
+    tmp_path: Path, name: str, busy_at: int,
+) -> None:
+    """Codex's case: review every 600 s, checks every 30 s, and in each interval a 20 s turn
+    that ends with a bound done report, so every check sees the lane waiting (61 turns before
+    the check at 1890 s). A turn began or ended between each two checks, so each interval is
+    work: the review falls due at 600 s, and the first check that sees a turn running pauses
+    the lane. Falsifier: every interval from a waiting check held (1,220 s of turns counting
+    30 s toward reviews), so the busy check is not paused."""
+
+    kind, phase, prompted = SHORT_TURNS[name]
+    watched = _session(tmp_path, kind, None, 0,
+                       watch={"runs_dir": "/runs", "review_every_s": 600}, thread=True)
+    for count, seconds in enumerate(range(60, busy_at, 30), start=1):
+        if prompted:
+            _new_turn(watched, kind, at=seconds - 25)
+        _ends_turn(watched, kind, phase, count, at=seconds - 5, done=True)
+        assert watched.at(seconds) == "watching", seconds  # waiting: never paused
+    assert watched.stops == [] and watched.events("lane-review-due") == []
+    assert len(watched.texts()) == (busy_at - 60) // 30
+    assert all(DONE_SEEN in text for text in watched.texts())
+    _new_turn(watched, kind, at=busy_at - 25)  # a turn running at the next check
+    assert watched.at(busy_at) == "paused"
+    assert watched.stops == [TARGET]
     assert len(watched.events("lane-review-due")) == 1
 
 
@@ -3452,8 +3494,9 @@ def test_a_finished_rounds_drain_ends_once_its_notice_is_taken_over(tmp_path: Pa
 
 def test_a_taken_over_notice_whose_wake_was_not_made_gets_its_wake_once(tmp_path: Path) -> None:
     """r1's turn end met a held events log, still held at its final check: its message was
-    written, its wake not. Falsifier: the wake lost in the takeover, or the message written
-    again."""
+    written, its wake not. r2 takes the wake over, then ends a turn of its own. Falsifier: the
+    wake lost in the takeover, the message written again, or the wake named for the round that
+    delivered it (``tester.r2``, Codex's review) instead of the round whose turn ended."""
 
     r1 = _round(tmp_path, "tester.r1")
     assert r1.at(30) == "watching"
@@ -3476,7 +3519,65 @@ def test_a_taken_over_notice_whose_wake_was_not_made_gets_its_wake_once(tmp_path
     assert _seen_order(r2.events("lane-turn-ended")) == [_seen(60)]
     assert len(r2.texts()) == 1 and r2.undelivered() == 0
     assert _watch_record(r1)["turn_notices"] == []
+    [wake] = r2.wakes("lane-turn-ended")
+    [event] = r2.events("lane-turn-ended")
+    assert wake["slot"] == "tester.r1" and event["detail"].startswith("tester.r1: ")
 
+    _ends_turn(r2, CLAUDE, "stop-reported", 1, at=70)  # r2's own turn end
+    assert r2.at(90) == "watching"
+    assert [row["slot"] for row in r2.wakes("lane-turn-ended")] == ["tester.r1", "tester.r2"]
+    assert [row["detail"].split(": ", 1)[0] for row in r2.events("lane-turn-ended")] == [
+        "tester.r1", "tester.r2"]
+    assert _seen_order(r2.wakes("lane-turn-ended")) == [_seen(60), _seen(90)]
+
+
+@pytest.mark.parametrize("when", ["same-check", "later-check"])
+@pytest.mark.parametrize("end", ["exit", "stall"])
+def test_a_rounds_own_wakes_after_a_taken_over_wake_are_named_for_it(
+    tmp_path: Path, end: str, when: str,
+) -> None:
+    """r1 ends a turn while the events log is held (its wake owed), then its lane exits and its
+    watcher is killed; r2 takes the wake over and makes it, as ``tester.r1``. r2's own wakes
+    that are not turn-end notices (its lane's exit; its stall stop at the boundary), made in
+    that same check or a later one, are ``tester.r2``. Falsifier: the producing slot left set
+    after a taken-over wake, so every later wake r2 makes is named ``tester.r1``."""
+
+    r1 = _round(tmp_path, "tester.r1")
+    assert r1.at(30) == "watching"
+    _ends_turn(r1, CLAUDE, "stop-reported", 1, at=40)
+    holder = HeldLock(r1.root / "events.jsonl", hold_s=60)
+    try:
+        assert r1.at(60) == "watching"
+    finally:
+        holder.release()
+    assert len(r1.texts()) == 1 and r1.wakes("lane-turn-ended") == []
+    lane_agent.record_exit(r1.exits, slot="tester.r1", rc=0, stopped=False)
+    r1.kill()  # and its watcher killed: no check of r1's after it
+    _close(r1.root, "tester", "tester.r2")
+    r2 = _round(tmp_path, "tester.r2", root=r1.root)
+    wake_log, events_log = r2.lanes / "wake.jsonl", r2.root / "events.jsonl"
+    wakes_before, events_before = len(r2._rows(wake_log)), len(r2._rows(events_log))
+    if when == "later-check":
+        assert r2.at(30) == "watching"
+        assert [row["slot"] for row in r2.wakes("lane-turn-ended")] == ["tester.r1"]
+    if end == "exit":
+        lane_agent.record_exit(r2.exits, slot="tester.r2", rc=0, stopped=False)
+        r2.kill()
+        assert r2.at(60) == "exited"
+        kinds = {"lane-exited"}
+    else:
+        assert r2.at(STALL_AT + 1) in {"stalled", "stopping"}
+        assert r2.stops == [TARGET]
+        kinds = {"lane-stop-requested", "refusal-lane-stall"}
+    wakes = r2._rows(wake_log)[wakes_before:]
+    assert [(row["kind"], row["slot"]) for row in wakes if row["kind"] == "lane-turn-ended"] == [
+        ("lane-turn-ended", "tester.r1")]
+    own = [row for row in wakes if row["kind"] != "lane-turn-ended"]
+    assert {row["kind"] for row in own} == kinds
+    assert {row["slot"] for row in own} == {"tester.r2"}
+    events = [row for row in r2._rows(events_log)[events_before:] if row["kind"] in kinds]
+    assert {row["kind"] for row in events} == kinds
+    assert all(str(row["detail"]).startswith("tester.r2: ") for row in events), events
 
 @pytest.mark.parametrize("taker", ["new-life", "next-round"])
 def test_a_notice_left_in_both_records_by_a_crash_is_given_once(
