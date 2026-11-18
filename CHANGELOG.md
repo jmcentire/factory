@@ -7,7 +7,12 @@ public API is still pre-1.0.
 
 ### Changed
 
-- Codex seats default to GPT-6.2-Sol, and Factory publishing defaults are aligned with it.
+- The local `factory-setup` installer (`cmd/factory-setup`, `install.sh`, its release workflow)
+  now lives in this repository; startup and update URLs point here. Codex seats default to
+  GPT-6.2-Sol, generated skills require the `Factory` label on PRs, and the publishing steps are
+  documented in `docs/FACTORY-PUBLISHING.md` (#128).
+- Deployments can select doctrine with `FACTORY_HOME` and a tmux executable with
+  `FACTORY_TMUX`, keeping the installed-checkout and PATH defaults (#120).
 - A conflict between proposed work and a repository rule is reconciled with the rule's
   owners: they are notified with the proposed exception and may revise the rule, ask for a
   block, or not respond. Agents never rewrite a rule to fit their change, and a recorded
@@ -23,7 +28,10 @@ public API is still pre-1.0.
   ends and new watcher lives; the Validator is woken as soon as a lane ends its turn (#125, #135).
 - Lanes waiting at a host permission dialog are held, not stopped as stalled; spinner redraws
   no longer count as activity, and macOS `ps` CPU time is read correctly (#124).
-- Refused author launches name the file that caused them (#122).
+- A refused author launch names every offending path and the clone changes it has to undo
+  (#122).
+- Run cleanup keeps runs whose client state cannot be confirmed inactive, including runs
+  whose record has no `tmux_tmpdir` (every run from before this release) (#120).
 
 ## [0.8.30] - 2026-11-13
 
