@@ -266,7 +266,14 @@ def run(root: Path) -> None:
 
             config = read(root / "harness.json")
             alive = subprocess.run(
-                ["tmux", "-L", config["tmux_socket"], "has-session", "-t", "=" + config["run_id"]],
+                [
+                    os.environ.get("FACTORY_TMUX") or "tmux",
+                    "-L",
+                    config["tmux_socket"],
+                    "has-session",
+                    "-t",
+                    "=" + config["run_id"],
+                ],
                 capture_output=True,
             )
             if alive.returncode:

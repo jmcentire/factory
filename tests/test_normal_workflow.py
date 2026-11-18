@@ -140,7 +140,7 @@ def test_start_has_only_assigned_residents_and_private_socket(tmp_path, reposito
     assert {call[call.index("-n") + 1] for call in launches} == {
         "validator", "orchestrator", "inbox-wake"}
     _, doc = run_record.load(runs, "task")
-    assert all(call[:3] == ["tmux", "-L", doc["tmux_socket"]] for call in calls)
+    assert all(call[:3] == ["/stub/agent", "-L", doc["tmux_socket"]] for call in calls)
     assert "private/model" in launches[0][-1] and "assigned/tester" in launches[0][-1]
     assert all("OPENAI_API_KEY" not in call[-1] for call in launches)
     assert not (root / "orchestrator/seat-control.json").exists()
@@ -308,7 +308,8 @@ def test_partial_start_failure_stops_only_its_session_and_retains_failure(tmp_pa
         run_record.start(runs, "task")
     _, record = run_record.load(runs, "task")
     cleanup = [call for call in calls if "kill-session" in call]
-    assert cleanup == [["tmux", "-L", record["tmux_socket"], "kill-session", "-t", "=task"]]
+    assert cleanup == [
+        ["/fixture/agent", "-L", record["tmux_socket"], "kill-session", "-t", "=task"]]
     assert not any("kill-server" in call for call in calls)
     notice = json.loads((root / "validator/inbox.jsonl").read_text())
     assert notice["sender"] == "host" and "exit 7" in notice["text"]

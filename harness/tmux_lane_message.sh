@@ -90,6 +90,7 @@ REPO_ROOT="$(cd "$D/.." && pwd -P)"
 # shellcheck source=harness/run_context.sh
 source "$D/run_context.sh"
 factory_load_context "$RUN" "$RUNS_ARG"
+factory_resolve_tmux
 ROOT="$FACTORY_CONTROL_ROOT"
 TMUX_ROOT="$ROOT/tmux-lanes"
 LAUNCHES="$TMUX_ROOT/$SLOT-launch.jsonl"
@@ -823,7 +824,8 @@ elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
   if [ "$HOSTED_RESUME" = 1 ]; then
     # As at launch: the run's tmux server, and the command the operator starts Claude Code
     # with, which is the launch's own and never whatever this shell happens to export.
-    printf -v SOCKET_ENV " FACTORY_TMUX_SOCKET=%q" "$FACTORY_TMUX_SOCKET"
+    printf -v SOCKET_ENV " FACTORY_TMUX_SOCKET=%q FACTORY_TMUX=%q" \
+      "$FACTORY_TMUX_SOCKET" "${FACTORY_TMUX:-tmux}"
     ENV_PREFIX+="$SOCKET_ENV"
     if [ -n "$NATIVE_LAUNCHER" ]; then
       printf -v LAUNCHER_ENV " FACTORY_CLAUDE_LAUNCHER=%q" "$NATIVE_LAUNCHER"
@@ -945,7 +947,8 @@ PY
   # starts, so the earlier turn's done line is never reported again as this turn's.
   LOG_OFFSET=0
   [ ! -f "$LANE_LOG" ] || LOG_OFFSET=$(wc -c < "$LANE_LOG" | tr -d ' ')
-  WATCH_ENV_PREFIX="$ENV_PREFIX"
+  printf -v TMUX_ENV " FACTORY_TMUX=%q" "${FACTORY_TMUX:-tmux}"
+  WATCH_ENV_PREFIX="$ENV_PREFIX$TMUX_ENV"
   if [ -n "${TMUX:-}" ]; then
     printf -v WATCH_TMUX ' TMUX=%q' "$TMUX"
     WATCH_ENV_PREFIX+="$WATCH_TMUX"

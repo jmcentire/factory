@@ -398,13 +398,31 @@ class Dispatcher:
         return lanes
 
     def windows(self) -> list[str]:
-        out = sh(["tmux", "list-windows", "-t", self.run, "-F", "#{window_name}"])
+        out = sh(
+            [
+                os.environ.get("FACTORY_TMUX") or "tmux",
+                "list-windows",
+                "-t",
+                self.run,
+                "-F",
+                "#{window_name}",
+            ]
+        )
         seats = {"validator", "orchestrator", *self.lane_windows()}
         return [w for w in out.splitlines() if w in seats]
 
     def capture(self, window: str) -> str:
         # -J joins rows the pane wrapped, so a trigger split at the column edge still matches.
-        text = sh(["tmux", "capture-pane", "-pJt", f"{self.run}:{window}", "-S", "-60"])
+        text = sh(
+            [
+                os.environ.get("FACTORY_TMUX") or "tmux",
+                "capture-pane",
+                "-pJt",
+                f"{self.run}:{window}",
+                "-S",
+                "-60",
+            ]
+        )
         # A fresh pane's unused rows follow its text; dropped here, every "last N lines" reader
         # (question, DONE, status, attention) sees the text instead of blanks.
         lines = text.splitlines()
@@ -751,7 +769,13 @@ class Dispatcher:
         a deterministic signal; swallow the OSError and keep dispatching."""
         try:
             subprocess.run(
-                ["tmux", "display-message", "-t", self.run, message],
+                [
+                    os.environ.get("FACTORY_TMUX") or "tmux",
+                    "display-message",
+                    "-t",
+                    self.run,
+                    message,
+                ],
                 capture_output=True,
             )
         except OSError:

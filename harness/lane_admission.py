@@ -157,9 +157,19 @@ def retire(root: Path, run: str, role: str, lane: str, slot: str, reason: str) -
     subprocess.run([sys.executable, str(Path(__file__).with_name("seat_supervisor.py")),
                     "check-validator", "--root", str(root), "--session", run], check=True)
     # A successful exact window listing proves absence. Transport/permission failures are unknown.
-    result = subprocess.run(["tmux", "list-windows", "-t", "=" + run,
-                             "-F", "#{window_name} #{window_id}"], capture_output=True,
-                            text=True, timeout=10)
+    result = subprocess.run(
+        [
+            os.environ.get("FACTORY_TMUX") or "tmux",
+            "list-windows",
+            "-t",
+            "=" + run,
+            "-F",
+            "#{window_name} #{window_id}",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
     if result.returncode:
         raise ValueError("cannot observe exact run windows for retirement")
     targets = [line.split()[1] for line in result.stdout.splitlines()
@@ -167,8 +177,19 @@ def retire(root: Path, run: str, role: str, lane: str, slot: str, reason: str) -
     if len(targets) > 1:
         raise ValueError("ambiguous probe window")
     if targets:
-        observed = subprocess.run(["tmux", "display-message", "-p", "-t", targets[0],
-                                   "#{pane_dead}"], capture_output=True, text=True, timeout=10)
+        observed = subprocess.run(
+            [
+                os.environ.get("FACTORY_TMUX") or "tmux",
+                "display-message",
+                "-p",
+                "-t",
+                targets[0],
+                "#{pane_dead}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
         if observed.returncode or observed.stdout.strip() != "1":
             raise ValueError("cannot retire a live or unknown probe window")
     module = (importlib.import_module("harness.lane_watchdog") if __package__
