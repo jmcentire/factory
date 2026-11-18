@@ -811,6 +811,7 @@ elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
     exit 70
   }
   exec 4<&-
+  # Runtime directories lead LANE_PATH; the run's entrypoints outrank them as well.
   if [ -n "$FACTORY_RUN_AGENT_BIN" ]; then LANE_PATH="$FACTORY_RUN_AGENT_BIN:$LANE_PATH"; fi
   # The resumed lane gets the same scoped Kindex it launched with (launches before 0.8.8 had none).
   KINDEX_C=""

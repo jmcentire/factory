@@ -29,19 +29,24 @@ AGENT_ENTRYPOINTS = frozenset({"codex", "claude", "agent", "agy", "muse", "prime
 
 def agent_entrypoints(directory: str) -> dict[str, str]:
     path = Path(directory)
-    if not path.is_absolute() or os.pathsep in directory or not path.is_dir():
-        raise ValueError("FACTORY_AGENT_BIN must be an absolute provider-only directory on PATH")
+    if not path.is_absolute() or os.pathsep in directory:
+        raise ValueError(f"FACTORY_AGENT_BIN must name one absolute directory: {directory}")
+    if not path.exists():
+        raise ValueError(f"agent entrypoint directory (FACTORY_AGENT_BIN) is missing: {directory}")
+    if not path.is_dir():
+        raise ValueError(
+            f"agent entrypoint directory (FACTORY_AGENT_BIN) is not a directory: {directory}")
     entries = {}
     for entry in path.iterdir():
         if entry.name not in AGENT_ENTRYPOINTS:
             if entry.is_file() and not os.access(entry, os.X_OK):
                 continue
-            raise ValueError(f"FACTORY_AGENT_BIN contains an unexpected PATH entry: {entry}")
+            raise ValueError(f"FACTORY_AGENT_BIN contains an unexpected executable entry: {entry}")
         if not entry.is_file() or not os.access(entry, os.X_OK):
             raise ValueError(f"agent entrypoint is not an executable file: {entry}")
         entries[entry.name] = str(entry.resolve(strict=True))
     if not entries:
-        raise ValueError("FACTORY_AGENT_BIN contains no agent entrypoints")
+        raise ValueError(f"FACTORY_AGENT_BIN contains no agent entrypoints: {directory}")
     return entries
 
 
@@ -49,12 +54,19 @@ def retained_agent_bin(doc: dict) -> tuple[str, bool]:
     binding = doc.get("agent_bin")
     if binding is None:
         return "", False
-    if not isinstance(binding, dict) or not isinstance(binding.get("directory"), str):
+    if (not isinstance(binding, dict) or not isinstance(binding.get("directory"), str)
+            or not isinstance(binding.get("entries"), dict)):
         raise ValueError("invalid retained agent entrypoints")
-    directory = binding["directory"]
+    directory, recorded = binding["directory"], binding["entries"]
     entries = agent_entrypoints(directory)
-    if entries != binding.get("entries"):
-        raise ValueError(f"retained agent entrypoints changed: {directory}")
+    if entries != recorded:
+        # Name each difference: the operator restores entries, not a directory.
+        changes = [f"added {name}" for name in sorted(entries.keys() - recorded.keys())]
+        changes += [f"removed {name}" for name in sorted(recorded.keys() - entries.keys())]
+        changes += [f"retargeted {name}" for name in sorted(entries.keys() & recorded.keys())
+                    if entries[name] != recorded[name]]
+        raise ValueError(
+            f"retained agent entrypoints changed in {directory}: {', '.join(changes)}")
     return directory, "claude" in entries
 
 
@@ -119,8 +131,9 @@ def create(
     agent_binding = None
     if agent_bin:
         if not Path(agent_bin).is_absolute():
-            raise ValueError("FACTORY_AGENT_BIN must be an absolute directory")
-        directory = str(Path(agent_bin).resolve(strict=True))
+            raise ValueError(f"FACTORY_AGENT_BIN must name one absolute directory: {agent_bin}")
+        # Not strict: a missing directory is reported by name below, not as a bare OSError.
+        directory = str(Path(agent_bin).resolve())
         entries = agent_entrypoints(directory)
         for candidate in (directory, *entries.values()):
             path = Path(candidate)
@@ -438,7 +451,7 @@ def publish_pr(runs: Path, run: str, repository: Path, commit: str, operation: s
     return outcome
 
 
-def context(runs: Path, run: str, *, agent_entrypoints: bool = False) -> None:
+def context(runs: Path, run: str, *, with_agent_bin: bool = False) -> None:
     root, doc = load(runs, run)
     # Shell consumers parse NUL-separated values, never eval record contents.
     fields = [
@@ -451,7 +464,7 @@ def context(runs: Path, run: str, *, agent_entrypoints: bool = False) -> None:
         doc["log"],
         doc.get("tmux_tmpdir", ""),
     ]
-    if agent_entrypoints:
+    if with_agent_bin:
         agent_bin, custom_claude = retained_agent_bin(doc)
         fields.extend((agent_bin, "claude" if custom_claude else ""))
     for value in fields:
@@ -1062,7 +1075,7 @@ def main() -> int:
         elif args.action == "start":
             start(args.runs, args.run)
         elif args.action == "context":
-            context(args.runs, args.run, agent_entrypoints=args.agent_entrypoints)
+            context(args.runs, args.run, with_agent_bin=args.agent_entrypoints)
         else:
             root, doc = load(args.runs, args.run)
             if args.action == "pr":

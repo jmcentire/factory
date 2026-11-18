@@ -701,7 +701,8 @@ PY
   LANE_ENV=(env -i HOME="$SAFE_HOME" USER="$SAFE_USER" PATH="$SAFE_PATH" TMPDIR="$SAFE_TMPDIR"
     TERM="$SAFE_TERM" SHELL="$SAFE_SHELL" LANG="$SAFE_LANG" CODEX_HOME="$SAFE_CODEX_HOME"
     PYTHONSAFEPATH=1 PYTHONPATH="$D/trusted_startup:$D"
-    ${CLAUDE_CONFIG_DIR:+CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR"})
+    ${CLAUDE_CONFIG_DIR:+CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR"}
+    ${FACTORY_CLAUDE_LAUNCHER:+FACTORY_CLAUDE_LAUNCHER="$FACTORY_CLAUDE_LAUNCHER"})
 
   # A codex lane runs with the operator's own Codex configuration: nothing of it is ignored
   # or disabled. With no --model, the model keys of that config are read here only so the
@@ -748,6 +749,7 @@ PY
     rm -f "$ENV_OUT"; exit 70;
   }
   rm -f "$ENV_OUT"
+  # Runtime directories lead LANE_PATH; the run's entrypoints outrank them as well.
   if [ -n "$FACTORY_RUN_AGENT_BIN" ]; then LANE_PATH="$FACTORY_RUN_AGENT_BIN:$LANE_PATH"; fi
 
   # Sign-in, checked the way the lane will run: the same scrubbed environment, stdin closed,

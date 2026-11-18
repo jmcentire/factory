@@ -135,9 +135,11 @@ entries take precedence over PATH for coordinator startup and the author lane's
 checks, start, message delivery and resume. A `claude` entry also takes precedence
 over `FACTORY_CLAUDE_LAUNCHER` for that run. Unlisted commands use the usual
 lookup. Use a separate directory for a different set of wrappers. Adding,
-removing, or retargeting an executable entry makes dependent operations fail.
-Factory checks paths against accidental configuration changes. Keep the wrapper
-contents stable for the lifetime of a run.
+removing, or retargeting an executable entry makes dependent operations fail,
+and the refusal names each changed entry. A link is recorded by the file it
+resolves to, so link to a stable path: a link into a versioned install directory
+changes when that install is upgraded. Factory checks paths against accidental
+configuration changes. Keep the wrapper contents stable for the lifetime of a run.
 
 ### Packaged runtime paths
 

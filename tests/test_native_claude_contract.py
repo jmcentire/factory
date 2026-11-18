@@ -28,7 +28,7 @@ def manifest(root):
 
 
 @pytest.fixture
-def native_case(tmp_path):
+def native_case(tmp_path, request):
     home = tmp_path / 'home'
     profile = home / 'selected account with spaces'
     profile.mkdir(parents=True)
@@ -164,6 +164,16 @@ for line in sys.stdin:
     kin.chmod(0o755)
     env['FACTORY_KINDEX_LITE_BIN'] = str(kindex)
     env['PATH'] = str(bin_dir) + os.pathsep + env['PATH']
+    if request.node.get_closest_marker('agent_entrypoints'):
+        # The run's own claude entry: a wrapper that reaches its program by absolute path.
+        selected = tmp_path / 'wrapped-recorder'
+        selected.write_text(recorder)
+        selected.chmod(0o755)
+        entry = tmp_path / 'entrypoints' / 'claude'
+        entry.parent.mkdir()
+        entry.write_text('#!/bin/sh\nexec ' + shlex.quote(str(selected)) + ' "$@"\n')
+        entry.chmod(0o755)
+        env['FACTORY_AGENT_BIN'] = str(entry.parent)
     runs = tmp_path / 'runs'
     base = [sys.executable, str(FACTORY / 'harness' / 'run_record.py')]
     common = ['--runs', str(runs), '--run', 'native-acceptance']
@@ -185,8 +195,8 @@ for line in sys.stdin:
         for pid in {item['pid'] for item in read_events(log) if 'pid' in item}:
             command = subprocess.run(['ps', '-ww', '-p', str(pid), '-o', 'command='],
                                      capture_output=True, text=True).stdout
-            if not any(str(bin_dir / name) in command
-                       for name in ('cl', 'native-recorder')):
+            if not any(str(path) in command for path in (
+                    bin_dir / 'cl', bin_dir / 'native-recorder', tmp_path / 'wrapped-recorder')):
                 continue
             try:
                 os.kill(pid, 15)
@@ -439,6 +449,37 @@ def test_author_launch_respects_native_launcher(native_case, tmp_path):
     probes = [e for e in read_events(native_case['log'])[before:] if 'argv' in e
               and e['argv'] == ['auth', 'status', '--json']]
     assert all(e['launcher'] == 'cl' for e in probes), probes
+
+
+@pytest.mark.agent_entrypoints
+def test_run_claude_entry_is_checked_and_started_instead_of_the_operators_launcher(
+    native_case, tmp_path,
+):
+    native_case['env'].pop('ANTHROPIC_API_KEY', None)
+    # The operator's usual launcher is still installed and still named; the run's entry wins.
+    native_case['env']['FACTORY_CLAUDE_LAUNCHER'] = 'cl'
+    coordinators = launch(native_case)
+    assert {e['launcher'] for e in coordinators} == {'wrapped-recorder'}, coordinators
+    lane = tmp_path / 'author-repository'
+    prepared = execute([sys.executable, str(FACTORY / 'harness' / 'role_inputs.py'),
+                        'prepare', '--runs', str(native_case['runs']), '--run', 'native-acceptance',
+                        '--role', 'coder', '--repo', str(lane)], native_case['env'])
+    assert prepared.returncode == 0, prepared.stderr
+    lane = Path(json.loads(prepared.stdout)['repository'])
+    brief = tmp_path / 'author-brief.txt'
+    brief.write_text('Observe native behavior only; change no target files.\n')
+    before = len(read_events(native_case['log']))
+    launched = execute(['bash', str(FACTORY / 'harness' / 'tmux_lane.sh'),
+                        'native-acceptance', 'coder', 'launch', '--runs', str(native_case['runs']),
+                        '--repo', str(lane), '--prompt', str(brief), '--agent', 'claude'],
+                       native_case['env'])
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+    wait_for(lambda: [e for e in read_events(native_case['log'])[before:]
+                      if '--session-id' in e.get('argv', [])])
+    # Sign-in is checked on the program the lane then starts.
+    observed = [e for e in read_events(native_case['log'])[before:] if 'argv' in e]
+    assert any(e['argv'] == ['auth', 'status', '--json'] for e in observed)
+    assert {e['launcher'] for e in observed} == {'wrapped-recorder'}, observed
 
 
 def test_hook_observations_do_not_claim_model_completion(native_case):
