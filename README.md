@@ -131,7 +131,7 @@ entries take precedence over PATH for coordinator startup and the author lane's
 checks, start, message delivery and resume. A `claude` entry also takes precedence
 over `FACTORY_CLAUDE_LAUNCHER` for that run. Unlisted commands use the usual
 lookup. Removing or retargeting a recorded entry makes launches and resumes
-fail. Keep the wrapper contents stable for the lifetime of a run.
+fail. Factory checks paths, so keep the wrapper contents stable for the lifetime of a run.
 
 ### Packaged runtime paths
 

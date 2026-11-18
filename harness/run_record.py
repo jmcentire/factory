@@ -33,8 +33,10 @@ def agent_entrypoints(directory: str) -> dict[str, str]:
         raise ValueError("FACTORY_AGENT_BIN must be an absolute provider-only directory on PATH")
     entries = {}
     for entry in path.iterdir():
-        if entry.name not in AGENT_ENTRYPOINTS or not entry.is_file() or not os.access(entry, os.X_OK):
-            raise ValueError(f"invalid agent entrypoint: {entry}")
+        if entry.name not in AGENT_ENTRYPOINTS:
+            raise ValueError(f"FACTORY_AGENT_BIN contains an unexpected entry: {entry}")
+        if not entry.is_file() or not os.access(entry, os.X_OK):
+            raise ValueError(f"agent entrypoint is not an executable file: {entry}")
         entries[entry.name] = str(entry.resolve(strict=True))
     if not entries:
         raise ValueError("FACTORY_AGENT_BIN contains no agent entrypoints")
@@ -429,9 +431,8 @@ def publish_pr(runs: Path, run: str, repository: Path, commit: str, operation: s
     return outcome
 
 
-def context(runs: Path, run: str) -> None:
+def context(runs: Path, run: str, *, agent_entrypoints: bool = False) -> None:
     root, doc = load(runs, run)
-    agent_bin, custom_claude = retained_agent_bin(doc)
     # Shell consumers parse NUL-separated values, never eval record contents.
     fields = [
         str(root),
@@ -442,9 +443,10 @@ def context(runs: Path, run: str) -> None:
         doc["tmux_socket"],
         doc["log"],
         doc.get("tmux_tmpdir", ""),
-        agent_bin,
-        "claude" if custom_claude else "",
     ]
+    if agent_entrypoints:
+        agent_bin, custom_claude = retained_agent_bin(doc)
+        fields.extend((agent_bin, "claude" if custom_claude else ""))
     for value in fields:
         if not isinstance(value, str) or "\0" in value:
             raise ValueError("invalid context field")
@@ -709,7 +711,9 @@ def _start_locked(runs: Path, run: str) -> None:
     home = tools.parent
     resources = resource_home()
     agent_bin, custom_claude = retained_agent_bin(doc)
-    agent_path = os.pathsep.join((agent_bin, os.environ.get("PATH", os.defpath))) if agent_bin else None
+    agent_path = (
+        os.pathsep.join((agent_bin, os.environ.get("PATH", os.defpath))) if agent_bin else None
+    )
     selector = os.environ.get("FACTORY_TMUX") or "tmux"
     executable = shutil.which(selector)
     if executable is None:
@@ -1011,6 +1015,7 @@ def main() -> int:
                                            "capture", "provenance", "pr"])
     parser.add_argument("--runs", type=Path, required=True)
     parser.add_argument("--run", required=True)
+    parser.add_argument("--agent-entrypoints", action="store_true")
     parser.add_argument("--repo", type=Path)
     parser.add_argument("--task-file", type=Path)
     parser.add_argument("--commit", help="exact candidate or revision to check")
@@ -1046,7 +1051,7 @@ def main() -> int:
         elif args.action == "start":
             start(args.runs, args.run)
         elif args.action == "context":
-            context(args.runs, args.run)
+            context(args.runs, args.run, agent_entrypoints=args.agent_entrypoints)
         else:
             root, doc = load(args.runs, args.run)
             if args.action == "pr":

@@ -89,7 +89,11 @@ D="$(cd "$(dirname "$0")" && pwd -P)"
 REPO_ROOT="$(cd "$D/.." && pwd -P)"
 # shellcheck source=harness/run_context.sh
 source "$D/run_context.sh"
-factory_load_context "$RUN" "$RUNS_ARG"
+if [ "$KIND" != idle ]; then
+  factory_load_context "$RUN" "$RUNS_ARG" --agent-entrypoints
+else
+  factory_load_context "$RUN" "$RUNS_ARG"
+fi
 factory_resolve_tmux
 ROOT="$FACTORY_CONTROL_ROOT"
 TMUX_ROOT="$ROOT/tmux-lanes"
