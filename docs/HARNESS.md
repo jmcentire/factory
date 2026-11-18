@@ -91,6 +91,12 @@ Every role retrieves relevant Kindex context when authorized. Author memory rema
 private, with curated common context; a shared live graph must not leak one author's
 work to the other. Retrieval receipts are not an execution prerequisite.
 
+### Custom agent entrypoints
+
+[`FACTORY_AGENT_BIN`](../README.md#custom-agent-entrypoints) selects executable
+wrappers for Codex, Claude Code, Cursor, Antigravity, Muse, prime-agent, and
+Ollama. The run retains these selections across starts and resumes.
+
 ### Claude Code is the operator's own interactive session
 
 Claude Code is never run in print mode (`-p`), never billed to an API key, never has its
