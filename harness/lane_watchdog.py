@@ -120,6 +120,10 @@ WAITING_PHASES = ("idle", "waiting-for-input")
 #: The phases a reported turn end leaves: also a terminal session's stop report (it may still
 #: continue past it) and a stream session's failed turn.
 TURN_END_PHASES = (*WAITING_PHASES, "stop-reported", "failed")
+#: A lane with no wall or spend cap (a plan-billed lane: tmux_lane.sh refuses it a wall cap) has
+#: the stall stop as its only bound. Whatever holds it (a wait, a pending question), it is
+#: stopped as stalled after this long with no commit and no new turn (``watch.hold_limit_s``).
+HOLD_LIMIT_S = 8 * 3600
 # Wall-clock time beyond awake time between two checks is the machine asleep, not the lane idle.
 SLEEP_TOLERANCE_S = 60.0
 DEFAULT_REVIEW_WAIT_S = 15 * 60
@@ -232,6 +236,13 @@ def _response_text(value: object) -> str | None:
     else:
         return None
     return text if isinstance(text, str) else ""
+
+
+def _session_key(native: Mapping[str, Any]) -> str:
+    """The session and the wrapper whose turns a count counts: each wrapper counts from 0."""
+    wrapper = native.get("wrapper")
+    session = re.sub(r"[^A-Za-z0-9._-]", "", str(native.get("session_id") or "unbound"))[:80]
+    return f"{session}.{wrapper.get('pid') if isinstance(wrapper, dict) else None}"
 
 
 def _turn_ends(native: Mapping[str, Any]) -> int | None:
@@ -731,8 +742,17 @@ class LaneWatch:
         if reported is None:
             return
         noticed = state.get("turn_ends_noticed")
-        if type(noticed) is not int or reported < noticed:
-            state["turn_ends_noticed"] = reported  # an older watch record, or a new session
+        key = _session_key(native)
+        if state.get("turn_ends_session") != key:
+            # Each session wrapper counts its turns from 0 (persistent_lane.py): a count carried
+            # from another one says nothing of this one's, whose first turn may already have
+            # ended. Its ends are told by an id naming it, so one told before is not repeated.
+            noticed = state["turn_ends_noticed"] = 0
+            state["turn_ends_session"] = key
+            if isinstance(state.get("turn_ended"), dict):
+                state["turn_ended"]["open"] = False
+        elif type(noticed) is not int or reported < noticed:
+            state["turn_ends_noticed"] = reported
             return
         phase = native.get("phase")
         if reported > noticed and phase in TURN_END_PHASES:
@@ -745,8 +765,10 @@ class LaneWatch:
         wait = validator_input.run_record.SUPERVISOR_WAIT_S
         try:
             if not pending.get("posted"):
-                validator_input.post(self.root, str(pending["notice"]), "lane-turn-ended",
-                                     "host", str(pending["text"]), wait_s=wait)
+                if not validator_input.post(self.root, str(pending["notice"]),
+                                            "lane-turn-ended", "host", str(pending["text"]),
+                                            wait_s=wait):
+                    pending["woken"] = True  # told already, by an earlier watch: no new wake
                 pending["posted"] = True
             if not pending.get("woken"):
                 # On record before the wake: a watcher that dies in between loses this one wake,
@@ -775,10 +797,7 @@ class LaneWatch:
                  "its session reported the turn failed" if phase == "failed" else
                  "its session reported the end of a response and may still continue on its own")
         detail = f"{ended} (seen {_iso(self.now())}); {done}; {summary}"
-        wrapper = native.get("wrapper")
-        session = re.sub(r"[^A-Za-z0-9._-]", "", str(native.get("session_id") or "unbound"))[:80]
-        pid = wrapper.get("pid") if isinstance(wrapper, dict) else None
-        notice_id = f"{self.slot}:{session}.{pid}:{reported}"
+        notice_id = f"{self.slot}:{_session_key(native)}:{reported}"
         state.update(turn_ends_noticed=reported, turn_ended={
             "count": reported, "seen_at": self.now(), "notice": notice_id, "detail": detail,
             "text": (f"{lane}: {detail}. A turn's end is not acceptance of its work. Evaluate "
@@ -880,6 +899,9 @@ class LaneWatch:
             "turn_ends_noticed": (
                 prior["turn_ends_noticed"] if type(prior.get("turn_ends_noticed")) is int
                 else _turn_ends(self._native_turn()) or 0 if prior else 0),
+            "turn_ends_session": (
+                prior.get("turn_ends_session") if type(prior.get("turn_ends_noticed")) is int
+                else _session_key(self._native_turn()) if prior else None),
             "status": "watching",
         }
         self._write_state(state)
@@ -1123,20 +1145,30 @@ class LaneWatch:
         self._notice_turn_end(launch, state, native, summary)
         # A persistent lane whose session ended its turn, and has started no new one, is waiting
         # for the Validator: stopping it would only lose its session, and a pause or wrap-up has
-        # nothing to interrupt. Not once its session is seen to have died. A session record that
-        # cannot be read (or says no phase) is no evidence of a new turn: a turn end on record
-        # keeps the lane waiting until a phase shows a turn running again.
-        phase = native.get("phase")
-        ended = phase in TURN_END_PHASES or (not phase and isinstance(state.get("turn_ended"),
-                                                                       dict))
-        waiting = ended and self._session(native) != "dead"
+        # nothing to interrupt. Not once its session is seen to have died, nor past the hold
+        # limit of an uncapped lane. A turn end on record closes when a phase shows a turn
+        # running; it stands through an unreadable record for one stall window at most.
+        phase, recorded = native.get("phase"), state.get("turn_ended")
+        if phase:
+            state.pop("session_unread_since", None)
+            if phase not in TURN_END_PHASES and isinstance(recorded, dict):
+                recorded["open"] = False
+        else:
+            state.setdefault("session_unread_since", current)
+        ended = phase in TURN_END_PHASES or (
+            not phase and isinstance(recorded, dict) and recorded.get("open", True)
+            and current - float(state["session_unread_since"]) <= window)
         started = native.get("turn_started_at")
         turn = float(started) if isinstance(started, (int, float)) else 0.0
         clock = max(anchor, last_commit, float(state["hold_ts"] or 0.0), turn)
         idle = current - clock + (float(state.get("stall_carry_s", 0.0)) if clock == anchor
                                   else 0.0)
+        wall_cap, spend_cap = caps.get("wall_cap_s"), caps.get("spend_cap_usd")
+        uncapped = wall_cap is None and (spend_cap is None or rate is None)
+        limit = float(watch.get("hold_limit_s") or HOLD_LIMIT_S) if uncapped else None
+        held = current - max(anchor, last_commit, turn)  # since a commit or a new turn
+        waiting = ended and self._session(native) != "dead"
 
-        wall_cap = caps.get("wall_cap_s")
         wrap_s = float(watch.get("wrap_s") or 0)
         review_s = float(watch.get("review_every_s") or 0)
         resumable = self._resumable(launch) and not waiting
@@ -1154,7 +1186,6 @@ class LaneWatch:
             return self._pause_for_review(launch, state, current, active, idle, summary)
 
         reason = ""
-        spend_cap = caps.get("spend_cap_usd")
         if wall_cap is not None and active >= float(wall_cap):
             reason = f"wall-clock cap of {float(wall_cap) / 60:.0f} min reached"
         elif spend is not None and spend_cap is not None and spend >= decimal.Decimal(
@@ -1165,6 +1196,11 @@ class LaneWatch:
             return self._request_end(launch, state, "capped", "refusal-lane-cap",
                                      f"{reason}; {summary}")
 
+        if limit is not None and held > limit:  # whatever holds it: a wait or a question
+            return self._request_end(
+                launch, state, "stalled", "refusal-lane-stall",
+                f"no commit or new turn for {held / 3600:.1f} h, past the {limit / 3600:g} h "
+                f"hold limit of a lane with no wall or spend cap; {summary}")
         if not pending and not waiting and idle > window:
             return self._request_end(
                 launch, state, "stalled", "refusal-lane-stall",

@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from harness import lane_agent, lane_watchdog
+from harness import lane_agent, lane_dialogue, lane_watchdog
 
 T0 = 1_791_000_000.0
 
@@ -635,3 +635,57 @@ def test_a_waiting_lane_is_still_capped(
     assert len(watched.events("refusal-lane-cap")) == 1
 
 
+def test_a_new_wrappers_first_turn_end_before_the_first_check_is_told(tmp_path: Path) -> None:
+    """Review: each session wrapper counts its turns from 0, so a count carried from the last
+    wrapper hid a resumed session's first turn end (the 20-minute idle Validator again)."""
+
+    watched = _session(tmp_path, STREAM, "idle", 1)
+    assert watched.at(60) == "watching" and watched.notices() == 1
+    watched.report(wrapper={"pid": 5002, "started": "Tue Nov 17 10:30:00 2026"}, turns=1,
+                   turn_started_at=T0 + 100, turn_completed_at=T0 + 110)
+    assert watched.at(120) == "watching" and watched.notices() == 2
+    assert watched.at(150) == "watching" and watched.notices() == 2
+
+
+@pytest.mark.parametrize("name", list(WAITING_LANES))
+def test_an_uncapped_waiting_lane_is_stall_stopped_at_the_hold_limit(
+    tmp_path: Path, name: str,
+) -> None:
+    """Review: a lane with no wall or spend cap (plan-billed) has the stall stop as its only
+    bound, so a wait may not exempt it forever."""
+
+    watched = _waiting(tmp_path, name)
+    assert watched.at(lane_watchdog.HOLD_LIMIT_S) == "watching"
+    _settle(watched, READ_ALLOWANCE_S + lane_watchdog.HOLD_LIMIT_S + 1, "stalled")
+    [stall] = watched.events("refusal-lane-stall")
+    assert "hold limit" in str(stall)
+
+
+def test_an_uncapped_lane_held_by_a_pending_question_is_stopped_at_the_hold_limit(
+    tmp_path: Path,
+) -> None:
+    """Review: the hold limit is absolute: an unanswered question holds a lane no longer."""
+
+    watched = Lane(tmp_path, record=None, lane=None)
+    lane_dialogue.record_question(watched.root, "tester", "Which stay types are valid?")
+    assert watched.at(STALL_AT + 3600) == "watching"
+    _settle(watched, READ_ALLOWANCE_S + lane_watchdog.HOLD_LIMIT_S + 1, "stalled")
+
+
+@pytest.mark.parametrize("then", ["record-gone", "new-turn-then-record-gone"])
+def test_a_turn_end_on_record_holds_through_an_unreadable_record_for_one_window_only(
+    tmp_path: Path, then: str,
+) -> None:
+    """Review: a recorded turn end was never cleared, so a session record that went missing or
+    corrupt kept the lane waiting from then on."""
+
+    watched = _waiting(tmp_path, "claude-stream-idle-alive")
+    if then == "new-turn-then-record-gone":
+        watched.report(phase="working")
+        assert watched.at(800) == "watching"
+    watched.record_path.unlink()
+    if then == "record-gone":
+        assert watched.at(STALL_AT + 1) == "watching"
+        _settle(watched, STALL_AT + STALL_WINDOW_S + 2, "stalled")
+    else:
+        _settle(watched, STALL_AT + 1, "stalled")

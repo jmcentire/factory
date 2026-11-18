@@ -1064,7 +1064,10 @@ def main() -> int:
     parser.add_argument("--slot", help="author slot for terminal output capture")
     parser.add_argument("--from", dest="sender", default="host")
     parser.add_argument("--message-file", type=Path)
-    parser.add_argument("--kind", help="notify: the notice's kind (validator_input.KINDS)")
+    parser.add_argument("--kind", help=(
+        "notify: the notice's kind (validator_input.KINDS). Exits 0 delivered, 75 recorded and "
+        "still owed, 74 recorded but delivery unknown, 65 id already used for another notice "
+        "(not sent), 70 not recorded (a record stayed locked or failed; retry)"))
     parser.add_argument("--id", dest="notice_id", help="notify: the notice's id, told once")
     args = parser.parse_args()
     try:
@@ -1129,15 +1132,18 @@ def main() -> int:
                     parser.error("notify requires --kind, --id and --message-file")
                 import validator_input
 
-                validator_input.post(root, args.notice_id, args.kind, args.sender,
-                                     args.message_file.read_text(), wait_s=SUPERVISOR_WAIT_S)
                 try:
-                    owed = validator_input.deliver(root, wait_s=SUPERVISOR_WAIT_S)
+                    told = validator_input.notify(root, args.notice_id, args.kind, args.sender,
+                                                  args.message_file.read_text(),
+                                                  wait_s=SUPERVISOR_WAIT_S)
                 except validator_input.LedgerUnreadable as error:
                     print(f"factory: {args.notice_id} is recorded, but whether it was delivered "
                           f"is unknown: {error}", file=sys.stderr)
                     return 74
-                if args.notice_id in owed:
+                except validator_input.NoticeIdReused as error:
+                    print(f"factory: {error}", file=sys.stderr)
+                    return 65
+                if not told:
                     print(f"factory: {args.notice_id} is recorded and still owed to the "
                           "Validator; the next delivery retries it", file=sys.stderr)
                     return 75

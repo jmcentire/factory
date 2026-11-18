@@ -459,3 +459,11 @@ def test_notify_posts_and_delivers_once_and_exits_0_or_75(
     [row] = _inbox(root, "Suite: 12 passed")
     assert row["sender"] == "tester" and str(row["text"]).startswith("FACTORY_TEST_RESULT ")
     assert validator_input.status(root, "suite-1") == "delivered"
+    message.write_text("Suite: 1 failed.\n")  # the id reused for another notice: not "sent"
+    reused = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+    assert reused.returncode == 65 and _inbox(root, "1 failed") == [], reused.stderr
+    if lock:  # a notice record that stays locked: not recorded, exit 70
+        ledger = hold(root / "validator" / validator_input.LEDGER)
+        argv[argv.index("suite-1")] = "suite-2"
+        assert subprocess.run(argv, capture_output=True, text=True, timeout=60).returncode == 70
+        ledger.release()

@@ -136,13 +136,36 @@ def post(root: pathlib.Path, notice_id: str, kind: str, sender: str, text: str, 
         raise ValueError("unknown sender")
     if not _ID.fullmatch(notice_id):
         raise ValueError("invalid notice id")
+    row = {"op": "post", "id": notice_id, "kind": kind, "sender": sender, "ts": _now(),
+           "text": _wording(kind, sender, text)}
+    return _append(pathlib.Path(root), row, wait_s, once=_holds(notice_id, "post"))
+
+
+def _wording(kind: str, sender: str, text: str) -> str:
     body = text.strip()
     if not body:
         raise ValueError("empty notice")
     body += "" if body.endswith((".", "!", "?")) else "."
-    row = {"op": "post", "id": notice_id, "kind": kind, "sender": sender, "ts": _now(),
-           "text": f"FACTORY_{kind.upper().replace('-', '_')} (from {sender}) {body} {CLOSING}"}
-    return _append(pathlib.Path(root), row, wait_s, once=_holds(notice_id, "post"))
+    return f"FACTORY_{kind.upper().replace('-', '_')} (from {sender}) {body} {CLOSING}"
+
+
+class NoticeIdReused(ValueError):
+    """An id already posted for another notice: the new one is not sent, nor reported sent."""
+
+
+def notify(root: pathlib.Path, notice_id: str, kind: str, sender: str, text: str, *,
+           wait_s: float) -> bool:
+    """Post a notice, then deliver every notice owed, within ``wait_s`` for each step. Returns
+    whether this one is delivered; one still owed is retried by the next delivery. Raises what
+    ``post`` raises, ``NoticeIdReused`` when the id was posted for another notice, and
+    ``LedgerUnreadable`` when whether it was delivered is unknown."""
+    if not post(root, notice_id, kind, sender, text, wait_s=wait_s):
+        known = _read(pathlib.Path(root), wait_s).get(notice_id, {})
+        if [known.get(f) for f in ("kind", "sender", "text")] != [
+                kind, sender, _wording(kind, sender, text)]:
+            raise NoticeIdReused(f"{notice_id} was already used for another notice; this one "
+                                 "was not sent")
+    return notice_id not in deliver(root, wait_s=wait_s)
 
 
 def status(root: pathlib.Path, notice_id: str) -> str:
