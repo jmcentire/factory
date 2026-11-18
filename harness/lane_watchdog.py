@@ -641,16 +641,34 @@ class LaneWatch:
             raise LaneWatchError(f"{self.journal} holds no single active launch to watch")
         return active[0]
 
-    def _pending_question(self, role: str) -> bool:
+    def _pending_question(self, role: str, state: dict[str, Any]) -> bool:
+        """Whether the lane has a question pending; each one not yet told is posted to the
+        Validator's input path (a typed session's question is seen by no pane watcher)."""
         harness = str(pathlib.Path(__file__).resolve().parent)
         if harness not in sys.path:
             sys.path.insert(0, harness)
         try:
-            from lane_dialogue import pending_questions
+            from lane_dialogue import pending_questions, question_notice
 
-            return bool(pending_questions(self.root, role))
+            pending = pending_questions(self.root, role)
         except Exception:  # noqa: BLE001 - an unreadable journal must not disarm the watch
             return False
+        told = state.setdefault("questions_told", [])
+        fresh = [question_notice(row) for row in pending]
+        validator_input = self._input()
+        posted = False
+        try:
+            for notice_id, text in fresh:
+                if notice_id not in told:
+                    validator_input.post(self.root, notice_id, "worker-question", "host", text,
+                                         wait_s=validator_input.run_record.SUPERVISOR_WAIT_S)
+                    told.append(notice_id)
+                    posted = True
+        except (OSError, ValueError):
+            pass  # a locked record: posted at the next check, told once by its id
+        if posted:
+            self._deliver_notices()
+        return bool(pending)
 
     def _scan_output(self, launch: Mapping[str, Any], state: dict[str, Any]) -> bool | None:
         log = pathlib.Path(str(launch.get("lane_log", "")))
@@ -1345,7 +1363,7 @@ class LaneWatch:
             if commit["sha"] not in known:
                 state["commits"].append(commit)
                 known.add(commit["sha"])
-        pending = self._pending_question(str(launch.get("lane") or launch.get("role", "")))
+        pending = self._pending_question(str(launch.get("lane") or launch.get("role", "")), state)
         if pending:
             state["hold_ts"] = current
         claimed = self._scan_output(launch, state)

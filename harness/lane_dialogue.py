@@ -653,6 +653,14 @@ def run_engagement(root: pathlib.Path) -> str:
         return INTERACTIVE
 
 
+def question_notice(row: dict[str, Any]) -> tuple[str, str]:
+    """The id and text of a pending question's notice to the Validator (validator_input,
+    kind ``worker-question``). Whoever sees the question first posts it; the id tells it once."""
+    question_id, lane = str(row["question_id"]), str(row["lane"])
+    return (f"worker-question:{question_id}",
+            f"FACTORY_QUESTION_PENDING {question_id} from {lane}: answer it through lane_dialogue")
+
+
 def pending_questions(root: pathlib.Path, lane: str | None = None) -> list[dict[str, Any]]:
     if lane is not None and not _is_lane(lane):
         raise LaneDialogueError("pending-question lane must be coder or tester[-instance]")

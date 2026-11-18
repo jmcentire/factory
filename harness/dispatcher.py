@@ -36,6 +36,7 @@ from jev_screen import ScreenError, screen_pending  # noqa: E402
 from lane_dialogue import (  # noqa: E402 - adjacent harness module
     LaneDialogueError,
     pending_questions,
+    question_notice,
     record_question,
 )
 from legacy_abandonment import (  # noqa: E402 - load the adjacent harness module
@@ -449,16 +450,14 @@ class Dispatcher:
                         f"{question['question_id']} from {window}: {question['text']}",
                         wake=True,
                     )
-                    self.notify_validator(
-                        f"FACTORY_QUESTION_PENDING {question['question_id']} from {window}: "
-                        "answer it through lane_dialogue"
-                    )
+                    self.notify_validator("worker-question", *question_notice(question))
             for line in fresh.splitlines()[-25:]:
                 key = f"{window}:done:{hashlib.sha256(line.encode()).hexdigest()[:12]}"
                 if LANE_DONE_RE.search(line) and key not in self.notified:
                     self.notified.add(key)
                     self.event("lane_done", f"{window}: {line.strip()[:200]}", wake=True)
                     self.notify_validator(
+                        "lane-status", f"lane-done:{key.replace(':done:', ':')}",
                         f"FACTORY_LANE_DONE {window}: the lane reported DONE; evaluate it"
                     )
 
@@ -562,13 +561,14 @@ class Dispatcher:
         """Platform permission prompts belong to the operator, not a screen scraper."""
         return False
 
-    def notify_validator(self, notice: str) -> None:
-        """Retain notices even if the agent has exited; never type prose into its pane."""
-        from run_record import message
+    def notify_validator(self, kind: str, notice_id: str, notice: str) -> None:
+        """Through the Validator's input path (validator_input): recorded as owed even if the
+        agent has exited, told once by id, retried until delivered; never typed into its pane."""
+        import validator_input
         try:
-            message(self.root, "validator", "dispatcher", notice,
-                    log=os.environ.get("FACTORY_LOG", os.devnull))
-        except (OSError, ValueError) as error:
+            validator_input.notify(self.root, notice_id, kind, "dispatcher", notice,
+                                   wait_s=validator_input.run_record.SUPERVISOR_WAIT_S)
+        except (OSError, ValueError, validator_input.AttentionGateError) as error:
             self.event("validator_notice_failed", str(error)[:300], wake=False)
 
     def record_pane_delta(self, window: str, tail: str) -> None:
