@@ -8,12 +8,12 @@ set -euo pipefail
 # import is decided here and by the checkout, from the first one on: never by a variable
 # that happened to be in the caller's environment (a directory named there could hold code
 # a lane was able to write), and never by the working directory. Safe-path mode keeps the
-# working directory off every helper's import path, the helpers' own directory is named
-# instead, and harness/trusted_startup runs first in each and drops any other relative
-# entry.
+# working directory off every helper's import path, the helpers' own directory and the
+# package root beside it (factory_core, factory_runtime) are named instead, and
+# harness/trusted_startup runs first in each and drops any other relative entry.
 unset PYTHONSTARTUP PYTHONHOME PYTHONINSPECT
 _factory_harness="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-export PYTHONSAFEPATH=1 PYTHONPATH="$_factory_harness/trusted_startup:$_factory_harness"
+export PYTHONSAFEPATH=1 PYTHONPATH="$_factory_harness/trusted_startup:$_factory_harness:${_factory_harness%/*}"
 unset _factory_harness
 # shellcheck source=harness/factory_python.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/factory_python.sh"
@@ -697,7 +697,7 @@ PY
   # it to itself: lane_agent.py passes neither variable on to a provider's program.
   LANE_ENV=(env -i HOME="$SAFE_HOME" USER="$SAFE_USER" PATH="$SAFE_PATH" TMPDIR="$SAFE_TMPDIR"
     TERM="$SAFE_TERM" SHELL="$SAFE_SHELL" LANG="$SAFE_LANG" CODEX_HOME="$SAFE_CODEX_HOME"
-    PYTHONSAFEPATH=1 PYTHONPATH="$D/trusted_startup:$D"
+    PYTHONSAFEPATH=1 PYTHONPATH="$D/trusted_startup:$D:$REPO_ROOT"
     ${CLAUDE_CONFIG_DIR:+CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR"})
 
   # A codex lane runs with the operator's own Codex configuration: nothing of it is ignored
@@ -1223,7 +1223,7 @@ PY
   # this script: the working directory is on neither's import path and
   # harness/trusted_startup runs first in each. The wrapper removes both variables from
   # what it hands the provider's program, so the lane's own environment is unchanged.
-  printf -v STARTUP_ENV ' PYTHONSAFEPATH=1 PYTHONPATH=%q' "$D/trusted_startup:$D"
+  printf -v STARTUP_ENV ' PYTHONSAFEPATH=1 PYTHONPATH=%q' "$D/trusted_startup:$D:$REPO_ROOT"
   ENV_PREFIX+="$STARTUP_ENV"
   # Agents without a shell policy (cursor-agent) read the cache variables from their own
   # environment. Those settings are the provider's and nobody else's: they travel in one

@@ -38,8 +38,12 @@ _HARNESS = os.path.dirname(os.path.abspath(__file__))
 ISOLATED = ("-I", "-S")
 #: The start-up isolation the launchers give their helpers and the programs they start from
 #: a rebuilt environment. For the Factory's own programs: a provider's is never given them.
-TRUSTED_STARTUP = {"PYTHONSAFEPATH": "1",
-                   "PYTHONPATH": f"{_HARNESS}/trusted_startup:{_HARNESS}"}
+#: The value must equal the launchers' own (harness/tmux_lane.sh), harness directory and
+#: package root included: ``provider_environment`` removes it only when it is exactly this.
+TRUSTED_STARTUP = {
+    "PYTHONSAFEPATH": "1",
+    "PYTHONPATH": f"{_HARNESS}/trusted_startup:{_HARNESS}:{os.path.dirname(_HARNESS)}",
+}
 #: The one variable a lane's ``--cache-env`` settings travel in until the provider's program
 #: is started: a JSON object of names and values.
 PROVIDER_ENV = "FACTORY_LANE_PROVIDER_ENV"
