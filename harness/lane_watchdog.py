@@ -735,8 +735,38 @@ class LaneWatch:
             state["turn_ends_noticed"] = reported  # an older watch record, or a new session
             return
         phase = native.get("phase")
-        if reported == noticed or phase not in TURN_END_PHASES:
+        if reported > noticed and phase in TURN_END_PHASES:
+            self._record_turn_end(launch, state, native, reported, phase, summary)
+        pending = state.get("turn_ended")
+        if not isinstance(pending, dict) or (pending.get("posted", True)
+                                             and pending.get("woken", True)):
             return
+        validator_input = self._input()
+        wait = validator_input.run_record.SUPERVISOR_WAIT_S
+        try:
+            if not pending.get("posted"):
+                validator_input.post(self.root, str(pending["notice"]), "lane-turn-ended",
+                                     "host", str(pending["text"]), wait_s=wait)
+                pending["posted"] = True
+            if not pending.get("woken"):
+                # On record before the wake: a watcher that dies in between loses this one wake,
+                # and never repeats it. A locked event log is retried at the next check.
+                pending["woken"] = True
+                self._write_state(state)
+                try:
+                    self._wake(launch, "lane-turn-ended", str(pending["detail"]),
+                               refusal=False, wait_s=wait)
+                except (OSError, validator_input.AttentionGateError):
+                    pending["woken"] = False
+                    raise
+        except (OSError, ValueError, validator_input.AttentionGateError):
+            return  # retried from the record at the next check, told once
+
+    def _record_turn_end(self, launch: Mapping[str, Any], state: dict[str, Any],
+                         native: Mapping[str, Any], reported: int, phase: object,
+                         summary: str) -> None:
+        """Put an observed turn end on record before anything is told, so a notice or wake
+        that fails is retried from the record and the turn end is never lost."""
         lane = str(launch.get("lane") or self.slot)
         done = ("its done line was seen" if state.get("completion_claim") else
                 "no done line was seen in what its session reported (a Cursor stop report "
@@ -749,25 +779,24 @@ class LaneWatch:
         session = re.sub(r"[^A-Za-z0-9._-]", "", str(native.get("session_id") or "unbound"))[:80]
         pid = wrapper.get("pid") if isinstance(wrapper, dict) else None
         notice_id = f"{self.slot}:{session}.{pid}:{reported}"
-        validator_input = self._input()
-        wait = validator_input.run_record.SUPERVISOR_WAIT_S
-        try:
-            validator_input.post(
-                self.root, notice_id, "lane-turn-ended", "host",
-                f"{lane}: {detail}. A turn's end is not acceptance of its work. Evaluate it, "
-                "then continue the lane or close it.", wait_s=wait)
-            self._wake(launch, "lane-turn-ended", detail, refusal=False, wait_s=wait)
-        except (OSError, ValueError, validator_input.AttentionGateError):
-            return  # a record stayed locked: noticed again at the next check, told once
-        state.update(turn_ends_noticed=reported,
-                     turn_ended={"count": reported, "seen_at": self.now(), "notice": notice_id})
+        state.update(turn_ends_noticed=reported, turn_ended={
+            "count": reported, "seen_at": self.now(), "notice": notice_id, "detail": detail,
+            "text": (f"{lane}: {detail}. A turn's end is not acceptance of its work. Evaluate "
+                     "it, then continue the lane or close it."),
+            "posted": False, "woken": False})
+        self._write_state(state)
 
     def _deliver_notices(self) -> None:
         """Deliver every notice owed to the Validator, whoever posted it, waiting on each lock
         for ``SUPERVISOR_WAIT_S`` in all; keep this lane's still owed."""
         validator_input = self._input()
-        owed = validator_input.deliver(self.root,
-                                       wait_s=validator_input.run_record.SUPERVISOR_WAIT_S)
+        try:
+            owed = validator_input.deliver(self.root,
+                                           wait_s=validator_input.run_record.SUPERVISOR_WAIT_S)
+        except validator_input.LedgerUnreadable:
+            # What is owed is unknown, not nothing: keep this lane's drain going and retry.
+            self.owed = [f"{self.slot}:unreadable-notice-record"]
+            return
         self.owed = [notice for notice in owed if notice.startswith(f"{self.slot}:")]
 
     def _resumable(self, launch: Mapping[str, Any]) -> bool:
@@ -1094,8 +1123,13 @@ class LaneWatch:
         self._notice_turn_end(launch, state, native, summary)
         # A persistent lane whose session ended its turn, and has started no new one, is waiting
         # for the Validator: stopping it would only lose its session, and a pause or wrap-up has
-        # nothing to interrupt. Not once its session is seen to have died.
-        waiting = native.get("phase") in TURN_END_PHASES and self._session(native) != "dead"
+        # nothing to interrupt. Not once its session is seen to have died. A session record that
+        # cannot be read (or says no phase) is no evidence of a new turn: a turn end on record
+        # keeps the lane waiting until a phase shows a turn running again.
+        phase = native.get("phase")
+        ended = phase in TURN_END_PHASES or (not phase and isinstance(state.get("turn_ended"),
+                                                                       dict))
+        waiting = ended and self._session(native) != "dead"
         started = native.get("turn_started_at")
         turn = float(started) if isinstance(started, (int, float)) else 0.0
         clock = max(anchor, last_commit, float(state["hold_ts"] or 0.0), turn)

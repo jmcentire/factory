@@ -465,7 +465,7 @@ def _flock(fd: int, operation: int, wait_s: float | None, what: str, path: objec
         except BlockingIOError:
             if time.monotonic() >= deadline:
                 raise OSError(f"{what} stayed locked for {wait_s:g} s: {path}") from None
-            time.sleep(0.05)
+            time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
 
 
 #: Who may write to an inbox.
@@ -548,46 +548,6 @@ def inbox_end(root: Path, recipient: str, *, wait_s: float | None = None) -> int
         return os.fstat(fd).st_size
     finally:
         os.close(fd)
-
-
-def delivered(root: Path, recipient: str, sender: str, text: str, *,
-              since: int | None = None) -> bool:
-    """Whether the recipient's inbox already holds this message, as a reader sees it.
-
-    It reads without the inbox's lock, so it can count a row another writer has appended but
-    not yet synced, which may still be rolled back: a writer that may already have written the
-    message decides under the lock instead (``message(..., once_since=)``). It reads from
-    ``since``, an ``inbox_end`` taken before the first attempt, however much was
-    written after it; without one (or when the inbox is now shorter), the last 64 KiB. Only a
-    regular file is read, where ``message`` would write it: never through a link, the file's
-    or a directory's. Only complete rows count, as the inbox's reader takes them: a row a
-    killed writer left without its newline is not delivered.
-    """
-    digest = hashlib.sha256(text.encode()).hexdigest()
-    try:
-        directory = _inbox_directory(root, recipient)
-    except OSError:
-        return False
-    try:
-        fd = os.open("inbox.jsonl", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
-                     dir_fd=directory)
-    except OSError:
-        return False
-    finally:
-        os.close(directory)
-    try:
-        metadata = os.fstat(fd)
-        if not stat.S_ISREG(metadata.st_mode):
-            return False
-        end = metadata.st_size
-        start = (_row_start(fd, since) if since is not None and 0 <= since <= end
-                 else max(0, end - 65536))
-        tail = os.pread(fd, end - start, start)
-    except OSError:
-        return False
-    finally:
-        os.close(fd)
-    return _holds(tail.rpartition(b"\n")[0], sender, text, digest)
 
 
 def _row_start(fd: int, offset: int) -> int:
@@ -1171,7 +1131,13 @@ def main() -> int:
 
                 validator_input.post(root, args.notice_id, args.kind, args.sender,
                                      args.message_file.read_text(), wait_s=SUPERVISOR_WAIT_S)
-                if args.notice_id in validator_input.deliver(root, wait_s=SUPERVISOR_WAIT_S):
+                try:
+                    owed = validator_input.deliver(root, wait_s=SUPERVISOR_WAIT_S)
+                except validator_input.LedgerUnreadable as error:
+                    print(f"factory: {args.notice_id} is recorded, but whether it was delivered "
+                          f"is unknown: {error}", file=sys.stderr)
+                    return 74
+                if args.notice_id in owed:
                     print(f"factory: {args.notice_id} is recorded and still owed to the "
                           "Validator; the next delivery retries it", file=sys.stderr)
                     return 75

@@ -222,7 +222,7 @@ def _append_jsonl(path: pathlib.Path, body: Mapping[str, object], *,
                         raise AttentionGateError(
                             f"attention event sink stayed locked for {wait_s:g} s: {path}"
                         ) from None
-                    time.sleep(0.05)
+                    time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
         # The file lock, rather than the broader attention lock, is the common
         # ordering primitive with legacy dispatcher writers.  Snapshot the rollback
         # boundary only after acquiring it so a failed append can never erase bytes
