@@ -1005,7 +1005,7 @@ PY
   # Kindex scoped to this lane's own copy of the target's .kin (harness/lane_kindex.py).
   SEED_ARGS=()
   [ ! -e "$ROOT/lane-seed.jsonl" ] || SEED_ARGS=(--seed "$ROOT/lane-seed.jsonl")
-  KINDEX=$("$FACTORY_PYTHON" "$D/lane_kindex.py" prepare --repo "$REPOSITORY" \
+  KINDEX=$(PYTHONPATH="$PYTHONPATH:$REPO_ROOT" "$FACTORY_PYTHON" "$D/lane_kindex.py" prepare --repo "$REPOSITORY" \
     --home "$KINDEX_HOME" ${SEED_ARGS[@]+"${SEED_ARGS[@]}"}) || exit 70
   # The seed may not move between the check above and the load: the store must hold what was checked.
   printf '%s' "$KINDEX" | "$FACTORY_PYTHON" -c '
@@ -1474,7 +1474,7 @@ if [ "$LAUNCH_MODE" = launch:persistent ]; then
   echo "tmux-lane: validate a resident author's committed SHA with endgame.sh; do not freeze its live working tree" >&2
   exit 64
 fi
-"$FACTORY_PYTHON" "$D/lane_dialogue.py" require-clear --root "$ROOT" \
+PYTHONPATH="$PYTHONPATH:$REPO_ROOT" "$FACTORY_PYTHON" "$D/lane_dialogue.py" require-clear --root "$ROOT" \
   --lane "$LANE" >/dev/null || {
   echo "tmux-lane: unanswered $LANE question must be answered before freeze" >&2
   exit 70
