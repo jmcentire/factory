@@ -413,19 +413,7 @@ def append_record(path: Path, payload: bytes, *, wait_s: float | None = None,
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise OSError(f"message sink is not a regular file: {path}")
-        if wait_s is None:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-        else:
-            deadline = time.monotonic() + wait_s
-            while True:
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    if time.monotonic() >= deadline:
-                        raise OSError(
-                            f"message sink stayed locked for {wait_s:g} s: {path}") from None
-                    time.sleep(0.05)
+        _flock(fd, fcntl.LOCK_EX, wait_s, "message sink", path)
         start = os.fstat(fd).st_size
         interrupted = start and os.pread(fd, 1, start - 1) != b"\n"
         if once is not None:
@@ -461,6 +449,23 @@ def append_record(path: Path, payload: bytes, *, wait_s: float | None = None,
     finally:
         os.close(parent)
     return True
+
+
+def _flock(fd: int, operation: int, wait_s: float | None, what: str, path: object) -> None:
+    """Take ``operation`` (``LOCK_EX`` or ``LOCK_SH``) on ``fd``, waiting on whoever holds the
+    lock; with ``wait_s``, at most that long, then raising OSError."""
+    if wait_s is None:
+        fcntl.flock(fd, operation)
+        return
+    deadline = time.monotonic() + wait_s
+    while True:
+        try:
+            fcntl.flock(fd, operation | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise OSError(f"{what} stayed locked for {wait_s:g} s: {path}") from None
+            time.sleep(0.05)
 
 
 def message(root: Path, recipient: str, sender: str, text: str, *, log: str = os.devnull,
@@ -515,8 +520,15 @@ def _inbox_directory(root: Path, recipient: str) -> int:
     return os.open(root / recipient, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
 
 
-def inbox_end(root: Path, recipient: str) -> int:
-    """The recipient's inbox size now: a message written after this is at or past it.
+def inbox_end(root: Path, recipient: str, *, wait_s: float | None = None) -> int:
+    """The recipient's inbox size, read under the inbox's lock: a message written after this
+    is at or past it.
+
+    A writer holds the lock from its append to its sync or its rollback (``append_record``), so
+    a size read without it could count a row that is then rolled back, and a message written
+    next would start before the offset, or wholly before it. Under the lock the size is where
+    committed rows end (or a killed writer's unterminated row). With ``wait_s``, a reader that
+    cannot take the lock within that long raises OSError, as a writer does.
 
     An inbox that is not a regular file in a real directory (missing, a link, a folder, or
     under a linked directory) is 0: a message can be written only once it is one, and then
@@ -527,12 +539,19 @@ def inbox_end(root: Path, recipient: str) -> int:
     except OSError:
         return 0
     try:
-        metadata = os.stat("inbox.jsonl", dir_fd=directory, follow_symlinks=False)
+        fd = os.open("inbox.jsonl", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                     dir_fd=directory)
     except OSError:
         return 0
     finally:
         os.close(directory)
-    return metadata.st_size if stat.S_ISREG(metadata.st_mode) else 0
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return 0
+        _flock(fd, fcntl.LOCK_SH, wait_s, "inbox", root / recipient / "inbox.jsonl")
+        return os.fstat(fd).st_size
+    finally:
+        os.close(fd)
 
 
 def delivered(root: Path, recipient: str, sender: str, text: str, *,
@@ -577,9 +596,10 @@ def delivered(root: Path, recipient: str, sender: str, text: str, *,
 def _row_start(fd: int, offset: int) -> int:
     """Where the row holding byte ``offset`` starts: ``offset`` itself at a row's start.
 
-    An offset is taken without the inbox's lock (``inbox_end``), so it can count another
-    writer's append that is then rolled back; a row written next starts before it. A read from
-    the offset starts at that row, which was written after the offset was taken."""
+    ``inbox_end`` takes an offset under the inbox's lock: a row's start, or the end of a row a
+    killed writer left unterminated. One saved before it did (a watcher's state from an earlier
+    version) can count another writer's append that was then rolled back, so the row written
+    next starts before it. A read from the offset starts at that row."""
     position = offset
     while position > 0:
         size = min(4096, position)

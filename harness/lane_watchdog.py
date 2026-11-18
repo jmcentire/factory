@@ -773,9 +773,10 @@ class LaneWatch:
     def _deliver_turn_notices(self, launch: Mapping[str, Any], state: dict[str, Any]) -> None:
         """Make each pending turn-end notice: its wake, then its inbox message, oldest first.
 
-        Notices outlive the watch's life and status, so none is dropped. They are on record,
-        with the inbox's end, before any is attempted, so a check that dies mid-way, or whose
-        write failed after its row was committed (the directory sync), does not tell one twice.
+        Notices outlive the watch's life and status, so none is dropped. They are on record
+        before any is attempted, and each with the inbox's end (read under its lock) before its
+        message is, so a check that dies mid-way, or whose write failed after its row was
+        committed (the directory sync), does not tell one twice.
         What could not be done is retried at the next check. A check waits on each lock (the
         event log's, the inbox's) for at most ``SUPERVISOR_WAIT_S`` in all, however many notices
         it makes, and each message not delivered is recorded once as undelivered.
@@ -789,9 +790,6 @@ class LaneWatch:
         import run_record
         from attention_gate import AttentionGateError
 
-        for notice in notices:
-            if "inbox_from" not in notice:
-                notice["inbox_from"] = run_record.inbox_end(self.root, "validator")
         self._write_state(state)
         for notice in notices:
             if notice.get("wake") is None or getattr(self, "_events_failed", False):
@@ -808,6 +806,16 @@ class LaneWatch:
                 notice["wake"] = None
             finally:
                 self._waking_for = None
+        # A notice's offset is the inbox's end read under its lock, on record before its message
+        # is first attempted; while it cannot be read, no message is attempted (they go in order).
+        for notice in notices:
+            if "inbox_from" not in notice and not getattr(self, "_inbox_failed", ""):
+                try:
+                    notice["inbox_from"] = run_record.inbox_end(
+                        self.root, "validator", wait_s=self._wait_left("inbox"))
+                except OSError as error:
+                    self._inbox_failed = str(error) or type(error).__name__
+        self._write_state(state)
         for notice in notices:
             if notice.get("sent") or getattr(self, "_inbox_failed", ""):
                 continue  # in order: none after one that failed
@@ -830,7 +838,7 @@ class LaneWatch:
 
     def _wait_left(self, sink: str) -> float:
         """What is left of this check's one wait on ``sink``'s lock: ``SUPERVISOR_WAIT_S`` in all
-        from the first write that waits on it, however many writes it makes."""
+        from the first read or write that waits on it, however many it makes."""
         import run_record
 
         by = self._wait_by.setdefault(sink, time.monotonic() + run_record.SUPERVISOR_WAIT_S)
