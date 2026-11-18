@@ -34,7 +34,9 @@ def agent_entrypoints(directory: str) -> dict[str, str]:
     entries = {}
     for entry in path.iterdir():
         if entry.name not in AGENT_ENTRYPOINTS:
-            raise ValueError(f"FACTORY_AGENT_BIN contains an unexpected entry: {entry}")
+            if entry.is_file() and not os.access(entry, os.X_OK):
+                continue
+            raise ValueError(f"FACTORY_AGENT_BIN contains an unexpected PATH entry: {entry}")
         if not entry.is_file() or not os.access(entry, os.X_OK):
             raise ValueError(f"agent entrypoint is not an executable file: {entry}")
         entries[entry.name] = str(entry.resolve(strict=True))
@@ -111,15 +113,20 @@ def create(
     from factory_runtime.host_git import run_host_git
 
     resource_home()  # Refuse invalid resource selection before creating any run state.
+    root = run_root(runs, run)
+    repository = repository.resolve(strict=True)
     agent_bin = os.environ.get("FACTORY_AGENT_BIN", "")
     agent_binding = None
     if agent_bin:
         if not Path(agent_bin).is_absolute():
             raise ValueError("FACTORY_AGENT_BIN must be an absolute directory")
         directory = str(Path(agent_bin).resolve(strict=True))
-        agent_binding = {"directory": directory, "entries": agent_entrypoints(directory)}
-    root = run_root(runs, run)
-    repository = repository.resolve(strict=True)
+        entries = agent_entrypoints(directory)
+        for candidate in (directory, *entries.values()):
+            path = Path(candidate)
+            if path.is_relative_to(repository) or path.is_relative_to(root.parent):
+                raise ValueError(f"agent entrypoint must be outside the target and runs: {path}")
+        agent_binding = {"directory": directory, "entries": entries}
     if not task.strip():
         raise ValueError("task is empty")
     task.decode("utf-8")
@@ -843,7 +850,10 @@ def _start_locked(runs: Path, run: str) -> None:
                 raise ValueError("retained initial coordinator prompt changed")
         else:
             argv = resident_command(agent, model, effort, prompt, root)
-        executable = shutil.which(argv[0], path=agent_path)
+        if agent_bin and argv[0] in doc["agent_bin"]["entries"]:
+            executable = str(Path(agent_bin) / argv[0])
+        else:
+            executable = shutil.which(argv[0])
         if executable is None:
             raise ValueError(f"{role} executable is unavailable: {argv[0]}")
         # A bare name can fall through PATH after ENOENT from a missing shebang
@@ -857,6 +867,7 @@ def _start_locked(runs: Path, run: str) -> None:
                  "factory-model-availability", str(tools / "model_availability.sh"),
                  f"FACTORY_{role.upper()}_MODEL", model],
                 capture_output=True, text=True,
+                env={**os.environ, "PATH": agent_path} if agent_path is not None else None,
             )
             if available.returncode:
                 raise ValueError(available.stderr.strip() or "Ollama model is unavailable")
