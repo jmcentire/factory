@@ -35,7 +35,7 @@ def launch(tmp_path, monkeypatch):
         "import json, os, sys\n"
         "print(json.dumps({'argv': sys.argv[1:], 'env': dict(os.environ), 'cwd': os.getcwd()}))\n"
     )
-    for name in ("codex", "agy"):
+    for name in ("codex", "agy", "tmux"):
         path = binary / name
         path.write_text(stub)
         path.chmod(0o755)
@@ -60,7 +60,8 @@ def launch(tmp_path, monkeypatch):
             if model_probe and argv[0] == "bash":
                 assert Path(argv[4]).name == "model_availability.sh"
                 return real_run(argv, **kwargs)
-            assert argv[0] == "tmux", "startup must not probe or execute native agents"
+            assert argv[0] == str(Path(os.environ["PATH"].split(os.pathsep)[0]) / "tmux"), (
+                "startup must use the fixture client without executing native agents")
             calls.append(argv)
             if fail_start and "new-session" in argv:
                 raise subprocess.CalledProcessError(1, argv)
@@ -440,7 +441,8 @@ def _seats(monkeypatch, on_wait=lambda role: None):
         # This isolated fixture owns no running prior workers.
         if argv == ["ps", "-A", "-o", "pid=,ppid=,lstart=,stat=,time="]:
             return subprocess.CompletedProcess(argv, 0, "", "")
-        assert argv[0] == "tmux", "startup must not probe or execute native agents"
+        assert argv[0] == str(Path(os.environ["PATH"].split(os.pathsep)[0]) / "tmux"), (
+                "startup must use the fixture client without executing native agents")
         calls.append(argv)
         if "wait-for" in argv:
             on_wait(argv[-1].split("-")[2])  # factory-ready-<role>-<nonce>
@@ -482,8 +484,9 @@ def test_a_seat_that_stops_during_startup_fails_the_start_and_can_be_retried(
                        "lane-agent: env started as pid 4242, but the lane failed"):
         run_record.start(root.parent, "task")
     _, record = run_record.load(root.parent, "task")
-    assert calls[-1] == ["tmux", "-L", record["tmux_socket"], "kill-session", "-t", "=task"]
-    assert "Factory task: tmux" not in capsys.readouterr().out
+    assert calls[-1] == [str(Path(os.environ["PATH"].split(os.pathsep)[0]) / "tmux"),
+                         "-L", record["tmux_socket"], "kill-session", "-t", "=task"]
+    assert " attach -t task" not in capsys.readouterr().out
     notice = json.loads((root / "validator/inbox.jsonl").read_text())
     retry = shlex.join([sys.executable, str(Path(run_record.__file__).resolve()), "start",
                         "--runs", str(root.parent), "--run", "task"])
@@ -493,7 +496,7 @@ def test_a_seat_that_stops_during_startup_fails_the_start_and_can_be_retried(
     # is history, not this start's failure.
     calls = _seats(monkeypatch)
     run_record.start(root.parent, "task")
-    assert "Factory task: tmux" in capsys.readouterr().out
+    assert " attach -t task" in capsys.readouterr().out
     assert not any("kill-session" in call for call in calls)
     assert {name: (root / name).read_bytes() for name in original} == original
 
@@ -548,10 +551,11 @@ def test_seats_get_the_tmux_socket_directory(launch, monkeypatch):
     # Without TMUX_TMPDIR a seat's ready signal, and every harness tmux call it makes, reaches
     # the default socket directory instead of the run's server.
     root, _, _, capture, invocation, _ = launch
-    monkeypatch.setenv("TMUX_TMPDIR", "/fixture/tmux-sockets")
+    monkeypatch.setenv("TMUX_TMPDIR", "/fixture/other-directory")
+    directory = json.loads((root / "harness.json").read_text())["tmux_tmpdir"]
     calls = capture()
     for role in ("validator", "orchestrator"):
-        assert invocation(calls, role)[1]["TMUX_TMPDIR"] == "/fixture/tmux-sockets"
+        assert invocation(calls, role)[1]["TMUX_TMPDIR"] == directory
 
 
 def test_a_first_seat_that_closes_the_session_is_reported_by_name(launch, monkeypatch):

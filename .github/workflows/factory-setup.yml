@@ -1,0 +1,92 @@
+name: Factory setup
+
+on:
+  pull_request:
+    paths: ["cmd/**", "internal/**", "docs/FACTORY-PUBLISHING.md", "docs/publishing.go", "scripts/test_installer_startup.py", "go.mod", "go.sum", "install.sh", ".github/workflows/factory-setup.yml"]
+  push:
+    branches: [main]
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+      - run: go vet ./...
+      - run: bash -n install.sh
+      - run: python3 scripts/test_installer_startup.py
+  online-install:
+    if: github.event_name != 'release'
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.14"
+      - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+      - name: Verify Nix daemon and runtime prerequisites
+        run: |
+          nix-store --add README.md
+          sudo apt-get update
+          sudo apt-get install -y tmux
+      - name: Install startup script fetched from GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FACTORY_SETUP_REF: ${{ github.head_ref || github.ref_name }}
+          FACTORY_SETUP_FORCE_SOURCE: "1"
+          FACTORY_SETUP_BIN_DIR: ${{ runner.temp }}/chiron-startup/bin
+        run: |
+          gh auth setup-git
+          gh api --method GET -H 'Accept: application/vnd.github.raw' \
+            "repos/$GITHUB_REPOSITORY/contents/install.sh" \
+            --raw-field "ref=$FACTORY_SETUP_REF" > "$RUNNER_TEMP/chiron-startup.sh"
+          bash "$RUNNER_TEMP/chiron-startup.sh" --version
+      - name: Fresh online Factory install with Python 3.14
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FACTORY_ONLINE_INSTALL_TEST: "1"
+        run: go test -v ./internal/setup -run '^TestOnlineFactoryInstallation$' -timeout 12m
+  release:
+    if: github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v')
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Build installer assets
+        env:
+          CGO_ENABLED: "0"
+          FACTORY_RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          mkdir -p dist
+          for target in darwin/arm64 darwin/amd64 linux/arm64 linux/amd64; do
+            os="${target%/*}"; arch="${target#*/}"
+            GOOS="$os" GOARCH="$arch" go build -trimpath \
+              -ldflags="-s -w -X main.version=${FACTORY_RELEASE_TAG}" \
+              -o "dist/factory-setup-${os}-${arch}" ./cmd/factory-setup
+          done
+          (cd dist && sha256sum factory-setup-* > checksums.txt)
+      - name: Attach installer assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FACTORY_RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release view "$FACTORY_RELEASE_TAG" --repo "$GITHUB_REPOSITORY"
+          gh release upload "$FACTORY_RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber

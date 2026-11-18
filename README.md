@@ -6,10 +6,31 @@ The current workflow is [docs/SOFTWARE-FACTORY.md](docs/SOFTWARE-FACTORY.md).
 
 ## Install
 
+For Wander machines, the local provisioning installer now ships in this repository:
+
+```bash
+gh api -H "Accept: application/vnd.github.raw" repos/wandercom/chiron/contents/install.sh | bash
+```
+
+It downloads a checksummed `factory-setup` release binary, or builds the Go installer
+from this repository when no matching release asset exists. The source fallback
+requires Go. It provisions the pinned Factory checkout from `wandercom/chiron` and
+writes machine-specific agent commands. Run `factory-setup --dry-run` to inspect its
+plan, or build locally with `go build ./cmd/factory-setup`. The Go installer lives in
+`cmd/factory-setup` and `internal/setup`; the Python runtime and its `make install`
+workflow remain available below.
+
+For an existing checkout from the old repository, update its origin before
+running the provisioning installer:
+
+```bash
+git -C ~/Code/factory remote set-url origin https://github.com/wandercom/chiron.git
+```
+
 Needs git, Python 3.12+, tmux and the selected agent CLIs. Claude Code is needed only for its slash commands.
 
 ```bash
-git clone https://github.com/jmcentire/factory.git ~/Code/factory
+git clone https://github.com/wandercom/chiron.git ~/Code/factory
 cd ~/Code/factory
 make install
 ```
@@ -95,6 +116,29 @@ with no prior model qualification required.
 until it prints `READY`. Apply each listed fix as you go. Editing the user's shell profile (for
 PATH), removing another `factory` install, or installing Python or Rust is the user's call, so
 ask before doing it.
+
+### Packaged runtime paths
+
+`FACTORY_HOME` optionally selects a directory containing `prompts/` and `docs/`.
+It supplies coordinator doctrine and the Tester's prompt/testing standard, while Python
+imports and executable harness helpers still come from the installed Factory checkout.
+Unset means this checkout; an empty or incomplete directory is rejected before run creation.
+Relative paths resolve from the invoking directory. Set it consistently when starting or
+restarting coordinators; resource contents are not copied or snapshotted.
+
+`FACTORY_TMUX` optionally selects one executable (an absolute path is recommended for
+packaged installations). Unset or empty means `tmux` on PATH. Pane launch resolves
+the selection to an absolute executable before changing directories. It reaches
+Factory's shell/Python controls, scrubbed coordinator environments and lane watchers;
+it does not change the per-run private socket or select the operator's unrelated server.
+A missing explicitly selected binary fails rather than substituting another executable.
+Standalone `run-checkout.sh clean` uses the selected client and keeps work when
+liveness cannot be established, including older records without a retained socket
+directory or client errors. New runs record their socket directory when created.
+Cleanup and archival use that recorded socket even when the caller changes
+`TMUX_TMPDIR`.
+`list` reports those runs as kept. A confirmed absent run/session may be cleaned.
+`FACTORY_PYTHON` already selects the Factory-capable Python interpreter.
 
 ## Workflow and implementation
 
@@ -302,3 +346,20 @@ shared Git worktrees are not a drop-in replacement for those lanes.
 Storage inventory reports run-directory bytes, compressed archive bytes, and their
 combined local footprint separately. Archives on another volume and externally
 referenced lane repositories are not included in that combined total.
+
+### Publishing the provisioning installer
+
+The Go installer and the Nix setup both use the publishing procedure in
+[docs/FACTORY-PUBLISHING.md](docs/FACTORY-PUBLISHING.md). The Nix setup selects its
+retained launcher when executing the same harness steps.
+
+For a new installer binary release, first merge the tested source, then create
+and push the intended `v*` tag and publish its GitHub release with the Factory
+wheel/sdist assets through the existing release process. The Factory setup
+workflow runs on the published release and attaches its four installer binaries
+and `checksums.txt` to that existing release. It never creates a competing release.
+Check that workflow succeeds before announcing the installer. Runtime-only
+releases without installer assets are ignored by installer update notices.
+`FACTORY_SETUP_FORCE_SOURCE=1` forces the startup script to build the selected
+`FACTORY_SETUP_REF` from source; online PR CI uses this so an older released
+binary cannot mask a broken source fallback.

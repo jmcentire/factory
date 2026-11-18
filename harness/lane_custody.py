@@ -259,11 +259,14 @@ def execute(plan: Plan, request: Any, receipts: pathlib.Path) -> dict[str, Any]:
     # Logs remain host-owned. Their contents are not relayed automatically across role boundaries.
     log = stem.with_suffix(stem.suffix + ".log")
     spec = plan.document["operations"][request["operation"]]
+    resources = os.environ.get("FACTORY_HOME", plan.document["factory_home"])
+    if resources:
+        resources = str(pathlib.Path(resources).resolve())
     with log.open("xb") as output:
         child = subprocess.Popen(command, cwd=plan.document["cwd"], stdin=subprocess.DEVNULL,
                                  stdout=output, stderr=subprocess.STDOUT,
                                  env={**os.environ, "PYTHONPATH": plan.document["factory_home"],
-                                      "FACTORY_HOME": plan.document["factory_home"]})
+                                      "FACTORY_HOME": resources})
         snapshot = lane_watchdog.process_snapshot()
         identity = ({"pid": child.pid, "started": snapshot[child.pid]["started"]}
                     if snapshot and child.pid in snapshot else None)

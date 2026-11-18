@@ -57,6 +57,20 @@ def run_root(runs: Path, run: str) -> Path:
     return root
 
 
+def resource_home() -> Path:
+    """Select doctrine only; executable helpers and Python imports stay with this checkout."""
+    value = os.environ.get("FACTORY_HOME", str(Path(__file__).resolve().parent.parent))
+    if not value:
+        raise ValueError("FACTORY_HOME is empty; unset it or select a complete resource directory")
+    home = Path(value).resolve()
+    required = ("prompts/validate.md", "prompts/orchestrate.md", "prompts/test.md",
+                "docs/SOFTWARE-FACTORY.md", "docs/standards/TESTING.md")
+    missing = [name for name in required if not (home / name).is_file()]
+    if missing:
+        raise ValueError(f"FACTORY_HOME {home} is missing required resources: {', '.join(missing)}")
+    return home
+
+
 def create(
     runs: Path,
     run: str,
@@ -68,6 +82,7 @@ def create(
 ) -> Path:
     from factory_runtime.host_git import run_host_git
 
+    resource_home()  # Refuse invalid resource selection before creating any run state.
     root = run_root(runs, run)
     repository = repository.resolve(strict=True)
     if not task.strip():
@@ -92,6 +107,9 @@ def create(
     settings = (importlib.import_module("harness.model_settings") if __package__
                 else importlib.import_module("model_settings"))
 
+    # Freeze the namespace before starting a server so cleanup can prove absence
+    # even if the caller later changes TMUX_TMPDIR.
+    socket_dir = Path(os.environ.get("TMUX_TMPDIR") or "/tmp").resolve()
     record = dict(
         factory_version=build_identity(),
         system_one_profile=settings.system_one_profile(),
@@ -103,6 +121,7 @@ def create(
         task_digest="sha256:" + hashlib.sha256(task).hexdigest(),
         budget_usd=budget,
         log=log,
+        tmux_tmpdir=str(socket_dir),
         tmux_socket="factory-" + hashlib.sha256(str(root).encode()).hexdigest()[:20],
         created_at=dt.datetime.now(dt.UTC).isoformat(),
     )
@@ -129,6 +148,10 @@ def load(runs: Path, run: str) -> tuple[Path, dict]:
         or doc["tmux_socket"] != "factory-" + hashlib.sha256(str(root).encode()).hexdigest()[:20]
     ):
         raise ValueError("run socket does not match its directory")
+    if "tmux_tmpdir" in doc:
+        directory = doc["tmux_tmpdir"]
+        if not isinstance(directory, str) or not Path(directory).is_absolute() or "\0" in directory:
+            raise ValueError("invalid retained tmux directory")
     task = root / "TASK.md"
     if (
         task.is_symlink()
@@ -382,6 +405,7 @@ def context(runs: Path, run: str) -> None:
         doc["task_digest"],
         doc["tmux_socket"],
         doc["log"],
+        doc.get("tmux_tmpdir", ""),
     ]
     for value in fields:
         if not isinstance(value, str) or "\0" in value:
@@ -766,10 +790,20 @@ def _start_locked(runs: Path, run: str) -> None:
               "server and every seat inherit; start runs from a shell outside it", file=sys.stderr)
     tools = Path(__file__).resolve().parent
     home = tools.parent
-    tmux = ["tmux", "-L", doc["tmux_socket"]]
+    resources = resource_home()
+    selector = os.environ.get("FACTORY_TMUX") or "tmux"
+    executable = shutil.which(selector)
+    if executable is None:
+        raise ValueError(f"FACTORY_TMUX executable is unavailable: {selector}")
+    # Panes change cwd to the target repository; keep the executable selected here.
+    tmux = [str(Path(executable).absolute()), "-L", doc["tmux_socket"]]
+    socket_directory = doc.get("tmux_tmpdir")
+    tmux_env = {**os.environ, "TMUX_TMPDIR": socket_directory} if socket_directory else None
+    socket_env = ["env", f"TMUX_TMPDIR={socket_directory}"] if socket_directory else []
     retry = shlex.join([sys.executable, str(tools / "run_record.py"), "start",
                         "--runs", str(root.parent), "--run", run])
-    if subprocess.run([*tmux, "has-session", "-t", f"={run}"], capture_output=True).returncode == 0:
+    if subprocess.run([*tmux, "has-session", "-t", f"={run}"],
+                      capture_output=True, env=tmux_env).returncode == 0:
         raise ValueError("run session already exists; existing sessions are never replaced")
     # A seat's earlier life may still be stopping although its tmux session is gone: a wrapper
     # that was signalled waits for its program and writes its exit record last. Below, a seat
@@ -811,8 +845,8 @@ def _start_locked(runs: Path, run: str) -> None:
         model, effort = choices[role]["model"], choices[role]["effort"]
         directive = "validate" if role == "validator" else "orchestrate"
         prompt = (
-            f"Act as Factory {role}. Read {home}/prompts/{directive}.md, "
-            f"{home}/docs/SOFTWARE-FACTORY.md and {root}/TASK.md. "
+            f"Act as Factory {role}. Read {resources}/prompts/{directive}.md, "
+            f"{resources}/docs/SOFTWARE-FACTORY.md and {root}/TASK.md. "
             f"Run {run}; repository {doc['repository']}; commit {doc['resolved_commit']}. "
             f"Use the harness at {tools}. Read {root}/{role}/inbox.jsonl when checking progress. "
             "Both coordinators review actual code and tests at the initial approach, first useful "
@@ -912,6 +946,8 @@ def _start_locked(runs: Path, run: str) -> None:
                         "CODEX_HOME", "CLAUDE_CONFIG_DIR", "FACTORY_CLAUDE_LAUNCHER")
             if key in os.environ
         }
+        if socket_directory:
+            env["TMUX_TMPDIR"] = socket_directory
         # The Validator opens authorized pull requests; gh auth held only in the environment
         # reaches it. The Orchestrator and the authors keep no GitHub credential from here.
         if role == "validator":
@@ -924,9 +960,9 @@ def _start_locked(runs: Path, run: str) -> None:
         for key in adapter.api_env:
             env.pop(key, None)
         env.update(
-            TERM=(env["TERM"] if env.get("TERM") not in {None, "", "dumb"}
-                  else "xterm-256color"),
-            FACTORY_HOME=str(home),
+            TERM=(env["TERM"] if env.get("TERM") not in {None, "", "dumb"} else "xterm-256color"),
+            FACTORY_HOME=str(resources),
+            FACTORY_TMUX=tmux[0],
             PYTHONPATH=str(home),
             FACTORY_PYTHON=sys.executable,
             FACTORY_RUNS_DIR=str(root.parent),
@@ -971,7 +1007,7 @@ def _start_locked(runs: Path, run: str) -> None:
         # Install the output pipe from inside this pane before starting the CLI,
         # so even the first model output reaches resident oversight. No input pipe.
         # Use this pane identity even in a detached window. A bare =target expands in zsh.
-        pipe = shlex.join([*tmux, "pipe-pane", "-O", "-t"])
+        pipe = shlex.join([*socket_env, *tmux, "pipe-pane", "-O", "-t"])
         pipe += ' "$TMUX_PANE" ' + shlex.quote(capture)
         commands.append((role, channel, exits.stat().st_size if exits.exists() else 0,
                          pipe + " && exec " + shlex.join(command)))
@@ -991,7 +1027,8 @@ def _start_locked(runs: Path, run: str) -> None:
                 else ["new-window", "-d", "-t", f"={run}"]
             )
             subprocess.run(
-                [*tmux, *args, "-n", role, "-c", doc["repository"], shell_command], check=True
+                [*tmux, *args, "-n", role, "-c", doc["repository"], shell_command],
+                check=True, env=tmux_env
             )
             created = True
         # A window can outlive its seat: the wrapper stops an agent whose process it cannot
@@ -999,7 +1036,7 @@ def _start_locked(runs: Path, run: str) -> None:
         for role, channel, before, _ in commands:
             try:
                 waited = subprocess.run([*tmux, "wait-for", channel], capture_output=True,
-                                        text=True, timeout=SEAT_REGISTRATION_SECONDS)
+                                        text=True, timeout=SEAT_REGISTRATION_SECONDS, env=tmux_env)
             except subprocess.TimeoutExpired:
                 raise SeatStartFailed(
                     f"the {role} did not register within {SEAT_REGISTRATION_SECONDS} seconds; "
@@ -1010,17 +1047,21 @@ def _start_locked(runs: Path, run: str) -> None:
             if waited.returncode:
                 raise SeatStartFailed(f"the {role} did not register: {waited.stderr.strip()}")
         if any(agent == "claude" for agent in selected.values()):
-            wake = shlex.join([sys.executable, str(tools / "inbox_wake.py"),
+            wake = shlex.join([*(socket_env or ["env"]), f"FACTORY_TMUX={tmux[0]}",
+                               sys.executable, str(tools / "inbox_wake.py"),
                                "run", "--root", str(root)])
             subprocess.run([*tmux, "new-window", "-d", "-t", f"={run}",
-                            "-n", "inbox-wake", "-c", doc['repository'], wake], check=True)
+                            "-n", "inbox-wake", "-c", doc['repository'], wake],
+                           check=True, env=tmux_env)
         # Native inbox transport only; no supervisor may stop work for review lag.
-        print(f"Factory {run}: tmux -L {doc['tmux_socket']} attach -t {shlex.quote(run)}")
+        attach = shlex.join([*socket_env, *tmux, "attach", "-t", run])
+        print(f"Factory {run}: {attach}")
         if selected["validator"] == "kickoff":
             print(f"Existing Validator: read {root}/validator/BRIEF.md")
     except BaseException as error:
         if created:
-            subprocess.run([*tmux, "kill-session", "-t", f"={run}"], capture_output=True)
+            subprocess.run([*tmux, "kill-session", "-t", f"={run}"],
+                           capture_output=True, env=tmux_env)
         if created and isinstance(error, subprocess.CalledProcessError):
             # A first window whose seat already exited took the session with it, so the next
             # window failed for want of one: report the seat, not tmux's exit status.

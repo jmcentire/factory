@@ -647,29 +647,95 @@ def test_a_new_wrappers_first_turn_end_before_the_first_check_is_told(tmp_path: 
     assert watched.at(150) == "watching" and watched.notices() == 2
 
 
+def _hold_notices(watched: Lane) -> list[str]:
+    rows = watched._rows(watched.root / "validator" / "inbox.jsonl")
+    return [str(row["text"]) for row in rows if "hold limit" in str(row.get("text", ""))]
+
+
 @pytest.mark.parametrize("name", list(WAITING_LANES))
-def test_an_uncapped_waiting_lane_is_stall_stopped_at_the_hold_limit(
+def test_an_uncapped_waiting_lane_is_escalated_not_stopped_at_the_hold_limit(
     tmp_path: Path, name: str,
 ) -> None:
-    """Review: a lane with no wall or spend cap (plan-billed) has the stall stop as its only
-    bound, so a wait may not exempt it forever."""
+    """Review: a lane with no wall or spend cap is told to the Validator with a diagnosis each
+    hold limit it goes without a commit or a new turn; elapsed time alone never stops it."""
 
     watched = _waiting(tmp_path, name)
-    assert watched.at(lane_watchdog.HOLD_LIMIT_S) == "watching"
-    _settle(watched, READ_ALLOWANCE_S + lane_watchdog.HOLD_LIMIT_S + 1, "stalled")
-    [stall] = watched.events("refusal-lane-stall")
-    assert "hold limit" in str(stall)
+    limit = lane_watchdog.HOLD_LIMIT_S
+    assert watched.at(READ_ALLOWANCE_S + limit + 1) == "watching"
+    assert watched.stops == [] and len(watched.wakes("lane-hold-limit")) == 1
+    assert watched.at(READ_ALLOWANCE_S + limit + 600) == "watching"
+    assert len(watched.wakes("lane-hold-limit")) == 1  # once per hold limit
+    assert watched.at(READ_ALLOWANCE_S + 2 * limit + 1) == "watching"
+    assert watched.stops == [] and len(watched.wakes("lane-hold-limit")) == 2
+    told = _hold_notices(watched)
+    assert len(told) == 2 and all("not stopped" in text for text in told), told
 
 
-def test_an_uncapped_lane_held_by_a_pending_question_is_stopped_at_the_hold_limit(
+def test_an_uncapped_lane_held_by_a_pending_question_is_escalated_at_the_hold_limit(
     tmp_path: Path,
 ) -> None:
-    """Review: the hold limit is absolute: an unanswered question holds a lane no longer."""
+    """Review: an unanswered question past the hold limit asks for a decision; it is not a
+    reason to stop the lane."""
 
     watched = Lane(tmp_path, record=None, lane=None)
     lane_dialogue.record_question(watched.root, "tester", "Which stay types are valid?")
     assert watched.at(STALL_AT + 3600) == "watching"
-    _settle(watched, READ_ALLOWANCE_S + lane_watchdog.HOLD_LIMIT_S + 1, "stalled")
+    assert watched.at(READ_ALLOWANCE_S + lane_watchdog.HOLD_LIMIT_S + 1) == "watching"
+    assert watched.stops == [] and len(_hold_notices(watched)) == 1
+
+
+def _failing_posts(watched: Lane, monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+    """Make the Validator's notice record refuse posts while the returned flag is set."""
+    module, failing = watched.watch._input(), [True]
+    real = module.post
+
+    def post(*args: Any, **kwargs: Any) -> bool:
+        if failing[0]:
+            raise OSError("notice record locked")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(module, "post", post)
+    return failing
+
+
+def test_a_turn_end_whose_post_failed_survives_a_later_turn_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review: the count moved before the post succeeded, and the next turn end replaced the one
+    unposted notice. Every turn end on record is told once posting works again."""
+
+    watched = _session(tmp_path, CURSOR, "stop-reported", 3)
+    assert watched.at(60) == "watching" and watched.notices() == 1
+    failing = _failing_posts(watched, monkeypatch)
+    watched.report(stop_reports=5)
+    assert watched.at(120) == "watching" and watched.notices() == 1
+    watched.report(stop_reports=6)
+    assert watched.at(150) == "watching" and watched.notices() == 1
+    failing[0] = False
+    assert watched.at(180) == "watching"
+    assert watched.notices() == 3  # the end at 5 and the end at 6, each once
+
+
+def test_a_turn_end_whose_post_failed_survives_a_new_life(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review: a re-arm built a fresh record without the unposted notice while keeping the
+    advanced count, so that turn end was told to nobody."""
+
+    watched = _session(tmp_path, CURSOR, "stop-reported", 3)
+    assert watched.at(60) == "watching" and watched.notices() == 1
+    failing = _failing_posts(watched, monkeypatch)
+    watched.report(stop_reports=5)
+    assert watched.at(120) == "watching" and watched.notices() == 1
+    lane_agent.record_exit(watched.exits, slot="tester", rc=1, stopped=False)
+    watched.kill()
+    assert watched.at(180) == "exited"
+    watched.revive()
+    watched.clock.value = T0 + 300
+    watched.watch.arm(new_life=True)
+    failing[0] = False
+    assert watched.at(360) == "watching"
+    assert watched.notices() == 2  # the end at 5, carried into the new life and told once
 
 
 @pytest.mark.parametrize("then", ["record-gone", "new-turn-then-record-gone"])

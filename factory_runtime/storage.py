@@ -194,10 +194,17 @@ def _active(root: Path) -> None:
     expected = "factory-" + hashlib.sha256(str(root).encode()).hexdigest()[:20]
     if socket != expected:
         raise ValueError("run socket does not match its directory")
-    if shutil.which("tmux") is None:
+    directory = record.get("tmux_tmpdir")
+    if not isinstance(directory, str) or not Path(directory).is_absolute() or "\0" in directory:
+        raise ValueError("cannot establish inactivity: missing or invalid retained tmux directory")
+    socket_path = Path(directory) / f"tmux-{os.getuid()}" / socket
+    if shutil.which(os.environ.get("FACTORY_TMUX") or "tmux") is None:
         raise ValueError("cannot establish inactivity: tmux unavailable")
-    probe = subprocess.run(["tmux", "-L", socket, "list-sessions"],
-                           capture_output=True, check=False)
+    probe = subprocess.run(
+        [os.environ.get("FACTORY_TMUX") or "tmux", "-S", str(socket_path), "list-sessions"],
+        capture_output=True,
+        check=False,
+    )
     if probe.returncode == 0:
         raise ValueError("run still has an active tmux session")
     error = probe.stderr.decode(errors="replace").lower()

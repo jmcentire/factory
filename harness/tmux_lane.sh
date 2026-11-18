@@ -195,6 +195,7 @@ REPO_ROOT="$(cd "$D/.." && pwd -P)"
 # shellcheck source=harness/run_context.sh
 source "$D/run_context.sh"
 factory_load_context "$RUN" "$RUNS_ARG"
+factory_resolve_tmux
 ROOT="$FACTORY_CONTROL_ROOT"
 TMUX_ROOT="$ROOT/tmux-lanes"
 # tmux resolves a window name it cannot find to the session's current window, even with an
@@ -609,10 +610,11 @@ PY
     # .muse/hooks.json or .agents/plugins/lane is no obstacle and is not looked for.
   fi
   if [ "$ACTION" = launch ]; then
-    PYTHONPATH="$PYTHONPATH:$REPO_ROOT" "$FACTORY_PYTHON" "$D/role_inputs.py" verify \
+    # The refusal names what to undo, in the run's events as well as on stderr.
+    INPUTS_REFUSED=$(PYTHONPATH="$PYTHONPATH:$REPO_ROOT" "$FACTORY_PYTHON" "$D/role_inputs.py" verify \
       --runs "$RUNS_ARG" --run "$RUN" --role "$ROLE" --repo "$REPOSITORY" \
-      ${REPLACE_REASON:+--replacing} >/dev/null || \
-      refuse 70 "author inputs are not the prepared role projection" \
+      ${REPLACE_REASON:+--replacing} 2>&1 >/dev/null) || \
+      refuse 70 "author inputs are not the prepared role projection: ${INPUTS_REFUSED#role inputs: }" \
         "use role_inputs.py prepare: Coder gets source minus tests; Tester gets selected public interfaces and specification, never a full clone"
   fi
   "$FACTORY_PYTHON" - "$ROOT" "$REPOSITORY" <<'PY'
@@ -789,9 +791,9 @@ PY
       STRATEGY_ARGS=(--strategy "$ROOT/artifacts/testing-strategy.md")
     fi
     STANDARD_RECEIPT=$("$FACTORY_PYTHON" "$D/testing_standard.py" block \
-      --factory-home "$REPO_ROOT" ${STRATEGY_ARGS[@]+"${STRATEGY_ARGS[@]}"} --output "$STANDARD_BLOCK" 2>&1) || \
+      --factory-home "${FACTORY_HOME-$REPO_ROOT}" ${STRATEGY_ARGS[@]+"${STRATEGY_ARGS[@]}"} --output "$STANDARD_BLOCK" 2>&1) || \
       refuse 70 "TESTING STANDARD: $STANDARD_RECEIPT" \
-        "restore docs/standards/TESTING.md and prompts/test.md in $REPO_ROOT"
+        "restore docs/standards/TESTING.md and prompts/test.md in ${FACTORY_HOME-$REPO_ROOT}"
     # Every oracle input the Strategy cites is in the Tester's tree as its pinned bytes
     # (dogfood #36, #65): found mid-build it costs a round, reformatted it silently governs.
     if [ "${#STRATEGY_ARGS[@]}" -gt 0 ]; then
@@ -1229,7 +1231,8 @@ PY
   # on the provider's program only. A PYTHONPATH among them therefore decides nothing about
   # what the wrapper, the watcher or a session's host imports.
   ENV_PREFIX+="${LANE_ENV_ASSIGN:+ $LANE_ENV_ASSIGN}"
-  printf -v SOCKET_ENV " FACTORY_TMUX_SOCKET=%q" "$FACTORY_TMUX_SOCKET"
+  printf -v SOCKET_ENV " FACTORY_TMUX_SOCKET=%q FACTORY_TMUX=%q" \
+    "$FACTORY_TMUX_SOCKET" "${FACTORY_TMUX:-tmux}"
   ENV_PREFIX+="$SOCKET_ENV"
   # The command the operator starts Claude Code with (harness/native_session.py).
   if [ -n "${FACTORY_CLAUDE_LAUNCHER:-}" ]; then
@@ -1350,14 +1353,14 @@ PY
     printf -v CAPTURE_CMD '%q %q capture --runs %q --run %q --slot %q' \
       "$FACTORY_PYTHON" "$D/run_record.py" "$FACTORY_RUNS_ROOT" "$RUN" "$SLOT"
     # Keep the exact pane target without a shell-sensitive =target.
-    printf -v CAPTURE_PIPE 'tmux -L %q pipe-pane -O -t "$TMUX_PANE" %q' \
-      "$FACTORY_TMUX_SOCKET" "$CAPTURE_CMD"
+    printf -v CAPTURE_PIPE '%q -L %q pipe-pane -O -t "$TMUX_PANE" %q' \
+      "${FACTORY_TMUX:-tmux}" "$FACTORY_TMUX_SOCKET" "$CAPTURE_CMD"
     LANE_CMD="$CAPTURE_PIPE && $LANE_CMD"
   fi
   # Retain this pane before starting any author, including one that exits immediately.
   # Setting the option after new-window races the author and can lose exit evidence.
-  printf -v RETAIN_PANE 'tmux -L %q set-option -w -t "$TMUX_PANE" remain-on-exit on' \
-    "$FACTORY_TMUX_SOCKET"
+  printf -v RETAIN_PANE '%q -L %q set-option -w -t "$TMUX_PANE" remain-on-exit on' \
+    "${FACTORY_TMUX:-tmux}" "$FACTORY_TMUX_SOCKET"
   LANE_CMD="$RETAIN_PANE && $LANE_CMD"
   # Keep host-side observation on the launcher's tmux server. Do not pass this
   # control address through the author's deliberately scrubbed environment.
@@ -1384,7 +1387,7 @@ PY
   if [ "$WRAP_S" != 0 ]; then
     DELIVERY_ENV="$TMUX_ROOT/$SLOT-delivery.env"
     ( umask 077; : > "$DELIVERY_ENV"
-      for NAME in FACTORY_PYTHON FACTORY_RUNS_DIR \
+      for NAME in FACTORY_PYTHON FACTORY_RUNS_DIR FACTORY_HOME FACTORY_TMUX \
         HOME USER PATH LANG TERM SHELL TMPDIR CODEX_HOME TMUX; do
         VALUE="${!NAME:-}"
         [ -n "$VALUE" ] && [[ "$VALUE" != *$'\n'* ]] && printf '%s=%s\n' "$NAME" "$VALUE" >> "$DELIVERY_ENV"

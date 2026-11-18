@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -192,6 +193,9 @@ def test_a_real_start_registers_its_seats_under_a_custom_tmux_socket_directory(t
     stub = binary / "codex"
     stub.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(30)\n")
     stub.chmod(0o755)
+    executable = shutil.which("tmux")
+    if executable is None:
+        pytest.skip("tmux unavailable")
     # A short directory: a Unix socket path has to fit in 104 bytes on macOS.
     sockets = tempfile.mkdtemp(prefix="fx-", dir="/tmp")
     monkeypatch.setenv("TMUX_TMPDIR", sockets)
@@ -203,15 +207,35 @@ def test_a_real_start_registers_its_seats_under_a_custom_tmux_socket_directory(t
         monkeypatch.setenv(f"FACTORY_{role}_AGENT", "codex")
         monkeypatch.setenv(f"FACTORY_{role}_MODEL", "fixture")
         monkeypatch.setenv(f"FACTORY_{role}_EFFORT", "")
-    runs = tmp_path / "runs"
+    runs = repo / ".factory" / "runs"
     root = run_record.create(runs, "sockets", repo, b"Disposable socket probe")
     doc = json.loads((root / "harness.json").read_text())
-    tmux = ["tmux", "-L", doc["tmux_socket"]]
+    tmux = [executable, "-L", doc["tmux_socket"]]
+    monkeypatch.setenv("FACTORY_TMUX", executable)
     try:
         run_record.start(runs, "sockets")
         socket = subprocess.check_output([*tmux, "display-message", "-p", "#{socket_path}"],
                                          text=True).strip()
         assert os.path.realpath(socket).startswith(os.path.realpath(sockets))
+        # Standalone cleanup and archival may be invoked from another tmux namespace.
+        from factory_runtime.storage import _active
+
+        (root / "validation").mkdir()
+        (root / "validation" / "keep").write_text("work")
+        checkout = Path(run_record.__file__).parents[1] / "internal/setup/run-checkout.sh"
+        with monkeypatch.context() as caller:
+            caller.setenv("TMUX_TMPDIR", str(tmp_path / "other"))
+            caller.setenv("FACTORY_TMUX", executable)
+            caller.setenv("FACTORY_PYTHON", sys.executable)
+            listed = subprocess.check_output(["bash", str(checkout), "list", str(repo)], text=True)
+            assert "keep: live tmux session" in listed
+            refused = subprocess.run(
+                ["bash", str(checkout), "clean", str(repo), "sockets"], capture_output=True
+            )
+            assert refused.returncode != 0
+            assert (root / "validation" / "keep").read_text() == "work"
+            with pytest.raises(ValueError, match="active tmux session"):
+                _active(root)
         for role in ("validator", "orchestrator"):
             receipt = json.loads((root / f"{role}-process.json").read_text())
             assert receipt["status"] == "running"

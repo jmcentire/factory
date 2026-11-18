@@ -295,14 +295,16 @@ def test_a_cleared_dialog_ends_the_wait_and_the_next_one_is_told_again(tmp_path:
 
 # Review of the reworked #124 (2026-11-18).
 
-def test_an_uncapped_lane_at_a_dialog_is_stopped_at_the_hold_limit(tmp_path: Path) -> None:
-    """A plan-billed lane has no wall or spend cap, so the stall stop is its only bound: a wait
-    may not keep it forever."""
+def test_an_uncapped_lane_at_a_dialog_is_escalated_at_the_hold_limit(tmp_path: Path) -> None:
+    """A plan-billed lane has no wall or spend cap. Review: elapsed time asks the Validator for
+    a decision, with a diagnosis, once per hold limit; it never stops the lane by itself."""
     lane = Lane(tmp_path, Tmux(CURSOR_APPROVAL))
     assert lane.at(PAST) == "watching"
-    assert lane.at(900 + lane_watchdog.HOLD_LIMIT_S + 1) in {"stalled", "stopping"}
-    assert lane.stops == [TARGET] and lane.tmux.typed() == []
-    assert "hold limit" in lane.notices()[-1]
+    assert lane.at(900 + lane_watchdog.HOLD_LIMIT_S + 1) == "watching"
+    assert lane.stops == [] and lane.tmux.typed() == []
+    assert lane.wakes("lane-hold-limit") == 1
+    told = [text for text in lane.notices() if "hold limit" in text]
+    assert len(told) == 1 and "not stopped" in told[0]
 
 
 def test_a_spinner_over_a_stalled_stream_is_hung_with_one_wake(tmp_path: Path) -> None:
