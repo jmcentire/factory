@@ -686,7 +686,10 @@ class LaneWatch:
         if snapshot is None:
             state["process_observation"] = "unavailable"
             return False
-        resolved = window_id(str(launch.get("tmux_target", "")), self.tmux)
+        try:  # a failed or timed-out lookup is unknown (uncertain), never a crash of the check
+            resolved = window_id(str(launch.get("tmux_target", "")), self.tmux)
+        except (OSError, subprocess.SubprocessError):
+            resolved = None
         if resolved is None or state.get("observed_window_id", resolved) != resolved:
             state["process_observation"] = "pane unavailable or replaced"
             return False

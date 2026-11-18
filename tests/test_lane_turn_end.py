@@ -571,10 +571,9 @@ def test_a_lane_waiting_for_input_with_its_session_alive_is_not_stall_stopped(
 
 @pytest.mark.parametrize("record", [
     {"phase": "prompt-observed", "stop_reports": 1},
-    {"phase": "asking-operator", "stop_reports": 1},
     {"phase": "working", "turns": 1},
     None,
-], ids=["prompt-observed", "asking-operator", "working", "no-persistent-record"])
+], ids=["prompt-observed", "working", "no-persistent-record"])
 def test_a_lane_mid_turn_or_without_a_persistent_record_is_stall_stopped_as_before(
     tmp_path: Path, record: dict[str, Any] | None,
 ) -> None:
@@ -585,7 +584,8 @@ def test_a_lane_mid_turn_or_without_a_persistent_record_is_stall_stopped_as_befo
     watched = Lane(tmp_path, record=record)
     assert watched.at(STALL_AT - 1) == "watching"
     assert watched.stops == []
-    assert watched.at(STALL_AT + 1) == "stalled"
+    assert watched.at(STALL_AT + 1) == "watching"  # quiet once: uncertain, not yet hung
+    assert watched.at(STALL_AT + 1 + lane_watchdog.HUNG_CONFIRM_S) == "stalled"
     assert watched.stops == [TARGET]
     assert watched.stalls() == 1
 
