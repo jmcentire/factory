@@ -33,19 +33,26 @@ live() {
   [ -d "$1" ] || return 1
   [ -f "$1/harness.json" ] && [ ! -L "$1/harness.json" ] || return 2
   sock=$("${FACTORY_PYTHON:-python3}" -I - "$1/harness.json" 2>/dev/null <<'PY'
-import json, re, sys
-with open(sys.argv[1]) as stream:
-    value = json.load(stream)["tmux_socket"]
+import json, os, re, stat, sys
+fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+with os.fdopen(fd) as stream:
+    info = os.fstat(stream.fileno())
+    if not stat.S_ISREG(info.st_mode) or info.st_size > 4 * 1024 * 1024:
+        raise ValueError("invalid run record")
+    record = json.load(stream)
+value = record["tmux_socket"]
+directory = record["tmux_tmpdir"]
 if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", value):
     raise ValueError("invalid tmux socket")
-print(value)
+if not isinstance(directory, str) or not os.path.isabs(directory) or "\0" in directory:
+    raise ValueError("invalid tmux directory")
+print(os.path.join(directory, f"tmux-{os.getuid()}", value))
 PY
   ) || return 2
-  case "$sock" in '' | *[!A-Za-z0-9._-]*) return 2 ;; esac
   client=$(type -P -- "${FACTORY_TMUX:-tmux}") || return 2
   case "$client" in /*) ;; *) client="$PWD/$client" ;; esac
   status=0
-  diagnostic=$(LC_ALL=C "$client" -L "$sock" has-session -t "=$2" 2>&1) || status=$?
+  diagnostic=$(LC_ALL=C "$client" -S "$sock" has-session -t "=$2" 2>&1) || status=$?
   [ "$status" -ne 0 ] || return 0
   [ "$status" -eq 1 ] || return 2
   case "$diagnostic" in
@@ -196,7 +203,7 @@ clean)
   case "$state" in
     0) die "run $run still has a live tmux session; keeping it" ;;
     1) ;;
-    *) die "run $run tmux liveness is unknown; check FACTORY_TMUX, FACTORY_PYTHON and harness.json; keeping it" ;;
+    *) die "run $run tmux liveness is unknown; check FACTORY_TMUX, FACTORY_PYTHON and retained socket metadata; keeping it" ;;
   esac
   # Deletes only inside the run's own folder under <target>, never through a symlink.
   [ ! -L "$R" ] || die "$R is a symlink; keeping it"

@@ -133,7 +133,10 @@ Factory's shell/Python controls, scrubbed coordinator environments and lane watc
 it does not change the per-run private socket or select the operator's unrelated server.
 A missing explicitly selected binary fails rather than substituting another executable.
 Standalone `run-checkout.sh clean` uses the selected client and keeps work when
-liveness cannot be established, including missing run metadata or client errors.
+liveness cannot be established, including older records without a retained socket
+directory or client errors. New runs record their socket directory when created.
+Cleanup and archival use that recorded socket even when the caller changes
+`TMUX_TMPDIR`.
 `list` reports those runs as kept. A confirmed absent run/session may be cleaned.
 `FACTORY_PYTHON` already selects the Factory-capable Python interpreter.
 

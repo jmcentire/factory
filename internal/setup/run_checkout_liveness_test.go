@@ -18,13 +18,14 @@ func TestRunCheckoutLivenessPreservesWork(t *testing.T) {
 		status                int
 		missingClient, keep   bool
 	}{
-		{"live selected client", `{"tmux_socket":"fixture"}`, "", 0, false, true},
-		{"missing client", `{"tmux_socket":"fixture"}`, "", 0, true, true},
-		{"client failure", `{"tmux_socket":"fixture"}`, "permission denied", 2, false, true},
-		{"unknown transport", `{"tmux_socket":"fixture"}`, "transport unavailable", 1, false, true},
+		{"live selected client", `{"tmux_socket":"fixture","tmux_tmpdir":"/fixture/original"}`, "", 0, false, true},
+		{"missing client", `{"tmux_socket":"fixture","tmux_tmpdir":"/fixture/original"}`, "", 0, true, true},
+		{"client failure", `{"tmux_socket":"fixture","tmux_tmpdir":"/fixture/original"}`, "permission denied", 2, false, true},
+		{"unknown transport", `{"tmux_socket":"fixture","tmux_tmpdir":"/fixture/original"}`, "transport unavailable", 1, false, true},
+		{"legacy socket name only", `{"tmux_socket":"fixture"}`, "", 0, false, true},
 		{"missing record", "", "", 0, false, true},
 		{"malformed record", `not JSON "tmux_socket":"fixture"`, "no server running on fixture", 1, false, true},
-		{"confirmed inactive", `{"tmux_socket":"fixture"}`, "no server running on fixture", 1, false, false},
+		{"confirmed inactive", `{"tmux_socket":"fixture","tmux_tmpdir":"/fixture/original"}`, "no server running on fixture", 1, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir, err := filepath.EvalSymlinks(t.TempDir())
@@ -61,6 +62,7 @@ func TestRunCheckoutLivenessPreservesWork(t *testing.T) {
 			t.Setenv("FACTORY_TMUX", filepath.Join("clients", "selected client"))
 			log := filepath.Join(dir, "client-args")
 			t.Setenv("FACTORY_TMUX_LOG", log)
+			t.Setenv("TMUX_TMPDIR", filepath.Join(dir, "different socket namespace"))
 			invoke := func(command string) ([]byte, error) {
 				cmd := exec.Command("bash", script, command, target, "probe")
 				if command == "list" {
@@ -97,10 +99,10 @@ func TestRunCheckoutLivenessPreservesWork(t *testing.T) {
 			if strings.Contains(string(listed), "keep:") != tc.keep {
 				t.Fatalf("incorrect list disposition: %s", listed)
 			}
-			if !tc.missingClient && strings.HasPrefix(tc.record, "{") {
+			if !tc.missingClient && strings.Contains(tc.record, "tmux_tmpdir") {
 				args, err := os.ReadFile(log)
 				must(t, err)
-				if string(args) != "-L\nfixture\nhas-session\n-t\n=probe\n" {
+				if string(args) != fmt.Sprintf("-S\n/fixture/original/tmux-%d/fixture\nhas-session\n-t\n=probe\n", os.Getuid()) {
 					t.Fatalf("wrong run addressing: %q", args)
 				}
 			}

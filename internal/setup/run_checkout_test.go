@@ -242,7 +242,7 @@ func TestRunCheckoutLeavesTheHumansCheckoutAlone(t *testing.T) {
 	must(t, os.WriteFile(inactiveClient, []byte("#!/bin/sh\necho 'no server running on fixture' >&2\nexit 1\n"), 0o755))
 	t.Setenv("FACTORY_TMUX", inactiveClient)
 	must(t, os.MkdirAll(runDir, 0o755))
-	write(filepath.Join(runDir, "harness.json"), `{"tmux_socket":"fixture-inactive"}`)
+	write(filepath.Join(runDir, "harness.json"), `{"tmux_socket":"fixture-inactive","tmux_tmpdir":"/fixture/original"}`)
 	must(t, os.MkdirAll(filepath.Join(runDir, "tmux-lanes", "coder-agent-home"), 0o755))
 	write(filepath.Join(runDir, "tmux-lanes", "coder-lane.log"), "keep\n")
 	must(t, os.MkdirAll(filepath.Join(runDir, "validation", "c1"), 0o755))
