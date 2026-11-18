@@ -284,10 +284,11 @@ def _session_key(native: Mapping[str, Any]) -> str:
 
 
 def _cpu_seconds(value: object) -> float | None:
-    """``ps``'s ``time`` field, ``[[dd-]hh:]mm:ss``, in seconds; None when unreadable."""
-    days, _, clock = str(value).rpartition("-")
+    """``ps``'s ``time`` field in seconds; None when unreadable. Linux prints
+    ``[[dd-]hh:]mm:ss``; macOS prints ``mm:ss.cc`` with minutes past 59 (``216:53.04``)."""
+    days, _, clock = str(value).strip().rpartition("-")
     try:
-        parts = [int(part) for part in clock.split(":")]
+        parts = [float(part) for part in clock.split(":")]
         return float(int(days or 0) * 86400 + sum(n * 60 ** i for i, n in enumerate(parts[::-1])))
     except ValueError:
         return None

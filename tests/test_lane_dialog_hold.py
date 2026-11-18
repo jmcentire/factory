@@ -361,3 +361,21 @@ def test_dialog_words_above_the_pane_bottom_are_not_a_dialog(tmp_path: Path) -> 
     lane = Lane(tmp_path, Tmux(screen))
     assert lane.at(PAST) == "watching"
     assert lane.dialog() is None and lane.wakes("lane-waiting") == 0
+
+
+@pytest.mark.parametrize(
+    ("field", "seconds"),
+    [
+        ("00:00:27", 27.0),  # Linux
+        ("1-02:03:04", 93784.0),  # Linux, with days
+        ("0:27.78", 27.78),  # macOS
+        ("216:53.04", 13013.04),  # macOS: minutes past 59, no hours field
+        ("  13:23.90\n", 803.9),  # macOS, as ps pads it
+        ("garbage", None),
+    ],
+)
+def test_cpu_time_reads_linux_and_macos_ps(field, seconds):
+    # macOS ps prints a fractional seconds field; reading it as None left the CPU signal dead
+    # there, so silent work could be stopped as hung.
+    result = lane_watchdog._cpu_seconds(field)
+    assert result is None if seconds is None else result == pytest.approx(seconds)
