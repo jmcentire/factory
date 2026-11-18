@@ -811,7 +811,8 @@ class LaneWatch:
                 if not run_record.delivered(self.root, "validator", "host", text,
                                             since=int(notice["inbox_from"])):
                     run_record.message(self.root, "validator", "host", text,
-                                       wait_s=self._wait_left("inbox"))
+                                       wait_s=self._wait_left("inbox"),
+                                       once_since=int(notice["inbox_from"]))
             except (OSError, ValueError) as error:
                 self._inbox_failed = str(error) or type(error).__name__
             else:
@@ -993,14 +994,17 @@ class LaneWatch:
 
     def _owed_elsewhere(self, launch: Mapping[str, Any]
                         ) -> list[tuple[pathlib.Path, dict[str, Any], list[dict[str, Any]]]]:
-        """The turn-end notices this lane's finished rounds still owe, which a new life takes
-        over (``arm``): each round's record, and its notices for this lane.
+        """The turn-end notices this lane's other rounds still owe, which a new life takes over
+        (``arm``): each round's record, and its notices for this lane.
 
-        A new round replaces the lane's watcher (tmux_lane.sh), which may still have been
-        delivering notices after its round finished (``run``). They move with what was already
-        done for each, so none is stranded and none is told twice: a message already in the
-        inbox is found from its retry offset. The finished round's record then keeps none and
-        names the slot that took them."""
+        A lane has one watcher (tmux_lane.sh's ``watch-<lane>`` window), which a new round
+        replaces, and the launcher replaces a round only once its processes have exited. So
+        when this watcher arms, no other is delivering for the lane's other rounds, whatever
+        their records say: one may still read ``watching`` when its lane exited after its last
+        check, or still be draining notices after its round finished (``run``). They move with
+        what was already done for each, so none is stranded and none is told twice (the inbox
+        write is once-only, ``run_record.message``). The other round's record then keeps none
+        and names the slot that took them."""
         lane = launch.get("lane")
         adopted: list[tuple[pathlib.Path, dict[str, Any], list[dict[str, Any]]]] = []
         if not isinstance(lane, str) or not lane:
@@ -1010,7 +1014,7 @@ class LaneWatch:
                 continue
             state = _load_json(state_path)
             notices = state.get("turn_notices")
-            if state.get("status") not in LANE_FINAL or not isinstance(notices, list):
+            if not isinstance(notices, list):
                 continue
             owed = [notice for notice in notices
                     if isinstance(notice, dict) and notice.get("lane") == lane]
@@ -1437,17 +1441,18 @@ class LaneWatch:
         self.arm(new_life=new_life, log_offset=log_offset)
         poll = float((self.launch().get("watch") or {}).get("poll_s", DEFAULT_POLL_S))
         # A final verdict ends supervision, not the turn-end notices still owed: each check
-        # retries them first. The watcher stays for them up to TURN_NOTICE_DRAIN_S, or until a
-        # new round of the lane replaces it and takes them over (``_owed_elsewhere``).
-        drained = 0.0
+        # retries them first. The watcher stays for them up to TURN_NOTICE_DRAIN_S by its clock
+        # from the first final verdict, checks included, or until a new round of the lane
+        # replaces it and takes them over (``_owed_elsewhere``).
+        final_at: float | None = None
         while True:
             verdict = self.check()
-            if verdict in LANE_FINAL and (drained >= TURN_NOTICE_DRAIN_S
-                                          or not _load_json(self.state_path).get("turn_notices")):
-                return verdict
-            sleep(poll)
             if verdict in LANE_FINAL:
-                drained += poll
+                final_at = self.now() if final_at is None else final_at
+                if (self.now() - final_at >= TURN_NOTICE_DRAIN_S
+                        or not _load_json(self.state_path).get("turn_notices")):
+                    return verdict
+            sleep(poll)
 
 
 def close_superseded(root: pathlib.Path, lane: str, by: str,

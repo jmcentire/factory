@@ -19,6 +19,7 @@ import shlex
 import stat
 import sys
 import time
+from collections.abc import Callable
 from io import BufferedReader
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -393,11 +394,18 @@ def context(runs: Path, run: str) -> None:
 SUPERVISOR_WAIT_S = 5.0
 
 
-def append_record(path: Path, payload: bytes, *, wait_s: float | None = None) -> None:
+def append_record(path: Path, payload: bytes, *, wait_s: float | None = None,
+                  once: Callable[[bytes], bool] | None = None, since: int | None = None) -> bool:
     """Serialize appends; retain a killed writer's fragment separately from later rows.
 
     With ``wait_s``, a writer that cannot take the lock within that long raises instead of
     waiting on whoever holds it: a supervisor must not block on another writer.
+
+    With ``once``, a writer that may already have written this row (a retry) decides under the
+    lock, so two retrying at once write it once: ``once`` says whether rows read from ``since``
+    (or the last 64 KiB) hold it. When the complete rows do, nothing is written. When the
+    unterminated tail is it whole (a writer killed before its newline), only the newline is
+    written, which completes that row. Returns whether anything was written.
     """
     fd = os.open(
         path, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600
@@ -420,6 +428,13 @@ def append_record(path: Path, payload: bytes, *, wait_s: float | None = None) ->
                     time.sleep(0.05)
         start = os.fstat(fd).st_size
         interrupted = start and os.pread(fd, 1, start - 1) != b"\n"
+        if once is not None:
+            begin = since if since is not None and 0 <= since <= start else max(0, start - 65536)
+            complete, _, tail = os.pread(fd, start - begin, begin).rpartition(b"\n")
+            if once(complete):
+                return False
+            if interrupted and once(tail):
+                payload, interrupted = b"\n", False
         if interrupted:
             payload = b"\n" + payload
         try:
@@ -444,10 +459,17 @@ def append_record(path: Path, payload: bytes, *, wait_s: float | None = None) ->
         os.fsync(parent)
     finally:
         os.close(parent)
+    return True
 
 
 def message(root: Path, recipient: str, sender: str, text: str, *, log: str = os.devnull,
-            wait_s: float | None = None) -> None:
+            wait_s: float | None = None, once_since: int | None = None) -> None:
+    """Append ``text`` to the recipient's inbox (and, optionally, ``log``).
+
+    With ``once_since`` (an ``inbox_end`` taken before a first attempt), a retry: the message is
+    written only if the inbox does not already hold it from there, decided under the inbox's
+    lock (``append_record``), and the log gets nothing when it is not written.
+    """
     if recipient not in {"validator", "orchestrator"}:
         raise ValueError("author messages use tmux_lane_message.sh to preserve role boundaries")
     if sender not in {
@@ -473,7 +495,10 @@ def message(root: Path, recipient: str, sender: str, text: str, *, log: str = os
                         message_digest=hashlib.sha256(text.encode()).hexdigest())) + "\n"
     ).encode()
     # Decisions and handoffs always persist, regardless of optional console logging.
-    append_record(directory / "inbox.jsonl", payload, wait_s=wait_s)
+    if not append_record(
+            directory / "inbox.jsonl", payload, wait_s=wait_s, since=once_since,
+            once=None if once_since is None else (lambda rows: _holds(rows, sender, text))):
+        return  # already in the inbox: nothing was written, so nothing to log
     if log != os.devnull:
         try:
             append_record(Path(log), payload, wait_s=wait_s)
@@ -518,7 +543,8 @@ def delivered(root: Path, recipient: str, sender: str, text: str, *,
     reads from ``since``, an ``inbox_end`` taken before the first attempt, however much was
     written after it; without one (or when the inbox is now shorter), the last 64 KiB. Only a
     regular file is read, where ``message`` would write it: never through a link, the file's
-    or a directory's.
+    or a directory's. Only complete rows count, as the inbox's reader takes them: a row a
+    killed writer left without its newline is not delivered.
     """
     digest = hashlib.sha256(text.encode()).hexdigest()
     try:
@@ -543,7 +569,13 @@ def delivered(root: Path, recipient: str, sender: str, text: str, *,
         return False
     finally:
         os.close(fd)
-    for line in tail.splitlines():
+    return _holds(tail.rpartition(b"\n")[0], sender, text, digest)
+
+
+def _holds(rows: bytes, sender: str, text: str, digest: str | None = None) -> bool:
+    """Whether ``rows`` hold this message from ``sender``."""
+    digest = digest or hashlib.sha256(text.encode()).hexdigest()
+    for line in rows.splitlines():
         try:
             row = json.loads(line)
         except ValueError:

@@ -1186,7 +1186,11 @@ def run_terminal(
             state["last_prompt_sha256"] = reported
             state["prompt_reports"] += 1
             # Reported before the turn before it reported any stop: queued behind that turn.
-            queued = state["phase"] in ("prompt-observed", "asking-operator")
+            # Under a queued prompt a stop may be the turn ahead's, so the prompt's own turn may
+            # still be running: a prompt reported after it is queued too, until the session
+            # reports it is waiting for input.
+            queued = state["phase"] in ("prompt-observed", "asking-operator") or (
+                state["phase"] == "stop-reported" and state.get("turn_queued") is True)
             tokens = row.get("tokens") if isinstance(row.get("tokens"), list) else []
             submitted = [key for key, record in deliveries.items()
                          if record.get("state") == "submitted"]
