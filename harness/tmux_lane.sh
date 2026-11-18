@@ -744,6 +744,7 @@ PY
     rm -f "$ENV_OUT"; exit 70;
   }
   rm -f "$ENV_OUT"
+  if [ -n "$FACTORY_RUN_AGENT_BIN" ]; then LANE_PATH="$FACTORY_RUN_AGENT_BIN:$LANE_PATH"; fi
 
   # Sign-in, checked the way the lane will run: the same scrubbed environment, stdin closed,
   # bounded time. An agent that is signed out, or whose check waits for a person, would sit on

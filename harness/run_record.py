@@ -24,6 +24,34 @@ from subprocess import CompletedProcess
 from typing import Any, cast
 
 SCHEMA = "factory-harness/3"
+AGENT_ENTRYPOINTS = frozenset({"codex", "claude", "agent", "agy", "muse", "prime-agent", "ollama"})
+
+
+def agent_entrypoints(directory: str) -> dict[str, str]:
+    path = Path(directory)
+    if not path.is_absolute() or os.pathsep in directory or not path.is_dir():
+        raise ValueError("FACTORY_AGENT_BIN must be an absolute provider-only directory on PATH")
+    entries = {}
+    for entry in path.iterdir():
+        if entry.name not in AGENT_ENTRYPOINTS or not entry.is_file() or not os.access(entry, os.X_OK):
+            raise ValueError(f"invalid agent entrypoint: {entry}")
+        entries[entry.name] = str(entry.resolve(strict=True))
+    if not entries:
+        raise ValueError("FACTORY_AGENT_BIN contains no agent entrypoints")
+    return entries
+
+
+def retained_agent_bin(doc: dict) -> tuple[str, bool]:
+    binding = doc.get("agent_bin")
+    if binding is None:
+        return "", False
+    if not isinstance(binding, dict) or not isinstance(binding.get("directory"), str):
+        raise ValueError("invalid retained agent entrypoints")
+    directory = binding["directory"]
+    entries = agent_entrypoints(directory)
+    if entries != binding.get("entries"):
+        raise ValueError(f"retained agent entrypoints changed: {directory}")
+    return directory, "claude" in entries
 
 
 def read_json(path: Path) -> dict:
@@ -81,6 +109,13 @@ def create(
     from factory_runtime.host_git import run_host_git
 
     resource_home()  # Refuse invalid resource selection before creating any run state.
+    agent_bin = os.environ.get("FACTORY_AGENT_BIN", "")
+    agent_binding = None
+    if agent_bin:
+        if not Path(agent_bin).is_absolute():
+            raise ValueError("FACTORY_AGENT_BIN must be an absolute directory")
+        directory = str(Path(agent_bin).resolve(strict=True))
+        agent_binding = {"directory": directory, "entries": agent_entrypoints(directory)}
     root = run_root(runs, run)
     repository = repository.resolve(strict=True)
     if not task.strip():
@@ -123,6 +158,8 @@ def create(
         tmux_socket="factory-" + hashlib.sha256(str(root).encode()).hexdigest()[:20],
         created_at=dt.datetime.now(dt.UTC).isoformat(),
     )
+    if agent_binding is not None:
+        record["agent_bin"] = agent_binding
     root.parent.mkdir(parents=True, exist_ok=True)
     root.mkdir(mode=0o700)  # Existing runs, including failed launches, are never overwritten.
     from factory_runtime.kindex_workspace import mark_no_index
@@ -394,6 +431,7 @@ def publish_pr(runs: Path, run: str, repository: Path, commit: str, operation: s
 
 def context(runs: Path, run: str) -> None:
     root, doc = load(runs, run)
+    agent_bin, custom_claude = retained_agent_bin(doc)
     # Shell consumers parse NUL-separated values, never eval record contents.
     fields = [
         str(root),
@@ -404,6 +442,8 @@ def context(runs: Path, run: str) -> None:
         doc["tmux_socket"],
         doc["log"],
         doc.get("tmux_tmpdir", ""),
+        agent_bin,
+        "claude" if custom_claude else "",
     ]
     for value in fields:
         if not isinstance(value, str) or "\0" in value:
@@ -668,6 +708,8 @@ def _start_locked(runs: Path, run: str) -> None:
     tools = Path(__file__).resolve().parent
     home = tools.parent
     resources = resource_home()
+    agent_bin, custom_claude = retained_agent_bin(doc)
+    agent_path = os.pathsep.join((agent_bin, os.environ.get("PATH", os.defpath))) if agent_bin else None
     selector = os.environ.get("FACTORY_TMUX") or "tmux"
     executable = shutil.which(selector)
     if executable is None:
@@ -797,7 +839,7 @@ def _start_locked(runs: Path, run: str) -> None:
                 raise ValueError("retained initial coordinator prompt changed")
         else:
             argv = resident_command(agent, model, effort, prompt, root)
-        executable = shutil.which(argv[0])
+        executable = shutil.which(argv[0], path=agent_path)
         if executable is None:
             raise ValueError(f"{role} executable is unavailable: {argv[0]}")
         # A bare name can fall through PATH after ENOENT from a missing shebang
@@ -823,6 +865,10 @@ def _start_locked(runs: Path, run: str) -> None:
                         "CODEX_HOME", "CLAUDE_CONFIG_DIR", "FACTORY_CLAUDE_LAUNCHER")
             if key in os.environ
         }
+        if agent_path is not None:
+            env["PATH"] = agent_path
+        if custom_claude:
+            env["FACTORY_CLAUDE_LAUNCHER"] = "claude"
         if socket_directory:
             env["TMUX_TMPDIR"] = socket_directory
         # The Validator opens authorized pull requests; gh auth held only in the environment

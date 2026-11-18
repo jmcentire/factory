@@ -807,6 +807,7 @@ elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
     exit 70
   }
   exec 4<&-
+  if [ -n "$FACTORY_RUN_AGENT_BIN" ]; then LANE_PATH="$FACTORY_RUN_AGENT_BIN:$LANE_PATH"; fi
   # The resumed lane gets the same scoped Kindex it launched with (launches before 0.8.8 had none).
   KINDEX_C=""
   [ -z "$KINDEX_OVERRIDE" ] || printf -v KINDEX_C -- '-c %q' "$KINDEX_OVERRIDE"
