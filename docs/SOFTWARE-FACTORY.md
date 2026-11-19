@@ -152,10 +152,12 @@ through their launcher on their subscription and shown in its tmux window; it is
 mode and never an API key (`docs/HARNESS.md`, "Claude Code is the operator's own interactive
 session"). Inbox batches are typed into that session and count as delivered only when the
 session itself reports receiving them. An Antigravity coordinator seat is Antigravity's own
-interactive session in its tmux window, never print mode and never a JSON stream; nothing
-delivers an inbox batch or a message into it, because Antigravity has no supported route for
-that yet. A wake for it is reported `unsupported` and stays in the inbox, and the seat is worked
-by a person in its window: attended, not unattended. `inject.sh RUN validator|orchestrator
+interactive session in its tmux window, never print mode and never a JSON stream; nothing is
+typed into it. When its installed CLI takes per-session `--settings` and `--mode`, it runs
+unattended: it reads its inbox through its own dispatcher loop, and only its harness programs,
+read-only git through `git_read.py`, and Kindex reads are allowed without asking
+(`docs/HARNESS.md`). Otherwise it starts as before and is worked by a person in its window.
+A wake for it is reported `unsupported` and stays in the inbox. `inject.sh RUN validator|orchestrator
 "message"` retains operator input in the seat's inbox; it reaches a Claude Code seat as above
 and waits there for an Antigravity seat. This retains one native conversation without
 introducing another AI orchestrator. Existing runs are not converted or restarted. Other adapters

@@ -672,7 +672,73 @@ def _holds(rows: bytes, sender: str, text: str, digest: str | None = None) -> bo
     return False
 
 
-def resident_command(agent: str, model: str, effort: str, prompt: str, root: Path) -> list[str]:
+#: The Kindex tools a coordinator calls (observed on Antigravity seats in two runs, each asking
+#: a person every time): reads and its own session tag. Other writes still ask.
+AGY_SEAT_KINDEX_TOOLS = ("search", "show", "context", "list_nodes", "watch_list",
+                         "tag_start", "tag_update", "tag_resume")
+#: The harness programs a coordinator runs (prompts/orchestrate.md, the dispatcher loop and
+#: inbox_wake stop in the start prompt, status.sh in the field runs).
+AGY_SEAT_SCRIPTS = ("dispatcher.py", "run_record.py", "inbox_wake.py", "tmux_lane_message.sh",
+                    "status.sh", "git_read.py")
+
+
+def agy_seat_settings(repository: str, root: Path, tools: Path, python: str) -> str:
+    """Antigravity's own per-session settings (`--settings`, never saved) for a coordinator
+    seat, so its dispatcher loop (which is how it reads its inbox) runs with nobody at the pane.
+
+    Its terminal sandbox cannot start this runtime's Python ("operation not permitted"), and
+    Auto mode runs an allowed command inside it, so the seat runs in accept-edits mode with the
+    sandbox off (resident_command): exactly the commands listed here run without asking, as a
+    person approved them in the field runs; every other command asks. It trusts the run's
+    folders and reads outside the workspace (Factory's prompts, the lane clones it reviews)."""
+
+    allow = [f"mcp(kindex/{tool})" for tool in AGY_SEAT_KINDEX_TOOLS] + ["command(ls)"]
+    for script in AGY_SEAT_SCRIPTS:
+        path = tools / script
+        allow += ([f"command(bash {path})", f"command({path})"] if script.endswith(".sh")
+                  else [f"command({python} {path})"])
+    return json.dumps({"trustedWorkspaces": [repository, str(root)],
+                       "allowNonWorkspaceAccess": True, "enableTerminalSandbox": False,
+                       "permissions": {"allow": allow}})
+
+
+def agy_seat_support(executable: str | None, root: Path) -> str:
+    """Empty when the installed Antigravity takes per-session ``--settings`` and ``--mode``
+    (neither is in its published CLI reference, and no seat contract probes them); otherwise
+    why not, and the seat starts as before. Probed once per run, kept in the run root."""
+
+    import subprocess
+
+    record = root / "agy-seat-support.json"
+    try:
+        kept = json.loads(record.read_text())
+        if kept.get("executable") == executable and isinstance(kept.get("reason"), str):
+            return kept["reason"]
+    except (OSError, ValueError):
+        pass
+    reason = "" if executable else "agy is not on PATH"
+    if executable:
+        try:
+            # A one-shot read of its help, not a session: Popen, apart from run() calls.
+            with subprocess.Popen([executable, "--help"], stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, text=True) as shown:
+                text, _ = shown.communicate(timeout=20)
+            # Whole flags only: every Antigravity lists --model, which contains "--mode".
+            missing = [flag for flag in ("--settings", "--mode")
+                       if not re.search(rf"(?<![\w-]){flag}(?![\w-])", text or "")]
+            if missing:
+                reason = f"{executable} --help does not list {' or '.join(missing)}"
+        except (OSError, subprocess.SubprocessError) as error:
+            reason = f"{executable} --help could not be read ({error})"
+    try:
+        write_new(record, json.dumps({"executable": executable, "reason": reason}).encode())
+    except OSError:
+        pass  # Kept only to probe once; a retry probes again.
+    return reason
+
+
+def resident_command(agent: str, model: str, effort: str, prompt: str, root: Path,
+                     settings: str = "") -> list[str]:
     """CLI adapters describe syntax, never an approved-model list."""
     sandbox = os.environ.get("FACTORY_LANE_SANDBOX", "on")
     if sandbox not in {"on", "off"}:
@@ -699,6 +765,8 @@ def resident_command(agent: str, model: str, effort: str, prompt: str, root: Pat
         effort_args = ["--effort", effort] if effort else []
         head = [agent, "--add-dir", str(root),
                 *(["--dangerously-skip-permissions"] if unrestricted else []),
+                *(["--mode", "accept-edits", "--settings", settings]
+                  if agent == "agy" and settings else []),
                 *model_args, *effort_args]
         return [*head, *(["--prompt-interactive"] if agent == "agy" else ["--"]), prompt]
     if agent == "muse":
@@ -945,6 +1013,16 @@ def _start_locked(runs: Path, run: str) -> None:
                 "Begin with {}; retain and pass the returned cursors to the next call. "
                 "Keep observing and acting on concrete findings until task completion."
             )
+        if agent == "agy":
+            # Only the harness commands are allowed for this seat (agy_seat_settings); a
+            # helper script it writes for itself asks a person, as the field runs showed.
+            prompt += (
+                f" Run harness programs as {sys.executable} {tools}/<program>, and read their "
+                "output directly: do not write or run helper scripts or python -c to parse it. "
+                f"Read any repository's git history only with {sys.executable} "
+                f"{tools}/git_read.py -C <path> <log|show|diff|status|rev-parse|merge-base|"
+                "ls-files|branch --list> [args]; it runs the same git read without asking."
+            )
         if agent == "kickoff" and role == "validator":
             brief = root / role / "BRIEF.md"
             try:
@@ -962,14 +1040,22 @@ def _start_locked(runs: Path, run: str) -> None:
         # its trust question in the seat's window, for the operator to answer; until the session
         # reports that it started, the seat's status is "starting" and nothing is typed into it.
         # Only Claude Code is hosted for a seat by the lane wrapper. An Antigravity seat is
-        # its own interactive session in its window, started below like any other seat's
-        # program and driven there: nothing delivers a wake or a message into it, because
-        # Antigravity has no supported route for that yet and its print mode is never used.
+        # its own interactive session in its window. Nothing is typed into it: it reads its
+        # inbox through its own dispatcher loop, which its per-session settings allow.
         native_stream = agent == "claude"
+        seat_settings = ""
         if agent == "agy":
-            print(f"Factory {run}: the {role} seat is Antigravity's own interactive session. "
-                  "Wakes and messages are not delivered into it (no supported route yet, and "
-                  "print mode is never used): read and answer them in its window.")
+            selected_bin = agent_bin and "agy" in doc["agent_bin"]["entries"]
+            installed = str(Path(agent_bin) / "agy") if selected_bin else shutil.which("agy")
+            why = agy_seat_support(installed, root)
+            if why:
+                print(f"Factory {run}: the {role} seat is Antigravity's own interactive session, "
+                      f"started as before and worked by a person in its window: {why}.")
+            else:
+                seat_settings = agy_seat_settings(doc["repository"], root, tools, sys.executable)
+                print(f"Factory {run}: the {role} seat is Antigravity's own interactive session. "
+                      "It reads its inbox through its own dispatcher loop; its harness commands "
+                      "and read-only Kindex and git reads are allowed for this session only.")
         if native_stream:
             extra = ["--add-dir", str(root)]
             if os.environ.get("FACTORY_LANE_SANDBOX", "on") == "off":
@@ -993,7 +1079,7 @@ def _start_locked(runs: Path, run: str) -> None:
             elif prompt_file.read_text() != prompt:
                 raise ValueError("retained initial coordinator prompt changed")
         else:
-            argv = resident_command(agent, model, effort, prompt, root)
+            argv = resident_command(agent, model, effort, prompt, root, settings=seat_settings)
         if agent_bin and argv[0] in doc["agent_bin"]["entries"]:
             executable = str(Path(agent_bin) / argv[0])
         else:

@@ -237,7 +237,9 @@ def test_unsupported_native_flag_records_failure_without_model_substitution(laun
                                capture_output=True, text=True)
     assert completed.returncode == 64, completed.stderr
     assert "unsupported option --model" in completed.stderr + completed.stdout
+    # Apart from the seat's one-shot settings probe (run_record.agy_seat_support).
     invocations = [json.loads(line) for line in receipt.read_text().splitlines()]
+    invocations = [argv for argv in invocations if argv != ["--help"]]
     assert len(invocations) == 1
     assert invocations[0][invocations[0].index("--model") + 1] == "operator-selected"
     records = [
