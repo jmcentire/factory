@@ -55,7 +55,7 @@ esac
 [ -n "$EVIDENCE_FILE" ] || {
   echo "consume_block: a retained disposition evidence file is required" >&2; exit 64;
 }
-ROOT="${HARNESS_RUN_ROOT:-${HARNESS_DIR:-.factory}/runs/$RUN}"
+ROOT="${HARNESS_RUN_ROOT:-${FACTORY_RUNS_DIR:-${HARNESS_DIR:-.factory}/runs}/$RUN}"
 D="$(cd "$(dirname "$0")" && pwd -P)"
 BF="$ROOT/lanes/$LANE.blocking"
 EV="$ROOT/events.jsonl"

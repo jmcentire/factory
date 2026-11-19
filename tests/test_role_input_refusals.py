@@ -229,7 +229,6 @@ CASES = {
         CHANGES + "added leaked.py, secret.py; changed api/spec.txt, src/app.py"),
     "the clone's first commit is not the baseline": ([("break first commit", ""), EDIT],
                                                      CHANGES + "changed src/app.py"),
-    "marker removed": ([("rm", MARKER)], CHANGES + "removed " + MARKER),
     "marker rewritten with content": ([("write", MARKER, b"x")], CHANGES + "changed " + MARKER),
     "marker mode, beside a change": ([("chmod", MARKER, 0o644), EDIT],
                                      CHANGES + "changed " + MARKER + ", src/app.py"),
@@ -241,6 +240,15 @@ def test_one_refusal_names_every_cause(coder, steps, expected):
     dest, runs, *_ = coder
     _do(dest, steps)
     assert _refusal(runs, dest) == expected
+
+
+def test_a_removed_marker_is_restored_not_refused(coder):
+    # Seen in a run: `git clean -fdx` undoing a pre-launch install removed the marker too.
+    dest, runs, _, result, _ = coder
+    (dest / MARKER).unlink()
+    assert role_inputs.verify(runs, "task", "coder", dest) == result
+    info = (dest / MARKER).lstat()
+    assert stat.S_IMODE(info.st_mode) == 0o600 and info.st_size == 0
 
 
 def test_the_receipt_and_tree_digest_are_mains(tmp_path, coder):

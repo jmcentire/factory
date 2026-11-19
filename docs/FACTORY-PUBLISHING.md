@@ -12,7 +12,11 @@ PR-description rules, then open it:
 
 1. After the PR opens and after every push, note the head SHA and wait for CI
    (`gh pr checks <n> --repo <owner/repo> --watch`) and for the review bots to review that
-   SHA. A push does not always retrigger Adapt: if no Adapt review lands on that SHA, a PR
+   SHA. Adapt can report a re-review only as its `Adapt Review` check run on the head SHA,
+   with no new PR review: a completed `Adapt Review` check on that SHA
+   (`gh pr checks <n> --repo <owner/repo>`) counts as Adapt having reviewed it, and its
+   findings are its check output, its latest review body and its threads (step 2). A push
+   does not always retrigger Adapt: if neither lands on that SHA, a PR
    comment of only `@adaptcom review` asks for one (once per commit per 10 minutes), but it
    posts under the human's account, so only with their OK; or the human clicks the Re-run
    link in its last review. If neither happens, or the review still does not land, that

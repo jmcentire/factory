@@ -214,23 +214,33 @@ Signet guard enforcing end to end, what the lane's Kindex returns for a seeded s
 a live launch into a clone that already has Cursor project files (that refusal and the
 candidate guard were exercised on temporary repositories, not through a live lane).
 
-- **Permissions are the operator's own; the Factory approves nothing for them.** With the
+- **Permissions stay the operator's own, plus what the lane itself needs.** With the
   operator's configuration loaded, Cursor's blanket flags would reach everything they have
-  configured, so none is passed. `--force` ("force allow commands unless explicitly
-  denied") and `--approve-mcps` ("automatically approve all MCP servers") are gone.
-  `--trust` is gone too: Cursor documents it as headless-only, so it granted nothing in an
-  interactive session. Cursor therefore asks its own questions in the lane's window: whether
-  to trust the workspace, and whether to approve the lane's MCP server. `agent mcp enable
-  lane-kindex`, run by the operator in the lane's clone, is Cursor's per-server approval;
-  the Factory does not run it, because where Cursor keeps that list is not documented. What
-  the lane may run without asking is whatever the operator's own Cursor permission
-  configuration allows (`~/.cursor/cli-config.json`). A launch prints all of this as "this
-  start asks you" and records it as `start_requires`.
-- **The one rule the Factory adds.** Cursor's documented per-server permission is a project
-  rule: `.cursor/cli.json` with `permissions.allow: ["Mcp(lane-kindex:*)"]` and an empty
-  `permissions.deny`, which Cursor's schema requires to be present (real Cursor refused to
-  start without it). It covers the tools of the lane's own Kindex server and nothing else. That server is named `lane-kindex`
-  rather than `kindex` so the rule cannot match a server of the operator's.
+  configured, so neither is passed: `--force` ("force allow commands unless explicitly
+  denied") and `--approve-mcps` ("automatically approve all MCP servers"). Every turn passes
+  `--trust`, which trusts only the lane's own clone (`--workspace`); on interactive
+  cursor-agent 2026.11.19 it removes the workspace-trust question, although Cursor's help
+  describes it as headless-only. Before launch the Factory runs `agent mcp enable
+  lane-kindex` in the lane's clone, which records an approval for that one server and that
+  workspace only (cursor-agent 2026.11.19 writes it to
+  `~/.cursor/projects/<workspace>/mcp-approvals.json`, as pressing approve would); every other
+  server still asks. If the command is missing, fails or hangs, the launch continues and the
+  operator answers in the lane's window. A launch prints this as "this start asks you" and
+  records it as `start_requires`.
+- **The two rules the Factory adds.** Cursor's documented per-project permission file is
+  `.cursor/cli.json` with `permissions.allow` and an empty `permissions.deny`, which
+  Cursor's schema requires to be present (real Cursor refused to start without it). The
+  lane's file allows `Mcp(lane-kindex:*)`, the tools of the lane's own Kindex server and
+  nothing else (named `lane-kindex` rather than `kindex` so the rule cannot match a server
+  of the operator's), and `Shell(*)`, so shell commands run without a question each, as in
+  Codex lanes. The operator's own deny rules and Signet's hooks still apply.
+- **Cursor's co-author trailer.** Cursor adds `Co-authored-by: Cursor
+  <cursoragent@cursor.com>` to its commits itself, and the setting that turns it off is
+  accepted only in the operator's own `~/.cursor` configuration, which the Factory does not
+  touch. So the lane's clone gets a `commit-msg` hook that drops exactly that line, but only
+  when the clone has no `commit-msg` hook of its own; a repository's hook is never replaced.
+  A repository that routes hooks through `core.hooksPath` (husky, for example) keeps the
+  trailer on that lane's commits.
 - **Where lane configuration goes.** Cursor offers one lane-scoped place: the project files
   `.cursor/hooks.json`, `.cursor/mcp.json` and `.cursor/cli.json` in its workspace. The
   wrapper writes them into the lane's clone when the session starts: four observation hooks
@@ -927,7 +937,19 @@ through `lane_agent.py`. It is an author-lane adapter and is not accepted.
   covers every enabled hook in the run, not only the lane's. Without either, the lane
   works but reports nothing: it stays `starting` and its first message stays `submitted`.
   A per-run `-c projects."<folder>".trust_level="trusted"` did not suppress the folder
-  question.
+  question. Opt-in: with `FACTORY_SEAT_TRUST=1` set before the run, each seat's own
+  folder is trusted before its agent starts, and for Codex only that folder's
+  `.codex/hooks.json` report hooks, through Codex's own app-server (`hooks/list`,
+  `config/value/write`); a Claude Code seat's folder is marked trusted in its own
+  `.claude.json` (`harness/seat_trust.py`). Off by default, because it writes the
+  operator's agent profiles. A failure leaves the agent to ask as before.
+- **No loopback-only network for Codex lanes.** The lane's permission profile keeps
+  Codex's network off, so a test that starts a local listener (a Redis, a dev server)
+  fails with `Operation not permitted`. Codex has no loopback-only setting (observed with
+  `codex sandbox`, codex-cli 0.169.0): `network.allow_local_binding=true` alone still
+  refuses the bind, and `network.enabled=true` also opens outbound connections to any host.
+  Such tests need the Validator's endgame or a lane started with
+  `FACTORY_LANE_SANDBOX=off`.
 - **Codex's own resume and queue, observed (2026-11-14, four one-word turns, one
   session).** `codex resume <options> <id>` keeps the session id and its hooks go on
   reporting it. Given no message, the resumed session reported nothing, not even a start,
@@ -1084,6 +1106,15 @@ checks. Safe Git materialization uses the named commit, without repository hooks
 replacement objects, smudge filters or network downloads. Use `--require-lfs` when checks
 need hydrated assets and `--lfs-objects PATH` for an explicit local object store. Retained
 results state whether pointers remained, what ran, and its exit status.
+
+Node repositories: when every Node lockfile in the candidate (`pnpm-lock.yaml`,
+`package-lock.json`, `yarn.lock`, `bun.lock`, ...) is byte-identical to the `--repo`
+checkout's, that checkout's installed `node_modules` directories are copied into the
+candidate (copy-on-write where the filesystem supports it) before the check runs, so it
+needs no registry or install. Copies keep workspace links inside the candidate, so the
+candidate's own packages are tested. A changed lockfile is not reused, and the result's
+`dependencies` field says which happened; the check command must then install. Generated
+files a repository ignores (codegen output) are not copied: regenerate them in the command.
 
 Passing tests is evidence for the Validator's decision; it is not automatic task
 acceptance, publication, installation or merge permission. Report the candidate,

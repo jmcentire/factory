@@ -57,8 +57,10 @@ FACTORY_CA_VARS=(NODE_EXTRA_CA_CERTS SSL_CERT_FILE SSL_CERT_DIR REQUESTS_CA_BUND
 factory_ca_env() {
   local var
   FACTORY_CA_ENV=()
+  # Opt-in seat trust (harness/seat_trust.py) travels the same way.
+  [ "${FACTORY_SEAT_TRUST:-}" != 1 ] || FACTORY_CA_ENV=(FACTORY_SEAT_TRUST=1)
   [ "${FACTORY_PASS_CA_CERTS:-}" = 1 ] || return 0
-  FACTORY_CA_ENV=(FACTORY_PASS_CA_CERTS=1)
+  FACTORY_CA_ENV+=(FACTORY_PASS_CA_CERTS=1)
   for var in "${FACTORY_CA_VARS[@]}"; do
     [ -z "${!var:-}" ] || FACTORY_CA_ENV+=("$var=${!var}")
   done

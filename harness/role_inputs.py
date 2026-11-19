@@ -386,6 +386,11 @@ def verify(runs: Path, run: str, role: str, repository: Path, *, replacing: bool
     if initial != receipt["initial_commit"]:
         raise ValueError(f"role inputs changed before first launch: HEAD is {initial[:12]}, "
                          f"not the projection's {receipt['initial_commit'][:12]}")
+    marker = repository / NO_INDEX_MARKER
+    if not marker.exists() and not marker.is_symlink():
+        # `git clean -x` (e.g. undoing a pre-launch install) removes this runtime marker;
+        # it holds no input, so put it back as prepared rather than refuse.
+        mark_no_index(repository)
     tree = _tree(repository)
     if tree.problems() or tree.digest != receipt["tree_digest"]:
         # Everything to undo, in one refusal: an author clone used before launch usually has

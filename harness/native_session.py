@@ -615,6 +615,46 @@ def remove_project_files(manifest: pathlib.Path) -> list[str]:
     return left
 
 
+#: Cursor adds this trailer to every commit it makes (``git commit --trailer ...``, observed
+#: on cursor-agent 2026.11.19). Its setting ``attribution.attributeCommitsToAgent`` lives only
+#: in the operator's own configuration: a project ``.cursor/cli.json`` refuses the key.
+CURSOR_COAUTHOR = "Co-authored-by: Cursor <cursoragent@cursor.com>"
+CURSOR_COMMIT_HOOK = ("#!/bin/sh\n"
+                      "# Written by the Factory for a Cursor lane: "
+                      "drops Cursor's co-author trailer.\n"
+                      f"grep -v -x '{CURSOR_COAUTHOR}' \"$1\" > \"$1.factory\" || true\n"
+                      "mv \"$1.factory\" \"$1\"\n")
+
+
+def install_cursor_commit_hook(workspace: pathlib.Path) -> None:
+    """Give the lane clone a ``commit-msg`` hook that drops Cursor's co-author trailer.
+
+    Only when the clone's own ``.git/hooks`` has none: a repository's hook is never replaced,
+    and a clone whose hooks live elsewhere (``core.hooksPath``) keeps the trailer."""
+
+    hooks = workspace / ".git" / "hooks"
+    hook = hooks / "commit-msg"
+    if (not hooks.is_dir() or hooks.is_symlink() or (workspace / ".git").is_symlink()
+            or hook.exists() or hook.is_symlink()):
+        return
+    hook.write_text(CURSOR_COMMIT_HOOK, encoding="utf-8")
+    hook.chmod(0o755)
+
+
+def approve_lane_kindex(executable: str, workspace: pathlib.Path) -> None:
+    """Approve the lane's own Kindex server, as pressing approve in its pane would.
+
+    Cursor records it for this workspace only (cursor-agent 2026.11.19:
+    ``~/.cursor/projects/<workspace>/mcp-approvals.json``); no other server is approved.
+    Best effort: if the command is missing, fails or hangs, the lane asks as before."""
+
+    try:
+        subprocess.run([executable, "mcp", "enable", "lane-kindex"], cwd=workspace,
+                       stdin=subprocess.DEVNULL, capture_output=True, timeout=20, check=False)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def cursor_plan(arguments: Sequence[str], *, executable: str, directory: pathlib.Path,
                 slot: str, workspace: pathlib.Path, python: str = sys.executable,
                 prompt: str = "", message_id: str = "") -> Plan:
@@ -622,7 +662,7 @@ def cursor_plan(arguments: Sequence[str], *, executable: str, directory: pathlib
 
     ``arguments`` exclude the executable. The lane's observation hooks, any required hook
     file the registry left in ``directory`` (``cursor-hooks.json``) and the lane's Kindex
-    (``cursor-mcp.json``) and its one permission rule (``cursor-cli.json``) go into the
+    (``cursor-mcp.json``) and its two permission rules (``cursor-cli.json``) go into the
     project files Cursor reads, beside the operator's own user-level hooks, servers and
     permissions, which are untouched and still apply. Cursor chooses its
     own conversation id, so it is known only when the session reports starting, unless
@@ -686,6 +726,9 @@ def cursor_plan(arguments: Sequence[str], *, executable: str, directory: pathlib
             files[relative] = (directory / source).read_bytes()
     manifest = directory / f"{slot}-project-files.json"
     install_project_files(workspace, files, manifest)
+    install_cursor_commit_hook(workspace)
+    if CURSOR_MCP in files:
+        approve_lane_kindex(executable, workspace)
     try:
         offset = journal.stat().st_size
     except FileNotFoundError:

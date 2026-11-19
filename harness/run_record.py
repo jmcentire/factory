@@ -1066,6 +1066,8 @@ def _start_locked(runs: Path, run: str) -> None:
             if key in os.environ
         }
         # Certificate-trust paths (e.g. a TLS-inspecting network's CA bundle), opt-in only.
+        if os.environ.get("FACTORY_SEAT_TRUST") == "1":
+            env["FACTORY_SEAT_TRUST"] = "1"
         if os.environ.get("FACTORY_PASS_CA_CERTS") == "1":
             env["FACTORY_PASS_CA_CERTS"] = "1"
             env.update({key: os.environ[key] for key in CA_ENV if os.environ.get(key)})

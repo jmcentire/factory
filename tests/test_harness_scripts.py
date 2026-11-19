@@ -726,6 +726,19 @@ def test_multiline_message_is_retained_as_exact_data(tmp_path: Path) -> None:
     assert not (tmp_path / "not-executed").exists()
 
 
+def test_inject_finds_a_run_through_factory_runs_dir_from_any_directory(tmp_path: Path) -> None:
+    # Seen in runs kept outside ./.factory/runs: coordinators carry FACTORY_RUNS_DIR (not
+    # HARNESS_RUN_ROOT), and inject.sh looked under the working directory instead.
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    r = run(["bash", str(HARNESS / "inject.sh"), "testrun", "validator", "finding"], elsewhere,
+            {"FACTORY_RUNS_DIR": str(tmp_path / "runs"), "INJECT_FROM": "orchestrator"})
+    assert r.returncode == 0, r.stderr
+    inbox = tmp_path / "runs/testrun/validator/inbox.jsonl"
+    assert json.loads(inbox.read_text())["text"] == "finding"
+    assert not (elsewhere / ".factory").exists()
+
+
 def test_inject_orchestrator_to_lane_is_refused(tmp_path: Path) -> None:
     r = inject(tmp_path, "coder", "do it differently", frm="orchestrator")
     assert r.returncode == 77 and "topology refusal" in r.stderr

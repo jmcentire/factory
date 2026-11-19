@@ -688,3 +688,24 @@ def test_certificate_trust_paths_reach_every_seat_only_when_opted_in(launch, mon
         assert {k: v for k, v in env.items() if k not in baseline[role]} == {
             "FACTORY_PASS_CA_CERTS": "1", "NODE_EXTRA_CA_CERTS": "/fixture/corporate ca.pem",
             "NIX_SSL_CERT_FILE": "/fixture/nix bundle.crt"}
+
+
+def test_seat_trust_switch_reaches_every_seat_only_when_opted_in(launch, monkeypatch):
+    # Parity with the certificate switch: opt-in, and nothing changes without it.
+    _, _, _, capture, _, execute = launch
+    for key in ("FACTORY_SEAT_TRUST", "FACTORY_PASS_CA_CERTS"):
+        monkeypatch.delenv(key, raising=False)
+    calls = capture()
+    baseline = {role: execute(calls, role)["env"] for role in ("validator", "orchestrator")}
+    for role in baseline:
+        assert "FACTORY_SEAT_TRUST" not in baseline[role]
+    monkeypatch.setenv("FACTORY_SEAT_TRUST", "yes")
+    calls = capture()
+    for role in ("validator", "orchestrator"):
+        assert execute(calls, role)["env"] == baseline[role]
+    monkeypatch.setenv("FACTORY_SEAT_TRUST", "1")
+    calls = capture()
+    for role in ("validator", "orchestrator"):
+        env = execute(calls, role)["env"]
+        assert {k: v for k, v in env.items() if k not in baseline[role]} == {
+            "FACTORY_SEAT_TRUST": "1"}
