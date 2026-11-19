@@ -157,8 +157,8 @@ def test_cursor_agent_lane_runs_native_terminal_preserving_operator_settings(
     assert launched.returncode == 0, launched.stdout + launched.stderr
     lane = lanes.clone("coder").resolve()
     [call] = lanes.windows("coder")
-    assert f"-- agent --workspace {lane} --model grok-4.7-xhigh" in call
-    for forbidden in (" -p ", "--output-format", "--force", "--trust", "--approve-mcps"):
+    assert f"-- agent --workspace {lane} --trust --model grok-4.7-xhigh" in call
+    for forbidden in (" -p ", "--output-format", "--force", "--approve-mcps"):
         assert forbidden not in call
     assert "--persistent" in call
     assert "env -i" in call and "lane_agent.py run --slot coder" in call
@@ -171,6 +171,9 @@ def test_cursor_agent_lane_runs_native_terminal_preserving_operator_settings(
     mcp = json.loads((home / "cursor-mcp.json").read_text())["mcpServers"]
     assert list(mcp) == ["lane-kindex"]
     assert str(lane) in mcp["lane-kindex"]["args"]
+    # Shell commands run without a prompt each; only the lane's own server is pre-approved.
+    rules = json.loads((home / "cursor-cli.json").read_text())["permissions"]
+    assert rules == {"allow": ["Mcp(lane-kindex:*)", "Shell(*)"], "deny": []}
     turn = json.loads((lanes.root / "tmux-lanes" / "coder-turn.json").read_text())
     assert turn["agent"] == "cursor-agent" and turn["billing"] == "plan"
     # Plan billing removes the spending cap, not progress and completion observation.

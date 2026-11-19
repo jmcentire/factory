@@ -64,3 +64,33 @@ def test_symlinked_cursor_directory_is_never_followed(tmp_path: Path) -> None:
     assert (workspace / ".cursor").is_symlink()
     assert sentinel.read_text() == "unchanged"
     assert list(external.iterdir()) == [sentinel]
+
+
+def _git(repository: Path, *args: str) -> str:
+    return subprocess.run(["git", "-C", str(repository), "-c", "user.name=t", "-c",
+                           "user.email=t@example.invalid", *args],
+                          capture_output=True, text=True, check=True).stdout
+
+
+def test_cursor_lane_commits_drop_cursors_coauthor_trailer(tmp_path: Path) -> None:
+    # Seen in a Factory run: every Cursor lane commit carried `Co-authored-by: Cursor`, which
+    # Cursor adds with `git commit --trailer` (cursor-agent 2026.11.19).
+    sys.path.insert(0, str(ROOT / "harness"))
+    import native_session
+    _git(tmp_path, "init", "-q")
+    native_session.install_cursor_commit_hook(tmp_path)
+    (tmp_path / "a.txt").write_text("a\n")
+    _git(tmp_path, "add", "a.txt")
+    _git(tmp_path, "commit", "-q", "--trailer", native_session.CURSOR_COAUTHOR,
+         "--trailer", "FactoryRun: r1", "-m", "add a")
+    assert _git(tmp_path, "log", "-1", "--format=%B").strip() == "add a\n\nFactoryRun: r1"
+
+
+def test_a_repositorys_own_commit_hook_is_never_replaced(tmp_path: Path) -> None:
+    sys.path.insert(0, str(ROOT / "harness"))
+    import native_session
+    _git(tmp_path, "init", "-q")
+    hook = tmp_path / ".git" / "hooks" / "commit-msg"
+    hook.write_text("#!/bin/sh\nexit 0\n")
+    native_session.install_cursor_commit_hook(tmp_path)
+    assert hook.read_text() == "#!/bin/sh\nexit 0\n"
