@@ -452,7 +452,7 @@ def test_author_launch_respects_native_launcher(native_case, tmp_path):
 
 
 @pytest.mark.agent_entrypoints
-def test_run_claude_entry_is_checked_and_started_instead_of_the_operators_launcher(
+def test_run_claude_entry_is_used_to_check_start_and_resume_the_lane(
     native_case, tmp_path,
 ):
     native_case['env'].pop('ANTHROPIC_API_KEY', None)
@@ -469,9 +469,16 @@ def test_run_claude_entry_is_checked_and_started_instead_of_the_operators_launch
     brief = tmp_path / 'author-brief.txt'
     brief.write_text('Observe native behavior only; change no target files.\n')
     before = len(read_events(native_case['log']))
+    runtime = tmp_path / 'runtime'
+    runtime.mkdir()
+    competing_claude = runtime / 'claude'
+    competing_claude.write_bytes((native_case['bin_dir'] / 'claude').read_bytes())
+    competing_claude.chmod(0o555)
+    runtime.chmod(0o555)
     launched = execute(['bash', str(FACTORY / 'harness' / 'tmux_lane.sh'),
                         'native-acceptance', 'coder', 'launch', '--runs', str(native_case['runs']),
-                        '--repo', str(lane), '--prompt', str(brief), '--agent', 'claude'],
+                        '--repo', str(lane), '--prompt', str(brief), '--agent', 'claude',
+                        '--runtime-dir', str(runtime)],
                        native_case['env'])
     assert launched.returncode == 0, launched.stdout + launched.stderr
     wait_for(lambda: [e for e in read_events(native_case['log'])[before:]
@@ -479,7 +486,46 @@ def test_run_claude_entry_is_checked_and_started_instead_of_the_operators_launch
     # Sign-in is checked on the program the lane then starts.
     observed = [e for e in read_events(native_case['log'])[before:] if 'argv' in e]
     assert any(e['argv'] == ['auth', 'status', '--json'] for e in observed)
+    assert any(e['argv'] == ['--version'] for e in observed)
+    assert any(e['argv'] == ['--help'] for e in observed)
     assert {e['launcher'] for e in observed} == {'wrapped-recorder'}, observed
+
+    initial = next(e for e in observed if '--session-id' in e['argv'])
+    session = initial['argv'][initial['argv'].index('--session-id') + 1]
+    message = ['bash', str(FACTORY / 'harness' / 'tmux_lane_message.sh'),
+               'native-acceptance', 'validator', 'coder', 'status',
+               '--runs', str(native_case['runs'])]
+    root = native_case['runs'] / 'native-acceptance'
+    state = [sys.executable, str(FACTORY / 'harness' / 'persistent_lane.py'),
+             'status', '--root', str(root), '--slot', 'coder']
+
+    def lane_phase():
+        result = execute(state, native_case['env'])
+        return json.loads(result.stdout).get('phase') if result.returncode == 0 else ''
+
+    wait_for(lambda: lane_phase() == 'stop-reported')
+    delivered = execute(message, native_case['env'])
+    assert delivered.returncode == 0, delivered.stdout + delivered.stderr
+    assert any(e['pid'] == initial['pid'] and 'FACTORY_STATUS_PROBE' in e.get('input', '')
+               for e in read_events(native_case['log']))
+
+    command = subprocess.run(['ps', '-ww', '-p', str(initial['pid']), '-o', 'command='],
+                             capture_output=True, text=True).stdout
+    assert str(tmp_path / 'wrapped-recorder') in command
+    os.kill(initial['pid'], 15)
+    socket = json.loads((root / 'harness.json').read_text())['tmux_socket']
+    panes = ['tmux', '-L', socket, 'list-panes', '-t', 'native-acceptance:coder',
+             '-F', '#{pane_dead}']
+    wait_for(lambda: execute(panes, native_case['env']).stdout.strip() == '1')
+
+    delivered = execute(message, native_case['env'])
+    assert delivered.returncode == 0, delivered.stdout + delivered.stderr
+    resumed = next(e for e in read_events(native_case['log'])[before:]
+                   if '--resume' in e.get('argv', []))
+    assert resumed['launcher'] == 'wrapped-recorder'
+    assert resumed['argv'][resumed['argv'].index('--resume') + 1] == session
+    assert any(e['pid'] == resumed['pid'] and 'FACTORY_STATUS_PROBE' in e.get('input', '')
+               for e in read_events(native_case['log']))
 
 
 def test_hook_observations_do_not_claim_model_completion(native_case):

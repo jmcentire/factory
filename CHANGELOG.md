@@ -5,6 +5,8 @@ public API is still pre-1.0.
 
 ## Unreleased
 
+### Added
+
 - `FACTORY_AGENT_BIN` lets an operator select provider entrypoints retained across
   coordinator starts and author-lane launches and resumes.
 

@@ -48,7 +48,7 @@ def agent_entrypoints(directory: str) -> dict[str, str]:
         if entry.name not in names:
             if entry.is_file() and not os.access(entry, os.X_OK):
                 continue
-            raise ValueError(f"FACTORY_AGENT_BIN contains an unexpected executable entry: {entry}")
+            raise ValueError(f"FACTORY_AGENT_BIN contains an unexpected entry: {entry}")
         if not entry.is_file() or not os.access(entry, os.X_OK):
             raise ValueError(f"agent entrypoint is not an executable file: {entry}")
         entries[entry.name] = str(entry.resolve(strict=True))

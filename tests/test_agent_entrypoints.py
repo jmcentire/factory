@@ -14,6 +14,7 @@ import pytest
 
 from harness import run_record
 from tests.test_coordinator_startup import launch as launch
+from tests.test_harness_scripts import HARNESS, _ollama_stub, ordinary_message_fixture, run
 
 CONTEXT = Path(__file__).resolve().parents[1] / "harness/run_context.sh"
 REPORT = (
@@ -70,7 +71,7 @@ def test_create_records_the_directory_and_each_resolved_entry(entrypoints, launc
     ("file", r"FACTORY_AGENT_BIN\) is not a directory"),
     ("relative", "must name one absolute directory"),
     ("empty", "contains no agent entrypoints"),
-    ("unexpected", "unexpected executable entry: .*helper"),
+    ("unexpected", "unexpected entry: .*helper"),
     ("in-target", "outside the target and runs"),
     ("in-runs", "outside the target and runs"),
     ("links-into-target", "outside the target and runs"),
@@ -222,3 +223,36 @@ def test_the_ollama_guard_asks_the_recorded_entry(tmp_path, monkeypatch, request
     _, _, command = invocation(capture(model_probe=True), "validator")
     assert command[0] == str(directory.resolve() / "ollama")
     assert json.loads(log.read_text().splitlines()[0]) == ["show", "chosen-local:latest"]
+
+
+def test_a_live_ollama_lane_queues_through_the_recorded_codex_entry(tmp_path, monkeypatch):
+    observed = tmp_path / "queue.json"
+    wrapper = executable(tmp_path / "entrypoints" / "codex", (
+        f"#!{sys.executable}\nimport json, pathlib, sys\n"
+        f"pathlib.Path({str(observed)!r}).write_text(json.dumps(sys.argv[1:]))\n"
+    ))
+    monkeypatch.setenv("FACTORY_AGENT_BIN", str(wrapper.parent))
+    operator, root, env, _ = ordinary_message_fixture(tmp_path)
+    binary = tmp_path / "factory-bin"
+    _ollama_stub(binary, available=True)
+    # The tmux stand-in reports a live pane. Queueing itself runs the chosen executable.
+    tmux = binary / "tmux"
+    tmux.write_text(tmux.read_text().replace('printf "1\\n"', 'printf "0\\n"'))
+    lane = root / "tmux-lanes"
+    lane.mkdir()
+    thread = "12345678-1234-4234-8234-123456789abc"
+    (lane / "coder-thread-id").write_text(thread + "\n")
+    (lane / "coder-launch.jsonl").write_text(json.dumps({
+        "schema_version": "factory-tmux-lane-launch/1", "status": "active", "mode": "launch",
+        "run_id": "r1", "role": "coder", "agent": "codex-ollama",
+        "model": "chosen-local:latest", "repository": str(operator),
+    }) + "\n")
+
+    result = run(["bash", str(HARNESS / "tmux_lane_message.sh"), "r1", "validator", "coder",
+                  "status", "--runs", str(root.parent)], operator, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "NOT delivered" in result.stdout
+    argv = json.loads(observed.read_text())
+    queue = argv.index("queue")
+    assert argv[queue:queue + 4] == ["queue", "--thread", thread, "--message"]
+    assert "FACTORY_STATUS_PROBE" in argv[queue + 4]

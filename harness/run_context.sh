@@ -8,7 +8,7 @@ factory_load_context() {
   FACTORY_RUN_AGENT_BIN=""
   d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
   values_file="$(mktemp "${TMPDIR:-/tmp}/factory-context.XXXXXX")" || return
-  PYTHONPATH="$d/.." "$FACTORY_PYTHON" -m harness.run_record context --run "$run" --runs "$runs" ${3:+"$3"} > "$values_file" || {
+  PYTHONPATH="$d/.." "$FACTORY_PYTHON" -P -m harness.run_record context --run "$run" --runs "$runs" ${3:+"$3"} > "$values_file" || {
     rm -f "$values_file"; return 70;
   }
   { IFS= read -r -d '' FACTORY_CONTROL_ROOT && IFS= read -r -d '' FACTORY_WORKDIR &&
