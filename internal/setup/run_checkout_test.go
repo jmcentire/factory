@@ -246,10 +246,21 @@ func TestRunCheckoutLeavesTheHumansCheckoutAlone(t *testing.T) {
 	must(t, os.MkdirAll(filepath.Join(runDir, "tmux-lanes", "coder-agent-home"), 0o755))
 	write(filepath.Join(runDir, "tmux-lanes", "coder-lane.log"), "keep\n")
 	must(t, os.MkdirAll(filepath.Join(runDir, "validation", "c1"), 0o755))
+	// A Node check built outside the ignored runs tree links its result to a scratch copy:
+	// list counts it and clean removes it; any other linked directory is left alone.
+	scratch := filepath.Join(dir, "factory-candidate-abc123")
+	must(t, os.MkdirAll(filepath.Join(scratch, "candidate"), 0o755))
+	write(filepath.Join(scratch, "candidate", "big"), strings.Repeat("x", 3<<20))
+	must(t, os.MkdirAll(filepath.Join(runDir, "validation", "c2"), 0o755))
+	must(t, os.Symlink(filepath.Join(scratch, "candidate"), filepath.Join(runDir, "validation", "c2", "candidate")))
+	other := filepath.Join(dir, "not-a-factory-candidate")
+	must(t, os.MkdirAll(filepath.Join(other, "candidate"), 0o755))
+	must(t, os.MkdirAll(filepath.Join(runDir, "validation", "c3"), 0o755))
+	must(t, os.Symlink(filepath.Join(other, "candidate"), filepath.Join(runDir, "validation", "c3", "candidate")))
 	must(t, os.MkdirAll(filepath.Join(runDir, "evidence"), 0o755))
 	write(filepath.Join(runDir, "evidence", "e"), "keep\n")
-	if out := ok(dir, script, "list", human); !strings.Contains(out, "r1  checkout -") || !strings.Contains(out, "ready") || !strings.Contains(out, "free on this disk") {
-		t.Fatalf("list: %s", out)
+	if out := ok(dir, script, "list", human); !strings.Contains(out, "r1  checkout -") || !strings.Contains(out, "ready") || !strings.Contains(out, "free on this disk") || !strings.Contains(out, "run bulk 3.") {
+		t.Fatalf("list (should count the 3 MB scratch copy): %s", out)
 	}
 	if _, err := os.Stat(filepath.Join(runDir, "tmux-lanes", "coder-agent-home")); err != nil {
 		t.Fatal("list deleted something")
@@ -262,6 +273,12 @@ func TestRunCheckoutLeavesTheHumansCheckoutAlone(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(runDir, gone)); !os.IsNotExist(err) {
 			t.Fatalf("clean left %s", gone)
 		}
+	}
+	if _, err := os.Stat(scratch); !os.IsNotExist(err) {
+		t.Fatalf("clean left the scratch copy %s", scratch)
+	}
+	if _, err := os.Stat(filepath.Join(other, "candidate")); err != nil {
+		t.Fatal("clean removed a linked directory that is not a factory-candidate scratch copy")
 	}
 	if _, err := os.Stat(filepath.Join(runDir, "tmux-lanes", "coder-lane.log")); err != nil {
 		t.Fatal("clean removed a lane log")

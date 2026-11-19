@@ -65,7 +65,8 @@ def test_a_matching_install_is_copied_and_resolves_the_candidates_own_packages(t
     assert code == 0, output
     assert output == "REGISTRY\nCANDIDATE\nCANDIDATE\n"
     assert result["dependencies"] == {"status": "reused", "source": str(repository.resolve()),
-                                      "copied": ["node_modules", "services/app/node_modules"]}
+                                      "copied": ["node_modules", "services/app/node_modules"],
+                                      "generated": []}
     assert (repository / "packages/lib/index.js").read_text() == "SOURCE WORKTREE\n"
 
 
@@ -109,3 +110,99 @@ def test_factory_run_honors_factory_runs_dir_and_keeps_the_default(tmp_path, mon
     assert cli.main(["run", "task", "brief", "--repo", str(repository), "--runs", "chosen"]) == 0
     chosen = [command[command.index("--runs") + 1] for command in started]
     assert chosen == [".factory/runs", str(tmp_path / "env-runs"), "chosen"]
+
+
+def test_a_reused_install_is_checked_without_pnpms_pre_run_install(tmp_path):
+    # Seen on bff-site: pnpm's verifyDepsBeforeRun reinstalled before the script, got 401 from
+    # the private registry, and left the copied node_modules empty.
+    runs, repository, commit = _workspace(tmp_path)
+    code, _, output = _check(runs, repository, commit,
+                             'test "$npm_config_verify_deps_before_run" = false && '
+                             'test "$pnpm_config_verify_deps_before_run" = false')
+    assert code == 0, output
+    changed = _commit(repository, {"pnpm-lock.yaml": LOCK + "# new dependency\n"}, "lock")
+    (repository / "pnpm-lock.yaml").write_text(LOCK)
+    code, _, output = _check(runs, repository, changed,
+                             'test -z "$npm_config_verify_deps_before_run"')
+    assert code == 0, output  # nothing reused, so pnpm keeps its own install behaviour
+
+
+def test_a_node_candidate_is_built_outside_the_repositorys_ignored_runs(tmp_path):
+    # Seen on bff-site: the candidate sat under the repository's ignored .factory/runs, so
+    # oxlint found no files to lint.
+    _, repository, commit = _workspace(tmp_path)
+    (repository / ".gitignore").write_text("node_modules/\n.factory/\n")
+    runs = repository / ".factory/runs"
+    run_record.create(runs, "task", repository, b"Check the workspace")
+    code, result, output = _check(runs, repository, commit,
+                                  f'! git -C "{repository}" check-ignore -q "$PWD" 2>/dev/null && '
+                                  'cat packages/lib/index.js')
+    assert code == 0, output
+    assert output == "CANDIDATE\n"
+    assert not Path(result["candidate_path"]).is_relative_to(repository)
+
+
+def test_a_repository_without_a_node_lockfile_keeps_its_candidate_in_the_run(tmp_path):
+    repository = tmp_path / "source"
+    repository.mkdir()
+    subprocess.run(["git", "init", "-q", str(repository)], check=True)
+    commit = _commit(repository, {".gitignore": ".factory/\n", "setup.py": ""}, "base")
+    runs = repository / ".factory/runs"
+    run_record.create(runs, "task", repository, b"Check")
+    code, result, _ = _check(runs, repository, commit, "true")
+    assert code == 0
+    assert Path(result["candidate_path"]).is_relative_to(runs)
+
+
+def test_ignored_generated_code_comes_with_a_reused_install_but_nothing_else(tmp_path):
+    # Seen on bff-site: services/*/src/sdks/__generated__ (written by codegen, ignored) was
+    # missing, so tsc failed with TS2307 and the service tests could not start.
+    runs, repository, commit = _workspace(tmp_path)
+    (repository / ".gitignore").write_text("node_modules/\n__generated__/\n.env\n")
+    commit = _commit(repository, {"packages/lib/index.js": "CANDIDATE\n"}, "ignore generated")
+    (repository / "services/app/__generated__").mkdir(parents=True)
+    (repository / "services/app/__generated__/client.js").write_text("GENERATED\n")
+    (repository / ".env").write_text("TOKEN=secret\n")
+    code, result, output = _check(runs, repository, commit,
+                                  "cat services/app/__generated__/client.js && test ! -e .env")
+    assert code == 0, output
+    assert output == "GENERATED\n"
+    assert result["dependencies"]["generated"] == ["services/app/__generated__"]
+
+
+def test_a_run_checkout_repo_under_the_targets_ignored_factory_moves_the_candidate(tmp_path):
+    # The documented --repo is <target>/.factory/checkouts/<run>, a separate repository; the
+    # runs tree <target>/.factory/runs is ignored by <target>, not by that checkout.
+    _, source, commit = _workspace(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    subprocess.run(["git", "init", "-q", str(target)], check=True)
+    (target / ".git/info/exclude").write_text("/.factory/\n")
+    checkout = target / ".factory/checkouts/task"
+    subprocess.run(["git", "clone", "-q", str(source), str(checkout)], check=True)
+    subprocess.run(["cp", "-RP", str(source / "node_modules"), str(checkout / "node_modules")],
+                   check=True)
+    runs = target / ".factory/runs"
+    run_record.create(runs, "task", checkout, b"Check the workspace")
+    code, result, output = _check(runs, checkout, commit,
+                                  f'! git -C "{target}" check-ignore -q "$PWD" 2>/dev/null && '
+                                  'cat packages/lib/index.js')
+    assert code == 0, output
+    assert output == "CANDIDATE\n"
+    assert not Path(result["candidate_path"]).is_relative_to(target)
+    assert result["dependencies"]["status"] == "reused"
+
+
+def test_corepack_cache_falls_back_to_xdg_then_home(tmp_path, monkeypatch):
+    runs, repository, commit = _workspace(tmp_path)
+    monkeypatch.delenv("COREPACK_HOME", raising=False)
+    xdg = tmp_path / "xdg"
+    (xdg / "node/corepack").mkdir(parents=True)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(xdg))
+    code, _, output = _check(runs, repository, commit, 'printf %s "$COREPACK_HOME"')
+    assert code == 0 and output == str(xdg / "node/corepack")
+    explicit = tmp_path / "explicit"
+    explicit.mkdir()
+    monkeypatch.setenv("COREPACK_HOME", str(explicit))
+    code, _, output = _check(runs, repository, commit, 'printf %s "$COREPACK_HOME"')
+    assert code == 0 and output == str(explicit)

@@ -20,7 +20,16 @@ W=$T/.factory/checkouts/$run S=$T/.factory/checkouts/$run.human R=$T/.factory/ru
 # A finished run's rebuildable bulk: the validation check copies and each lane's agent and
 # kindex homes and snapshots. Its evidence, artifacts, reviews, ledgers and lane logs stay.
 bulk() {
-  local d
+  local d c
+  # A Node check built outside an ignored runs tree (validate_candidate.py) leaves its copy in a
+  # factory-candidate-* scratch directory that validation/<id>/candidate links to; only those.
+  for c in "$1"/validation/*/candidate; do
+    [ -L "$c" ] || continue
+    d=$(readlink "$c")
+    case $d in /*/candidate) d=${d%/candidate} ;; *) continue ;; esac
+    case ${d##*/} in factory-candidate-*) ;; *) continue ;; esac
+    [ -d "$d" ] && [ ! -L "$d" ] && printf '%s\n' "$d"
+  done
   for d in "$1/validation" "$1/tmux-lanes/snapshots" "$1"/tmux-lanes/*-agent-home "$1"/tmux-lanes/*-kindex-home; do
     [ ! -e "$d" ] && [ ! -L "$d" ] || printf '%s\n' "$d"
   done
@@ -205,7 +214,8 @@ clean)
     1) ;;
     *) die "run $run tmux liveness is unknown; check FACTORY_TMUX, FACTORY_PYTHON and retained socket metadata; keeping it" ;;
   esac
-  # Deletes only inside the run's own folder under <target>, never through a symlink.
+  # Deletes only inside the run's own folder under <target>, never through a symlink, plus the
+  # factory-candidate-* scratch copies its validation results link to.
   [ ! -L "$R" ] || die "$R is a symlink; keeping it"
   [ ! -d "$R" ] || [ "$(cd "$R" && pwd -P)" = "$R" ] || die "$R is not under $T; keeping it"
   if [ -e "$W" ]; then remove_checkout; else rm -rf -- "$S"; fi

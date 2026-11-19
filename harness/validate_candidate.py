@@ -16,6 +16,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Any
@@ -236,6 +237,9 @@ def retain_result(root: Path, result_root: Path, result: dict[str, Any]) -> None
 #: Lockfiles that pin a Node dependency install; a byte-identical one makes an install reusable.
 NODE_LOCKFILES = ("pnpm-lock.yaml", "package-lock.json", "npm-shrinkwrap.json", "yarn.lock",
                   "bun.lock", "bun.lockb")
+#: Ignored directories a repository's setup generates; only these are carried, never other
+#: ignored files (environment files, credentials).
+GENERATED_DIRS = ("__generated__",)
 
 
 def reuse_dependencies(candidate: Path, source: Path) -> dict[str, Any]:
@@ -258,19 +262,47 @@ def reuse_dependencies(candidate: Path, source: Path) -> dict[str, Any]:
     copied = []
     for manifest in sorted(candidate.rglob("package.json")):
         relative = manifest.parent.relative_to(candidate)
-        installed, target = source / relative / "node_modules", manifest.parent / "node_modules"
-        if (installed.is_dir() and not installed.is_symlink()
-                and not target.exists() and not target.is_symlink()):
-            clone = (["cp", "-cRP"] if sys.platform == "darwin"
-                     else ["cp", "-a", "--reflink=auto"])
-            if subprocess.run([*clone, str(installed), str(target)],
-                              capture_output=True).returncode:
-                shutil.rmtree(target, ignore_errors=True)  # a partial clone, in the candidate
-                subprocess.run(["cp", "-RP", str(installed), str(target)], check=True,
-                               capture_output=True)  # no clone support: an ordinary copy
+        if _clone_missing(source / relative / "node_modules", manifest.parent / "node_modules"):
             copied.append((relative / "node_modules").as_posix())
+    # The repository's own setup writes generated code it does not commit (seen: bff-site's
+    # services/*/src/sdks/__generated__); the matching install was built against it.
+    generated = []
+    listing = run_host_git(source, ["ls-files", "-z", "--others", "--ignored",
+                                    "--exclude-standard", "--directory"])
+    for entry in listing.decode("utf-8", errors="replace").split("\0"):
+        relative = Path(entry.rstrip("/"))
+        if (relative.name in GENERATED_DIRS and ".." not in relative.parts
+                and not relative.is_absolute()
+                and _clone_missing(source / relative, candidate / relative)):
+            generated.append(relative.as_posix())
     return {"status": "reused" if copied else "none-installed", "source": str(source),
-            "copied": copied}
+            "copied": copied, "generated": generated}
+
+
+def _clone_missing(installed: Path, target: Path) -> bool:
+    """Copy-on-write clone a real directory the candidate lacks; False when there is none."""
+    if (not installed.is_dir() or installed.is_symlink() or target.exists()
+            or target.is_symlink() or not target.parent.is_dir()):
+        return False
+    clone = ["cp", "-cRP"] if sys.platform == "darwin" else ["cp", "-a", "--reflink=auto"]
+    if subprocess.run([*clone, str(installed), str(target)], capture_output=True).returncode:
+        shutil.rmtree(target, ignore_errors=True)  # a partial clone, in the candidate
+        subprocess.run(["cp", "-RP", str(installed), str(target)], check=True,
+                       capture_output=True)  # no clone support: an ordinary copy
+    return True
+
+
+def _ignored(path: Path) -> bool:
+    """Whether the repository that contains ``path`` ignores it (a run under <target>/.factory).
+
+    Asked of that repository, not --repo: the documented --repo is the run's own checkout under
+    <target>/.factory/checkouts, a different repository. False outside any repository."""
+    try:
+        top = run_host_git(path, ["rev-parse", "--show-toplevel"]).decode().strip()
+        run_host_git(top, ["check-ignore", "-q", str(path)])
+    except HostGitError:
+        return False
+    return True
 
 
 def validate(
@@ -297,11 +329,23 @@ def validate(
     result_root.mkdir(mode=0o700)
     mark_no_index(result_root)
     candidate = result_root / "candidate"
+    if (any((repository / name).is_file() for name in NODE_LOCKFILES)
+            and _ignored(result_root)):
+        # Ignore-aware tools (oxlint, eslint) skip every file of a candidate inside the
+        # repository's ignored .factory tree, so a Node candidate is built outside it.
+        # run-checkout.sh clean removes it with the run's other validation copies.
+        # shortcut: on Linux a tmpfs TMPDIR turns the node_modules clone into a full copy;
+        # place the scratch on the target's filesystem if Linux runs need it.
+        scratch = Path(tempfile.mkdtemp(prefix="factory-candidate-"))
+        mark_no_index(scratch)
+        candidate.symlink_to(scratch / "candidate")
+        candidate = scratch / "candidate"
     result: dict[str, Any] = {
         "run": run,
         "requested_commit": commit,
         "repository": str(repository.resolve()),
         "command": command,
+        "candidate_path": str(candidate),
         "started_at": dt.datetime.now(dt.UTC).isoformat(),
     }
     try:
@@ -361,10 +405,20 @@ def validate(
         return 70, result_root
     try:
         result["dependencies"] = reuse_dependencies(candidate, repository.resolve())
-    except (OSError, subprocess.SubprocessError) as error:
+    except (OSError, subprocess.SubprocessError, HostGitError) as error:
         result["dependencies"] = {"status": "not-reused", "reason": str(error)}
     env = {name: os.environ[name] for name in ("PATH", "LANG", "TMPDIR") if name in os.environ}
     env.update(HOME=str(result_root), GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+    if result["dependencies"].get("status") == "reused":
+        # Check with the copied install: pnpm's pre-run install would refetch from the
+        # repository's registries (no credentials here) and empty node_modules on failure.
+        env.update(npm_config_verify_deps_before_run="false",
+                   pnpm_config_verify_deps_before_run="false")
+        # Corepack's cache holds the pinned package manager the source install already used.
+        cache = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+        corepack = Path(os.environ.get("COREPACK_HOME") or Path(cache) / "node/corepack")
+        if corepack.is_dir():
+            env["COREPACK_HOME"] = str(corepack)
     with (result_root / "output.log").open("xb") as stream:
         try:
             child = subprocess.Popen(
@@ -430,6 +484,8 @@ def main() -> int:
         if dependencies.get("status") == "reused":
             print(f"Dependencies: copied {', '.join(dependencies['copied'])} from "
                   f"{dependencies['source']} (lockfiles match)")
+            if dependencies.get("generated"):
+                print(f"Generated code: copied {', '.join(dependencies['generated'])}")
         elif dependencies.get("status") == "not-reused":
             print(f"Dependencies: not reused ({dependencies['reason']}); "
                   "the check command must install them")
