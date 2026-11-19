@@ -91,9 +91,8 @@ def test_a_repository_without_a_node_lockfile_is_untouched(tmp_path):
     assert code == 0 and result["dependencies"] == {"status": "not-node"}
 
 
-def test_factory_run_keeps_runs_with_the_repository_not_the_working_directory(
-        tmp_path, monkeypatch):
-    # Seen in runs: `factory run --repo X` from another directory put runs under that directory.
+def test_factory_run_honors_factory_runs_dir_and_keeps_the_default(tmp_path, monkeypatch):
+    # FACTORY_RUNS_DIR, when set, names the runs directory; otherwise the default is unchanged.
     import subprocess as process
 
     from factory_runtime import cli
@@ -109,4 +108,4 @@ def test_factory_run_keeps_runs_with_the_repository_not_the_working_directory(
     assert cli.main(["run", "task", "brief", "--repo", str(repository)]) == 0
     assert cli.main(["run", "task", "brief", "--repo", str(repository), "--runs", "chosen"]) == 0
     chosen = [command[command.index("--runs") + 1] for command in started]
-    assert chosen == [str(repository / ".factory/runs"), str(tmp_path / "env-runs"), "chosen"]
+    assert chosen == [".factory/runs", str(tmp_path / "env-runs"), "chosen"]

@@ -251,7 +251,9 @@ def reuse_dependencies(candidate: Path, source: Path) -> dict[str, Any]:
         return {"status": "not-node"}
     for name in locks:
         installed_lock = source / name
-        if not installed_lock.is_file() or installed_lock.read_bytes() != (candidate / name).read_bytes():
+        same = (installed_lock.is_file()
+                and installed_lock.read_bytes() == (candidate / name).read_bytes())
+        if not same:
             return {"status": "not-reused", "reason": f"{name} differs from the source checkout"}
     copied = []
     for manifest in sorted(candidate.rglob("package.json")):
