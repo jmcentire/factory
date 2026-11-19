@@ -567,18 +567,24 @@ class CursorAgent(Harness):
     seat, and a required Signet guard.
 
     Permissions are the operator's own. With their configuration loaded, Cursor's blanket
-    flags would reach everything they have configured, so none is passed: not ``--force``
-    (run everything unless denied), not ``--approve-mcps`` (approve every MCP server), and
-    not ``--trust``, which Cursor documents as headless-only and so grants nothing here.
-    The one thing added is the documented project rule ``Mcp(<lane server>:*)`` in
-    ``.cursor/cli.json``, for the lane's own Kindex server, which is named apart from any
-    server of the operator's so the rule can match nothing else."""
+    flags would reach everything they have configured, so neither is passed: not ``--force``
+    (run everything unless denied) and not ``--approve-mcps`` (approve every MCP server).
+    ``--trust`` is passed: it answers only the workspace-trust question for the lane clone
+    the Factory made (observed on interactive cursor-agent 2026.11.19, which then asked
+    nothing). The project rules added in ``.cursor/cli.json`` are ``Mcp(<lane server>:*)``,
+    for the lane's own Kindex server, named apart from any server of the operator's so the
+    rule can match nothing else, and ``Shell(*)``, so shell commands run without a prompt
+    each as a Codex lane's do; the operator's deny rules and Signet's hooks still decide
+    every command. A lane clone without a ``commit-msg`` hook of its own gets one that drops
+    Cursor's ``Co-authored-by: Cursor`` trailer (``native_session.cursor_plan``)."""
 
     def turn(self, *, model: str, effort: str, cwd: Path, resume: str = "",
              last_message_file: str = "", max_turns: int = 400,
              extra: Sequence[str] = ()) -> Turn:
         # The interactive program and no approval of anything: see the class note.
-        argv = ["agent", "--workspace", str(cwd)]
+        # `--trust` answers only the lane clone's workspace-trust question, which the
+        # Factory created; observed on cursor-agent 2026.11.19 interactively (no prompt).
+        argv = ["agent", "--workspace", str(cwd), "--trust"]
         argv += ["--model", model] if model else []
         argv += [f"--resume={resume}"] if resume else []
         argv += list(extra)
@@ -624,8 +630,11 @@ class CursorAgent(Harness):
             # own server's tools, and nothing of the operator's. Cursor's schema for this
             # file requires both lists; real Cursor (2026.11.13) refuses to start on a
             # project file without `deny`. The empty list denies nothing.
+            # `Shell(*)` lets the lane's shell commands run without a prompt each, as a Codex
+            # lane's do; the operator's deny rules and Signet's hooks still apply to every one.
             _write(home / "cursor-cli.json", json.dumps(
-                {"permissions": {"allow": [f"Mcp({CURSOR_LANE_SERVER}:*)"], "deny": []}}))
+                {"permissions": {"allow": [f"Mcp({CURSOR_LANE_SERVER}:*)", "Shell(*)"],
+                                 "deny": []}}))
         return LaneSetup()
 
 
@@ -877,12 +886,16 @@ HARNESSES: Mapping[str, Harness] = {
             "runtime configuration, not the work:\n  do not edit them, and never add them to "
             "a commit (not with git add -f either).\n"),
         start_requires=(
-            "Cursor asks its own questions in the lane's window and the Factory answers none "
-            "of them: whether to trust the workspace, and whether to approve the lane's MCP "
-            f"server `{CURSOR_LANE_SERVER}` (`agent mcp enable {CURSOR_LANE_SERVER}`, run in "
-            "the lane's clone, approves that one server). What the lane may then run without "
-            "asking is your own Cursor permission configuration; the Factory adds one rule, "
-            f"`Mcp({CURSOR_LANE_SERVER}:*)`, and passes no --force, --approve-mcps or --trust. "
+            "The lane's clone is trusted with --trust, so Cursor asks no workspace question. "
+            "The Factory adds two project rules in the clone's .cursor/cli.json: "
+            f"`Mcp({CURSOR_LANE_SERVER}:*)` for the lane's own Kindex and `Shell(*)`, so shell "
+            "commands run without a question each; your own deny rules and Signet's hooks "
+            "still apply, and no --force or --approve-mcps is passed. Before launch the Factory "
+            f"runs `agent mcp enable {CURSOR_LANE_SERVER}` in the clone, approving that one "
+            "server for this workspace only; if that fails and Cursor asks, answer it in the "
+            "lane's window. "
+            "A commit-msg hook in the clone drops Cursor's co-author trailer, unless the clone "
+            "has its own commit-msg hook. "
             "Until the session reports starting it is `starting` and nothing is typed to it.")),
 }
 

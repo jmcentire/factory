@@ -214,23 +214,33 @@ Signet guard enforcing end to end, what the lane's Kindex returns for a seeded s
 a live launch into a clone that already has Cursor project files (that refusal and the
 candidate guard were exercised on temporary repositories, not through a live lane).
 
-- **Permissions are the operator's own; the Factory approves nothing for them.** With the
+- **Permissions stay the operator's own, plus what the lane itself needs.** With the
   operator's configuration loaded, Cursor's blanket flags would reach everything they have
-  configured, so none is passed. `--force` ("force allow commands unless explicitly
-  denied") and `--approve-mcps` ("automatically approve all MCP servers") are gone.
-  `--trust` is gone too: Cursor documents it as headless-only, so it granted nothing in an
-  interactive session. Cursor therefore asks its own questions in the lane's window: whether
-  to trust the workspace, and whether to approve the lane's MCP server. `agent mcp enable
-  lane-kindex`, run by the operator in the lane's clone, is Cursor's per-server approval;
-  the Factory does not run it, because where Cursor keeps that list is not documented. What
-  the lane may run without asking is whatever the operator's own Cursor permission
-  configuration allows (`~/.cursor/cli-config.json`). A launch prints all of this as "this
-  start asks you" and records it as `start_requires`.
-- **The one rule the Factory adds.** Cursor's documented per-server permission is a project
-  rule: `.cursor/cli.json` with `permissions.allow: ["Mcp(lane-kindex:*)"]` and an empty
-  `permissions.deny`, which Cursor's schema requires to be present (real Cursor refused to
-  start without it). It covers the tools of the lane's own Kindex server and nothing else. That server is named `lane-kindex`
-  rather than `kindex` so the rule cannot match a server of the operator's.
+  configured, so neither is passed: `--force` ("force allow commands unless explicitly
+  denied") and `--approve-mcps` ("automatically approve all MCP servers"). Every turn passes
+  `--trust`, which trusts only the lane's own clone (`--workspace`); on interactive
+  cursor-agent 2026.11.19 it removes the workspace-trust question, although Cursor's help
+  describes it as headless-only. Before launch the Factory runs `agent mcp enable
+  lane-kindex` in the lane's clone, which records an approval for that one server and that
+  workspace only (cursor-agent 2026.11.19 writes it to
+  `~/.cursor/projects/<workspace>/mcp-approvals.json`, as pressing approve would); every other
+  server still asks. If the command is missing, fails or hangs, the launch continues and the
+  operator answers in the lane's window. A launch prints this as "this start asks you" and
+  records it as `start_requires`.
+- **The two rules the Factory adds.** Cursor's documented per-project permission file is
+  `.cursor/cli.json` with `permissions.allow` and an empty `permissions.deny`, which
+  Cursor's schema requires to be present (real Cursor refused to start without it). The
+  lane's file allows `Mcp(lane-kindex:*)`, the tools of the lane's own Kindex server and
+  nothing else (named `lane-kindex` rather than `kindex` so the rule cannot match a server
+  of the operator's), and `Shell(*)`, so shell commands run without a question each, as in
+  Codex lanes. The operator's own deny rules and Signet's hooks still apply.
+- **Cursor's co-author trailer.** Cursor adds `Co-authored-by: Cursor
+  <cursoragent@cursor.com>` to its commits itself, and the setting that turns it off is
+  accepted only in the operator's own `~/.cursor` configuration, which the Factory does not
+  touch. So the lane's clone gets a `commit-msg` hook that drops exactly that line, but only
+  when the clone has no `commit-msg` hook of its own; a repository's hook is never replaced.
+  A repository that routes hooks through `core.hooksPath` (husky, for example) keeps the
+  trailer on that lane's commits.
 - **Where lane configuration goes.** Cursor offers one lane-scoped place: the project files
   `.cursor/hooks.json`, `.cursor/mcp.json` and `.cursor/cli.json` in its workspace. The
   wrapper writes them into the lane's clone when the session starts: four observation hooks
