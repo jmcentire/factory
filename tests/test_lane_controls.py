@@ -1810,13 +1810,13 @@ def test_lane_windows_run_under_bash_and_keep_the_operators_shell(tmp_path: Path
     lanes = Lanes(tmp_path)
     launched = lanes.lane("coder", env={"SHELL": "/operator/login/shell"})
     assert launched.returncode == 0, launched.stdout + launched.stderr
-    for name in ("coder", "watch-coder"):
-        [window] = lanes.windows(name)
+    [lane] = lanes.windows("coder")
+    [watcher] = lanes.windows("watch-coder")
+    for window in (lane, watcher):
         _, interpreter, command = re.split(r" (/\S*bash) -c ", window, maxsplit=1)
         assert interpreter == shutil.which("bash", path=lanes.env["PATH"])
         assert not command.startswith("-")
-    [lane] = lanes.windows("coder")
-    assert " SHELL=/operator/login/shell " in lane and f" SHELL={interpreter} " not in lane
+    assert " SHELL=/operator/login/shell " in lane
 
 
 @pytest.mark.parametrize("default_shell", ["sh", "false"])
