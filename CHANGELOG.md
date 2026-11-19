@@ -3,6 +3,13 @@
 All notable changes to Factory are recorded here. Versions follow Semantic Versioning while the
 public API is still pre-1.0.
 
+## Unreleased
+
+### Added
+
+- `FACTORY_AGENT_BIN` lets an operator select provider entrypoints retained across
+  coordinator starts and author-lane launches and resumes.
+
 ## [0.8.31] - 2026-11-18
 
 ### Changed

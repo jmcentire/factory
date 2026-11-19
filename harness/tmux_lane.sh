@@ -194,7 +194,11 @@ source "$D/model_availability.sh"
 REPO_ROOT="$(cd "$D/.." && pwd -P)"
 # shellcheck source=harness/run_context.sh
 source "$D/run_context.sh"
-factory_load_context "$RUN" "$RUNS_ARG"
+if [ "$ACTION" = launch ] || [ "$ACTION" = qualify ]; then
+  factory_load_context "$RUN" "$RUNS_ARG" --agent-entrypoints
+else
+  factory_load_context "$RUN" "$RUNS_ARG"
+fi
 factory_resolve_tmux
 factory_ca_env
 ROOT="$FACTORY_CONTROL_ROOT"
@@ -691,6 +695,10 @@ PY
   SAFE_TERM="${TERM:-xterm-256color}"
   [ "$SAFE_TERM" != dumb ] || SAFE_TERM=xterm-256color
   SAFE_SHELL="${SHELL:-/bin/bash}"
+  # The generated lane commands are quoted for Bash, and tmux hands a one-string command to
+  # its default-shell. Start them as "$LANE_BASH" -c <command>, on the Bash running this script.
+  # SAFE_SHELL stays the operator's login shell: the lane resolves their Claude launcher in it.
+  LANE_BASH="$BASH"
   SAFE_LANG="${LANG:-en_US.UTF-8}"
   SAFE_CODEX_HOME="${CODEX_HOME:-$SAFE_HOME/.codex}"
   # A rebuilt environment starts a trusted Python helper too, so it carries the same
@@ -700,6 +708,7 @@ PY
     TERM="$SAFE_TERM" SHELL="$SAFE_SHELL" LANG="$SAFE_LANG" CODEX_HOME="$SAFE_CODEX_HOME"
     PYTHONSAFEPATH=1 PYTHONPATH="$D/trusted_startup:$D:$REPO_ROOT"
     ${CLAUDE_CONFIG_DIR:+CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR"}
+    ${FACTORY_CLAUDE_LAUNCHER:+FACTORY_CLAUDE_LAUNCHER="$FACTORY_CLAUDE_LAUNCHER"}
     ${FACTORY_CA_ENV[@]+"${FACTORY_CA_ENV[@]}"})
 
   # A codex lane runs with the operator's own Codex configuration: nothing of it is ignored
@@ -747,6 +756,8 @@ PY
     rm -f "$ENV_OUT"; exit 70;
   }
   rm -f "$ENV_OUT"
+  # Runtime directories lead LANE_PATH; the run's entrypoints outrank them as well.
+  if [ -n "$FACTORY_RUN_AGENT_BIN" ]; then LANE_PATH="$FACTORY_RUN_AGENT_BIN:$LANE_PATH"; fi
 
   # Sign-in, checked the way the lane will run: the same scrubbed environment, stdin closed,
   # bounded time. An agent that is signed out, or whose check waits for a person, would sit on
@@ -1409,12 +1420,12 @@ PY
   if printf '%s\n' "$WINDOWS" | grep -q "^watch-$LANE "; then
     WID=$(window_id "watch-$LANE"); [ -z "$WID" ] || tmux kill-window -t "$WID" >/dev/null 2>&1 || true
   fi
-  if ! tmux new-window -t "$RUN" -n "$LANE" -c "$REPOSITORY" "$LANE_CMD"; then
+  if ! tmux new-window -t "$RUN" -n "$LANE" -c "$REPOSITORY" "$LANE_BASH" -c "$LANE_CMD"; then
     append_event "$(mark launch-failed)"
     refuse 70 "failed to launch $RUN:$LANE"
   fi
   # Completion and stall observation are required even when a plan lane has no cap.
-  if ! tmux new-window -d -t "$RUN" -n "watch-$LANE" -c "$ROOT" "$WATCH_CMD"; then
+  if ! tmux new-window -d -t "$RUN" -n "watch-$LANE" -c "$ROOT" "$LANE_BASH" -c "$WATCH_CMD"; then
     WID=$(window_id "$LANE"); [ -z "$WID" ] || tmux kill-window -t "$WID" >/dev/null 2>&1 || true
     append_event "$(mark launch-failed)"
     refuse 70 "the watcher for $RUN:$LANE could not start, so the lane was stopped: a lane with no watcher is not launched"

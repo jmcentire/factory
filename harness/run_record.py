@@ -28,6 +28,53 @@ from typing import Any, cast
 SCHEMA = "factory-harness/3"
 
 
+def agent_entrypoints(directory: str) -> dict[str, str]:
+    path = Path(directory)
+    if not path.is_absolute() or os.pathsep in directory:
+        raise ValueError(f"FACTORY_AGENT_BIN must name one absolute directory: {directory}")
+    if not path.exists():
+        raise ValueError(f"agent entrypoint directory (FACTORY_AGENT_BIN) is missing: {directory}")
+    if not path.is_dir():
+        raise ValueError(
+            f"agent entrypoint directory (FACTORY_AGENT_BIN) is not a directory: {directory}")
+    import importlib
+
+    # Ollama is a coordinator command and a lane model provider, not an author harness.
+    agents = (importlib.import_module("harness.agents") if __package__
+              else importlib.import_module("agents"))
+    names = {agent.executable for agent in agents.HARNESSES.values()} | {"ollama"}
+    entries = {}
+    for entry in path.iterdir():
+        if entry.name not in names:
+            if entry.is_file() and not os.access(entry, os.X_OK):
+                continue
+            raise ValueError(f"FACTORY_AGENT_BIN contains an unexpected entry: {entry}")
+        if not entry.is_file() or not os.access(entry, os.X_OK):
+            raise ValueError(f"agent entrypoint is not an executable file: {entry}")
+        entries[entry.name] = str(entry.resolve(strict=True))
+    return entries
+
+
+def retained_agent_bin(doc: dict) -> tuple[str, bool]:
+    binding = doc.get("agent_bin")
+    if binding is None:
+        return "", False
+    if (not isinstance(binding, dict) or not isinstance(binding.get("directory"), str)
+            or not isinstance(binding.get("entries"), dict)):
+        raise ValueError("invalid retained agent entrypoints")
+    directory, recorded = binding["directory"], binding["entries"]
+    entries = agent_entrypoints(directory)
+    if entries != recorded:
+        # Name each difference: the operator restores entries, not a directory.
+        changes = [f"added {name}" for name in sorted(entries.keys() - recorded.keys())]
+        changes += [f"removed {name}" for name in sorted(recorded.keys() - entries.keys())]
+        changes += [f"retargeted {name}" for name in sorted(entries.keys() & recorded.keys())
+                    if entries[name] != recorded[name]]
+        raise ValueError(
+            f"retained agent entrypoints changed in {directory}: {', '.join(changes)}")
+    return directory, "claude" in entries
+
+
 def read_json(path: Path) -> dict:
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd) as stream:
@@ -85,6 +132,21 @@ def create(
     resource_home()  # Refuse invalid resource selection before creating any run state.
     root = run_root(runs, run)
     repository = repository.resolve(strict=True)
+    agent_bin = os.environ.get("FACTORY_AGENT_BIN", "")
+    agent_binding = None
+    if agent_bin:
+        if not Path(agent_bin).is_absolute():
+            raise ValueError(f"FACTORY_AGENT_BIN must name one absolute directory: {agent_bin}")
+        # Not strict: a missing directory is reported by name below, not as a bare OSError.
+        directory = str(Path(agent_bin).resolve())
+        entries = agent_entrypoints(directory)
+        if not entries:
+            raise ValueError(f"FACTORY_AGENT_BIN contains no agent entrypoints: {directory}")
+        for candidate in (directory, *entries.values()):
+            path = Path(candidate)
+            if path.is_relative_to(repository) or path.is_relative_to(root.parent):
+                raise ValueError(f"agent entrypoint must be outside the target and runs: {path}")
+        agent_binding = {"directory": directory, "entries": entries}
     if not task.strip():
         raise ValueError("task is empty")
     task.decode("utf-8")
@@ -125,6 +187,8 @@ def create(
         tmux_socket="factory-" + hashlib.sha256(str(root).encode()).hexdigest()[:20],
         created_at=dt.datetime.now(dt.UTC).isoformat(),
     )
+    if agent_binding is not None:
+        record["agent_bin"] = agent_binding
     root.parent.mkdir(parents=True, exist_ok=True)
     root.mkdir(mode=0o700)  # Existing runs, including failed launches, are never overwritten.
     from factory_runtime.kindex_workspace import mark_no_index
@@ -394,7 +458,7 @@ def publish_pr(runs: Path, run: str, repository: Path, commit: str, operation: s
     return outcome
 
 
-def context(runs: Path, run: str) -> None:
+def context(runs: Path, run: str, *, with_agent_bin: bool = False) -> None:
     root, doc = load(runs, run)
     # Shell consumers parse NUL-separated values, never eval record contents.
     fields = [
@@ -407,6 +471,9 @@ def context(runs: Path, run: str) -> None:
         doc["log"],
         doc.get("tmux_tmpdir", ""),
     ]
+    if with_agent_bin:
+        agent_bin, custom_claude = retained_agent_bin(doc)
+        fields.extend((agent_bin, "claude" if custom_claude else ""))
     for value in fields:
         if not isinstance(value, str) or "\0" in value:
             raise ValueError("invalid context field")
@@ -794,6 +861,10 @@ def _start_locked(runs: Path, run: str) -> None:
     tools = Path(__file__).resolve().parent
     home = tools.parent
     resources = resource_home()
+    agent_bin, custom_claude = retained_agent_bin(doc)
+    agent_path = (
+        os.pathsep.join((agent_bin, os.environ.get("PATH", os.defpath))) if agent_bin else None
+    )
     selector = os.environ.get("FACTORY_TMUX") or "tmux"
     executable = shutil.which(selector)
     if executable is None:
@@ -923,7 +994,10 @@ def _start_locked(runs: Path, run: str) -> None:
                 raise ValueError("retained initial coordinator prompt changed")
         else:
             argv = resident_command(agent, model, effort, prompt, root)
-        executable = shutil.which(argv[0])
+        if agent_bin and argv[0] in doc["agent_bin"]["entries"]:
+            executable = str(Path(agent_bin) / argv[0])
+        else:
+            executable = shutil.which(argv[0])
         if executable is None:
             raise ValueError(f"{role} executable is unavailable: {argv[0]}")
         # A bare name can fall through PATH after ENOENT from a missing shebang
@@ -937,6 +1011,7 @@ def _start_locked(runs: Path, run: str) -> None:
                  "factory-model-availability", str(tools / "model_availability.sh"),
                  f"FACTORY_{role.upper()}_MODEL", model],
                 capture_output=True, text=True,
+                env={**os.environ, "PATH": agent_path} if agent_path is not None else None,
             )
             if available.returncode:
                 raise ValueError(available.stderr.strip() or "Ollama model is unavailable")
@@ -953,6 +1028,10 @@ def _start_locked(runs: Path, run: str) -> None:
         if os.environ.get("FACTORY_PASS_CA_CERTS") == "1":
             env["FACTORY_PASS_CA_CERTS"] = "1"
             env.update({key: os.environ[key] for key in CA_ENV if os.environ.get(key)})
+        if agent_path is not None:
+            env["PATH"] = agent_path
+        if custom_claude:
+            env["FACTORY_CLAUDE_LAUNCHER"] = "claude"
         if socket_directory:
             env["TMUX_TMPDIR"] = socket_directory
         # The Validator opens authorized pull requests; gh auth held only in the environment
@@ -1095,6 +1174,7 @@ def main() -> int:
                                            "notify", "capture", "provenance", "pr"])
     parser.add_argument("--runs", type=Path, required=True)
     parser.add_argument("--run", required=True)
+    parser.add_argument("--agent-entrypoints", action="store_true")
     parser.add_argument("--repo", type=Path)
     parser.add_argument("--task-file", type=Path)
     parser.add_argument("--commit", help="exact candidate or revision to check")
@@ -1135,7 +1215,7 @@ def main() -> int:
         elif args.action == "start":
             start(args.runs, args.run)
         elif args.action == "context":
-            context(args.runs, args.run)
+            context(args.runs, args.run, with_agent_bin=args.agent_entrypoints)
         else:
             root, doc = load(args.runs, args.run)
             if args.action == "pr":

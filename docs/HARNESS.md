@@ -91,6 +91,12 @@ Every role retrieves relevant Kindex context when authorized. Author memory rema
 private, with curated common context; a shared live graph must not leak one author's
 work to the other. Retrieval receipts are not an execution prerequisite.
 
+### Custom agent entrypoints
+
+[`FACTORY_AGENT_BIN`](../README.md#custom-agent-entrypoints) selects executable
+wrappers for Codex, Claude Code, Cursor, Antigravity, Muse, prime-agent, and
+Ollama. The run retains these selections across starts and resumes.
+
 ### Claude Code is the operator's own interactive session
 
 Claude Code is never run in print mode (`-p`), never billed to an API key, never has its
@@ -99,7 +105,8 @@ own state files read or rewritten, and never has the operator's settings, hooks,
 started through the operator's launcher on a terminal the lane wrapper owns
 (`harness/native_session.py`) and shown in its tmux window, where the operator can use it.
 
-- **Launcher.** `FACTORY_CLAUDE_LAUNCHER` names the command. Unset, it is `cl` when the
+- **Launcher.** A `claude` entry in the run's `FACTORY_AGENT_BIN` selects the executable.
+  Otherwise `FACTORY_CLAUDE_LAUNCHER` names the command. Unset, it is `cl` when the
   operator's login shell defines it, otherwise the `claude` executable. A shell function is
   run by the login shell (`$SHELL -l -c`), which sources the operator's profile itself. The
   API-billing variables are unset immediately before the launcher runs; none is ever set.
