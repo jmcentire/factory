@@ -27,11 +27,10 @@ def enabled(environ: Mapping[str, str]) -> bool:
 
 def claude(cwd: pathlib.Path, environ: Mapping[str, str]) -> bool:
     """Mark ``cwd`` trusted in the Claude Code profile the seat uses; True if it wrote."""
-    base = environ.get("CLAUDE_CONFIG_DIR")
-    home = environ.get("HOME")
-    if not base and not home:
+    root = environ.get("CLAUDE_CONFIG_DIR") or environ.get("HOME")
+    if not root:
         return False
-    path = pathlib.Path(base) / ".claude.json" if base else pathlib.Path(home) / ".claude.json"
+    path = pathlib.Path(root) / ".claude.json"
     # Never create or replace through a link a profile Claude Code has not written.
     if not path.is_file() or path.is_symlink():
         return False
@@ -64,6 +63,7 @@ def codex(executable: str, cwd: pathlib.Path, environ: Mapping[str, str], *,
                                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                stderr=subprocess.DEVNULL)
     assert process.stdin is not None and process.stdout is not None
+    stdin, stdout = process.stdin, process.stdout
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ)
     deadline = time.monotonic() + timeout
@@ -71,9 +71,9 @@ def codex(executable: str, cwd: pathlib.Path, environ: Mapping[str, str], *,
 
     def call(identifier: int, method: str, params: dict) -> dict:
         nonlocal buffer
-        process.stdin.write(json.dumps({"id": identifier, "method": method,
-                                        "params": params}).encode() + b"\n")
-        process.stdin.flush()
+        stdin.write(json.dumps({"id": identifier, "method": method,
+                                "params": params}).encode() + b"\n")
+        stdin.flush()
         while time.monotonic() < deadline:
             while b"\n" in buffer:
                 line, buffer = buffer.split(b"\n", 1)
@@ -83,7 +83,7 @@ def codex(executable: str, cwd: pathlib.Path, environ: Mapping[str, str], *,
                         raise ValueError(f"Codex refused {method}")
                     return value["result"]
             if selector.select(min(.1, max(0, deadline - time.monotonic()))):
-                chunk = os.read(process.stdout.fileno(), 65536)
+                chunk = os.read(stdout.fileno(), 65536)
                 if not chunk:
                     raise ValueError("Codex app-server exited")
                 buffer += chunk
