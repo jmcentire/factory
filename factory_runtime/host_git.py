@@ -67,7 +67,7 @@ _OVERRIDES: tuple[tuple[str, str], ...] = (
 )
 
 _MAX_ERROR_DETAIL_BYTES = 2000
-_OBJECT_ID = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+OBJECT_ID = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _REGULAR_MODES = {"100644": 0o644, "100755": 0o755}
 _SYMLINK_MODE = "120000"
 _GITLINK_MODE = "160000"
@@ -373,7 +373,7 @@ def resolve_commit_tree(
 ) -> str:
     """The tree of exactly ``commit``: a full object id that names itself, never a replacement."""
 
-    if not _OBJECT_ID.fullmatch(commit):
+    if not OBJECT_ID.fullmatch(commit):
         raise HostGitError("commit must be a full lowercase object id, never a ref or prefix")
     resolved = run_host_git(
         repository,
@@ -441,7 +441,7 @@ def _parse_entry(record: bytes) -> _Entry:
         text = raw_path.decode("utf-8")
     except (ValueError, UnicodeDecodeError) as exc:
         raise HostGitError("Git tree listing is malformed") from exc
-    if kind not in {"blob", "commit"} or not _OBJECT_ID.fullmatch(object_id):
+    if kind not in {"blob", "commit"} or not OBJECT_ID.fullmatch(object_id):
         raise HostGitError(f"Git tree listing has an unexpected entry for {text!r}")
     path = PurePosixPath(text)
     parts = path.parts
