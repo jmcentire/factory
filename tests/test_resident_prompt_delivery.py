@@ -42,6 +42,10 @@ def test_agy_seat_settings_allow_only_the_seat_harness_and_read_only_kindex(tmp_
     assert sorted(rule for rule in allow if rule.startswith("mcp(")) == sorted(
         f"mcp(kindex/{tool})" for tool in AGY_SEAT_KINDEX_TOOLS)
     assert settings["enableTerminalSandbox"] is False
+    # Git is read only through git_read.py: no rule names git itself, so `git -C X push`,
+    # `commit` or `config` cannot match (Antigravity rules are literal prefixes, no wildcard).
+    assert f"command(/py {tools / 'git_read.py'})" in allow
+    assert not any(rule.startswith("command(git") for rule in allow)
     assert not any("*" in rule or rule.startswith(("write_file(", "command(bash)"))
                for rule in allow)
     assert all(rule == "command(ls)" or rule.startswith(
@@ -58,3 +62,22 @@ def test_only_an_agy_seat_takes_seat_settings(tmp_path, monkeypatch):
     assert "--settings" not in resident_command("agy", "m", "", "the task", tmp_path)
     assert "--settings" not in resident_command("claude", "m", "", "task", tmp_path,
                                                 settings='{"a": 1}')
+
+
+def test_agy_seat_support_probes_once_and_falls_back(tmp_path):
+    from harness.run_record import agy_seat_support
+
+    calls = tmp_path / "calls"
+    for name, help_text in (("new", "--mode X --settings Y"), ("old", "--model only")):
+        program = tmp_path / name
+        program.write_text(f"#!/bin/sh\necho x >> {calls}\necho '{help_text}'\n")
+        program.chmod(0o755)
+    run = tmp_path / "run-new"
+    run.mkdir()
+    assert agy_seat_support(str(tmp_path / "new"), run) == ""
+    assert agy_seat_support(str(tmp_path / "new"), run) == ""  # kept; not probed again
+    assert calls.read_text().count("x") == 1
+    old = tmp_path / "run-old"
+    old.mkdir()
+    assert "does not list --settings or --mode" in agy_seat_support(str(tmp_path / "old"), old)
+    assert agy_seat_support(None, tmp_path / "run-none") == "agy is not on PATH"

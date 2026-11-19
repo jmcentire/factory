@@ -679,7 +679,7 @@ AGY_SEAT_KINDEX_TOOLS = ("search", "show", "context", "list_nodes", "watch_list"
 #: The harness programs a coordinator runs (prompts/orchestrate.md, the dispatcher loop and
 #: inbox_wake stop in the start prompt, status.sh in the field runs).
 AGY_SEAT_SCRIPTS = ("dispatcher.py", "run_record.py", "inbox_wake.py", "tmux_lane_message.sh",
-                    "status.sh")
+                    "status.sh", "git_read.py")
 
 
 def agy_seat_settings(repository: str, root: Path, tools: Path, python: str) -> str:
@@ -700,6 +700,41 @@ def agy_seat_settings(repository: str, root: Path, tools: Path, python: str) -> 
     return json.dumps({"trustedWorkspaces": [repository, str(root)],
                        "allowNonWorkspaceAccess": True, "enableTerminalSandbox": False,
                        "permissions": {"allow": allow}})
+
+
+def agy_seat_support(executable: str | None, root: Path) -> str:
+    """Empty when the installed Antigravity takes per-session ``--settings`` and ``--mode``
+    (neither is in its published CLI reference, and no seat contract probes them); otherwise
+    why not, and the seat starts as before. Probed once per run, kept in the run root."""
+
+    import subprocess
+
+    record = root / "agy-seat-support.json"
+    try:
+        kept = json.loads(record.read_text())
+        if kept.get("executable") == executable and isinstance(kept.get("reason"), str):
+            return kept["reason"]
+    except (OSError, ValueError):
+        pass
+    reason = "" if executable else "agy is not on PATH"
+    if executable:
+        try:
+            # A one-shot read of its help, not a session: Popen, apart from run() calls.
+            with subprocess.Popen([executable, "--help"], stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, text=True) as shown:
+                text, _ = shown.communicate(timeout=20)
+            # Whole flags only: every Antigravity lists --model, which contains "--mode".
+            missing = [flag for flag in ("--settings", "--mode")
+                       if not re.search(rf"(?<![\w-]){flag}(?![\w-])", text or "")]
+            if missing:
+                reason = f"{executable} --help does not list {' or '.join(missing)}"
+        except (OSError, subprocess.SubprocessError) as error:
+            reason = f"{executable} --help could not be read ({error})"
+    try:
+        write_new(record, json.dumps({"executable": executable, "reason": reason}).encode())
+    except OSError:
+        pass  # Kept only to probe once; a retry probes again.
+    return reason
 
 
 def resident_command(agent: str, model: str, effort: str, prompt: str, root: Path,
@@ -983,7 +1018,10 @@ def _start_locked(runs: Path, run: str) -> None:
             # helper script it writes for itself asks a person, as the field runs showed.
             prompt += (
                 f" Run harness programs as {sys.executable} {tools}/<program>, and read their "
-                "output directly: do not write or run helper scripts or python -c to parse it."
+                "output directly: do not write or run helper scripts or python -c to parse it. "
+                f"Read any repository's git history only with {sys.executable} "
+                f"{tools}/git_read.py -C <path> <log|show|diff|status|rev-parse|merge-base|"
+                "ls-files|branch --list> [args]; it runs the same git read without asking."
             )
         if agent == "kickoff" and role == "validator":
             brief = root / role / "BRIEF.md"
@@ -1005,10 +1043,19 @@ def _start_locked(runs: Path, run: str) -> None:
         # its own interactive session in its window. Nothing is typed into it: it reads its
         # inbox through its own dispatcher loop, which its per-session settings allow.
         native_stream = agent == "claude"
+        seat_settings = ""
         if agent == "agy":
-            print(f"Factory {run}: the {role} seat is Antigravity's own interactive session. "
-                  "It reads its inbox through its own dispatcher loop; its harness commands "
-                  "and read-only Kindex tools are allowed for this session only.")
+            selected_bin = agent_bin and "agy" in doc["agent_bin"]["entries"]
+            installed = str(Path(agent_bin) / "agy") if selected_bin else shutil.which("agy")
+            why = agy_seat_support(installed, root)
+            if why:
+                print(f"Factory {run}: the {role} seat is Antigravity's own interactive session, "
+                      f"started as before and worked by a person in its window: {why}.")
+            else:
+                seat_settings = agy_seat_settings(doc["repository"], root, tools, sys.executable)
+                print(f"Factory {run}: the {role} seat is Antigravity's own interactive session. "
+                      "It reads its inbox through its own dispatcher loop; its harness commands "
+                      "and read-only Kindex and git reads are allowed for this session only.")
         if native_stream:
             extra = ["--add-dir", str(root)]
             if os.environ.get("FACTORY_LANE_SANDBOX", "on") == "off":
@@ -1032,9 +1079,7 @@ def _start_locked(runs: Path, run: str) -> None:
             elif prompt_file.read_text() != prompt:
                 raise ValueError("retained initial coordinator prompt changed")
         else:
-            argv = resident_command(agent, model, effort, prompt, root, settings=(
-                agy_seat_settings(doc["repository"], root, tools, sys.executable)
-                if agent == "agy" else ""))
+            argv = resident_command(agent, model, effort, prompt, root, settings=seat_settings)
         if agent_bin and argv[0] in doc["agent_bin"]["entries"]:
             executable = str(Path(agent_bin) / argv[0])
         else:

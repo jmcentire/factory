@@ -871,14 +871,24 @@ and they are not the same thing:
     ended Antigravity session is not built. Unchanged: a later message is held for a
     person to enter and settles by its mark; a launch that requires a Signet guard is
     refused; `--review-every-minutes` and `--wrap-up-minutes` are refused for `agy`.
-- **Coordinator seats.** An Antigravity seat is allowed. It is not refused, and it is not
-  put on print mode: it starts as Antigravity's own interactive session in its window, by
-  the same seat command as before (`agy --add-dir <run> ... --prompt-interactive <prompt>`),
-  and is driven there by a person. Starting one prints a warning that wakes and messages
-  are not delivered into it: the earlier delivery was print mode fed over stdin, which is
-  never used, and no supported route replaces it yet. A wake addressed to such a seat is
-  reported `unsupported` and stays in the inbox. So an Antigravity seat works attended and
-  does not work unattended.
+- **Coordinator seats.** An Antigravity seat is allowed, never print mode: it is
+  Antigravity's own interactive session in its window. When the installed `agy --help`
+  lists `--settings` and `--mode` (probed once per run, kept in `agy-seat-support.json`),
+  it starts with `--mode accept-edits` and Antigravity's own per-session `--settings`
+  (never saved): the run's folders trusted, reads outside the workspace allowed, the
+  terminal sandbox off for this session (its sandbox refuses to start the runtime's
+  Python), and an allowlist of exactly the seat's harness programs under the runtime's
+  Python (`dispatcher.py`, `run_record.py`, `inbox_wake.py`, `git_read.py`),
+  `tmux_lane_message.sh`, `status.sh`, `ls`, and Kindex reads and session tags. Antigravity
+  rules are literal command prefixes with no wildcard, and each part of a compound command
+  is checked separately; git on the run's repositories is read through `git_read.py`, which
+  runs only `log`, `show`, `diff`, `status`, `rev-parse`, `merge-base`, `ls-files` and
+  `branch --list` with external diff, textconv, fsmonitor and hooks off. Every other
+  command asks a person. Nothing is typed into the seat: it reads its inbox through its
+  own `dispatcher.py --observe` loop, so a wake addressed to it is still reported
+  `unsupported` and the message is read from the inbox. Without those flags the seat
+  starts exactly as before (`agy --add-dir <run> ... --prompt-interactive <prompt>`),
+  attended, and the start says why.
 - **Not observed.** The name Antigravity gives the lane's server (`lane_kindex`, by its
   changelog), a model calling it, any tool-use hook, and a model turn in a continued
   conversation.
