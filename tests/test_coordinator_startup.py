@@ -664,3 +664,27 @@ def test_environment_github_auth_reaches_only_the_validator(launch, monkeypatch)
     for key, value in sentinels.items():
         assert validator[key] == value
         assert key not in orchestrator
+
+
+def test_certificate_trust_paths_reach_every_seat_only_when_opted_in(launch, monkeypatch):
+    # Seen on a teammate's machine: a Claude seat without its certificate bundle failed every
+    # API call with UNABLE_TO_GET_ISSUER_CERT_LOCALLY. Passing it is opt-in; nobody else changes.
+    _, _, _, capture, _, execute = launch
+    for key in ("NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE",
+                "CURL_CA_BUNDLE", "NIX_SSL_CERT_FILE", "FACTORY_PASS_CA_CERTS"):
+        monkeypatch.delenv(key, raising=False)
+    calls = capture()
+    baseline = {role: execute(calls, role)["env"] for role in ("validator", "orchestrator")}
+    monkeypatch.setenv("NODE_EXTRA_CA_CERTS", "/fixture/corporate ca.pem")
+    monkeypatch.setenv("NIX_SSL_CERT_FILE", "/fixture/nix bundle.crt")
+    monkeypatch.setenv("SSL_CERT_FILE", "")
+    calls = capture()
+    for role in ("validator", "orchestrator"):
+        assert execute(calls, role)["env"] == baseline[role]
+    monkeypatch.setenv("FACTORY_PASS_CA_CERTS", "1")
+    calls = capture()
+    for role in ("validator", "orchestrator"):
+        env = execute(calls, role)["env"]
+        assert {k: v for k, v in env.items() if k not in baseline[role]} == {
+            "FACTORY_PASS_CA_CERTS": "1", "NODE_EXTRA_CA_CERTS": "/fixture/corporate ca.pem",
+            "NIX_SSL_CERT_FILE": "/fixture/nix bundle.crt"}

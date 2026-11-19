@@ -95,6 +95,7 @@ else
   factory_load_context "$RUN" "$RUNS_ARG"
 fi
 factory_resolve_tmux
+factory_ca_env
 ROOT="$FACTORY_CONTROL_ROOT"
 TMUX_ROOT="$ROOT/tmux-lanes"
 LAUNCHES="$TMUX_ROOT/$SLOT-launch.jsonl"
@@ -799,6 +800,7 @@ if [ "$PANE_DEAD" = "0" ]; then
   # Queue is a typed Codex-session operation, not terminal text injection.
   env -i HOME="$SAFE_HOME" USER="$SAFE_USER" PATH="$SAFE_PATH" TMPDIR="$SAFE_TMPDIR" \
     TERM="$SAFE_TERM" SHELL="$SAFE_SHELL" LANG="$SAFE_LANG" CODEX_HOME="$SAFE_CODEX_HOME" \
+    ${FACTORY_CA_ENV[@]+"${FACTORY_CA_ENV[@]}"} \
     codex $LOCAL_ARGS queue --thread "$THREAD_ID" --message "$MESSAGE" >/dev/null
   echo "lane-message: queued $MESSAGE_ID to $RUN:$SLOT, NOT delivered: it reaches the lane at its next turn boundary, with no receipt"
   exit 0
@@ -823,6 +825,10 @@ elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
   printf -v ENV_PREFIX 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q FACTORY_RUNS_DIR=%q HARNESS_RUN_ROOT=%q' \
     "$SAFE_HOME" "$SAFE_USER" "$LANE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
     "$FACTORY_RUNS_ROOT" "$ROOT"
+  for CA_SETTING in ${FACTORY_CA_ENV[@]+"${FACTORY_CA_ENV[@]}"}; do
+    printf -v CA_QUOTED ' %q' "$CA_SETTING"
+    ENV_PREFIX+="$CA_QUOTED"
+  done
   # The restarted wrapper and its watcher are trusted Python programs started from this
   # rebuilt environment, the wrapper in the lane's clone: they start isolated, as every
   # helper of this script does, and the wrapper keeps both variables from the provider.

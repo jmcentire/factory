@@ -110,6 +110,12 @@ started through the operator's launcher on a terminal the lane wrapper owns
   operator's login shell defines it, otherwise the `claude` executable. A shell function is
   run by the login shell (`$SHELL -l -c`), which sources the operator's profile itself. The
   API-billing variables are unset immediately before the launcher runs; none is ever set.
+- **Certificates (opt-in).** Seats and lanes start from a rebuilt environment that drops
+  certificate settings. With `FACTORY_PASS_CA_CERTS=1` exported before the run starts,
+  `NIX_SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `SSL_CERT_DIR`,
+  `REQUESTS_CA_BUNDLE` and `CURL_CA_BUNDLE`, when set, reach every seat, lane and resume.
+  Use it when a seat fails with `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`. Without the switch,
+  nothing changes.
 - **What is added.** `--name=<run>-<slot>`, `--session-id <uuid>` (or `--resume <uuid>` to
   continue), `--settings <file>` carrying four observation hooks beside the operator's own,
   the assigned `--model`/`--effort` if any, the lane's Kindex by `--mcp-config`, and the

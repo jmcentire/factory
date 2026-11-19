@@ -50,6 +50,20 @@ factory_resolve_tmux() {
 # Every shell operation is addressed to this run's private server, including teardown.
 tmux() { command "${FACTORY_TMUX:-tmux}" -L "${FACTORY_TMUX_SOCKET:?load the run before using tmux}" "$@"; }
 
+# Certificate-trust paths (e.g. a TLS-inspecting network's CA bundle), opt-in with
+# FACTORY_PASS_CA_CERTS=1: seats start from a rebuilt environment that otherwise drops them.
+# The switch travels with them so every later seat and resume makes the same choice.
+FACTORY_CA_VARS=(NODE_EXTRA_CA_CERTS SSL_CERT_FILE SSL_CERT_DIR REQUESTS_CA_BUNDLE CURL_CA_BUNDLE NIX_SSL_CERT_FILE)
+factory_ca_env() {
+  local var
+  FACTORY_CA_ENV=()
+  [ "${FACTORY_PASS_CA_CERTS:-}" = 1 ] || return 0
+  FACTORY_CA_ENV=(FACTORY_PASS_CA_CERTS=1)
+  for var in "${FACTORY_CA_VARS[@]}"; do
+    [ -z "${!var:-}" ] || FACTORY_CA_ENV+=("$var=${!var}")
+  done
+}
+
 factory_seat_env() {
   local var
   for var in FACTORY_RUNS_DIR FACTORY_HARNESS_ROOT FACTORY_CONTROL_ROOT FACTORY_TMUX_SOCKET \

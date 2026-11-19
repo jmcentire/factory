@@ -582,6 +582,38 @@ def test_claude_sign_in_is_checked_in_the_operators_profile(tmp_path: Path) -> N
     assert launched.returncode == 0, launched.stdout + launched.stderr
 
 
+
+def test_certificate_trust_paths_reach_the_lane_only_when_opted_in(tmp_path: Path) -> None:
+    # Shawn, 2026-11-19: a lane without its certificate bundle failed every API call
+    # (UNABLE_TO_GET_ISSUER_CERT_LOCALLY), including its sign-in check. Opt-in only.
+    bundle = tmp_path / "corporate ca.pem"
+    commands = {}
+    for name, env in (("on", {"NODE_EXTRA_CA_CERTS": str(bundle), "FACTORY_PASS_CA_CERTS": "1"}),
+                      ("off", {"NODE_EXTRA_CA_CERTS": str(bundle)}), ("unset", {})):
+        lanes = Lanes(tmp_path / name)
+        _stub(lanes.stub, "claude", (
+            'if [ "${1:-}" = --help ]; then echo "--name --effort --session-id --resume --settings '
+            '--mcp-config --add-dir --model"; exit 0; fi\n'
+            'if [ "${1:-}" = --version ]; then echo "2.1.323 (Claude Code)"; exit 0; fi\n'
+            'if [ "${1:-}" = auth ]; then\n'
+            f'  if [ "${{NODE_EXTRA_CA_CERTS:-}}" = "{bundle}" ] || [ {name} != on ]; then\n'
+            '    echo \'{"loggedIn": true, "authMethod": "claude.ai"}\'\n'
+            "  else echo '{\"loggedIn\": false}'; fi\n"
+            '  exit 0\nfi\n'
+            "exit 0\n"
+        ))
+        launched = lanes.lane("coder", "--agent", "claude", "--model", "claude-opus-5-5", env=env)
+        assert launched.returncode == 0, launched.stdout + launched.stderr
+        [commands[name]] = lanes.windows("coder")
+    on = commands["on"]
+    assert f"NODE_EXTRA_CA_CERTS={bundle}".replace(" ", "\\ ") in on
+    assert " FACTORY_PASS_CA_CERTS=1" in on
+    assert "SSL_CERT_FILE" not in on
+    # Without the switch the lane command carries none of it, whatever the caller exported.
+    for name in ("off", "unset"):
+        for variable in ("NODE_EXTRA_CA_CERTS", "FACTORY_PASS_CA_CERTS", "SSL_CERT_FILE"):
+            assert variable not in commands[name]
+
 def test_signed_out_cursor_agent_is_refused(tmp_path: Path) -> None:
     lanes = Lanes(tmp_path)
     _cursor_stub(lanes.stub, signed_in=False)
