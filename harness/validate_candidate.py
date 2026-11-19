@@ -237,6 +237,9 @@ def retain_result(root: Path, result_root: Path, result: dict[str, Any]) -> None
 #: Lockfiles that pin a Node dependency install; a byte-identical one makes an install reusable.
 NODE_LOCKFILES = ("pnpm-lock.yaml", "package-lock.json", "npm-shrinkwrap.json", "yarn.lock",
                   "bun.lock", "bun.lockb")
+#: Ignored directories a repository's setup generates; only these are carried, never other
+#: ignored files (environment files, credentials).
+GENERATED_DIRS = ("__generated__",)
 
 
 def reuse_dependencies(candidate: Path, source: Path) -> dict[str, Any]:
@@ -276,11 +279,6 @@ def reuse_dependencies(candidate: Path, source: Path) -> dict[str, Any]:
             "copied": copied, "generated": generated}
 
 
-#: Ignored directories a repository's setup generates; only these are carried, never other
-#: ignored files (environment files, credentials).
-GENERATED_DIRS = ("__generated__",)
-
-
 def _clone_missing(installed: Path, target: Path) -> bool:
     """Copy-on-write clone a real directory the candidate lacks; False when there is none."""
     if (not installed.is_dir() or installed.is_symlink() or target.exists()
@@ -294,10 +292,14 @@ def _clone_missing(installed: Path, target: Path) -> bool:
     return True
 
 
-def _ignored_by(repository: Path, path: Path) -> bool:
-    """Whether the repository's own ignore rules cover ``path`` (a run under its .factory)."""
+def _ignored(path: Path) -> bool:
+    """Whether the repository that contains ``path`` ignores it (a run under <target>/.factory).
+
+    Asked of that repository, not --repo: the documented --repo is the run's own checkout under
+    <target>/.factory/checkouts, a different repository. False outside any repository."""
     try:
-        run_host_git(repository, ["check-ignore", "-q", str(path)])
+        top = run_host_git(path, ["rev-parse", "--show-toplevel"]).decode().strip()
+        run_host_git(top, ["check-ignore", "-q", str(path)])
     except HostGitError:
         return False
     return True
@@ -328,11 +330,12 @@ def validate(
     mark_no_index(result_root)
     candidate = result_root / "candidate"
     if (any((repository / name).is_file() for name in NODE_LOCKFILES)
-            and _ignored_by(repository, result_root)):
+            and _ignored(result_root)):
         # Ignore-aware tools (oxlint, eslint) skip every file of a candidate inside the
         # repository's ignored .factory tree, so a Node candidate is built outside it.
-        # shortcut: the scratch copy outlives `factory cleanup` of the run;
-        # clean TMPDIR if it grows.
+        # run-checkout.sh clean removes it with the run's other validation copies.
+        # shortcut: on Linux a tmpfs TMPDIR turns the node_modules clone into a full copy;
+        # place the scratch on the target's filesystem if Linux runs need it.
         scratch = Path(tempfile.mkdtemp(prefix="factory-candidate-"))
         mark_no_index(scratch)
         candidate.symlink_to(scratch / "candidate")
@@ -412,7 +415,8 @@ def validate(
         env.update(npm_config_verify_deps_before_run="false",
                    pnpm_config_verify_deps_before_run="false")
         # Corepack's cache holds the pinned package manager the source install already used.
-        corepack = Path(os.environ.get("COREPACK_HOME") or Path.home() / ".cache/node/corepack")
+        cache = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+        corepack = Path(os.environ.get("COREPACK_HOME") or Path(cache) / "node/corepack")
         if corepack.is_dir():
             env["COREPACK_HOME"] = str(corepack)
     with (result_root / "output.log").open("xb") as stream:
@@ -480,6 +484,8 @@ def main() -> int:
         if dependencies.get("status") == "reused":
             print(f"Dependencies: copied {', '.join(dependencies['copied'])} from "
                   f"{dependencies['source']} (lockfiles match)")
+            if dependencies.get("generated"):
+                print(f"Generated code: copied {', '.join(dependencies['generated'])}")
         elif dependencies.get("status") == "not-reused":
             print(f"Dependencies: not reused ({dependencies['reason']}); "
                   "the check command must install them")

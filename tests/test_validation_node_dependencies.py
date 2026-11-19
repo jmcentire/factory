@@ -168,3 +168,41 @@ def test_ignored_generated_code_comes_with_a_reused_install_but_nothing_else(tmp
     assert code == 0, output
     assert output == "GENERATED\n"
     assert result["dependencies"]["generated"] == ["services/app/__generated__"]
+
+
+def test_a_run_checkout_repo_under_the_targets_ignored_factory_moves_the_candidate(tmp_path):
+    # The documented --repo is <target>/.factory/checkouts/<run>, a separate repository; the
+    # runs tree <target>/.factory/runs is ignored by <target>, not by that checkout.
+    _, source, commit = _workspace(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    subprocess.run(["git", "init", "-q", str(target)], check=True)
+    (target / ".git/info/exclude").write_text("/.factory/\n")
+    checkout = target / ".factory/checkouts/task"
+    subprocess.run(["git", "clone", "-q", str(source), str(checkout)], check=True)
+    subprocess.run(["cp", "-RP", str(source / "node_modules"), str(checkout / "node_modules")],
+                   check=True)
+    runs = target / ".factory/runs"
+    run_record.create(runs, "task", checkout, b"Check the workspace")
+    code, result, output = _check(runs, checkout, commit,
+                                  f'! git -C "{target}" check-ignore -q "$PWD" 2>/dev/null && '
+                                  'cat packages/lib/index.js')
+    assert code == 0, output
+    assert output == "CANDIDATE\n"
+    assert not Path(result["candidate_path"]).is_relative_to(target)
+    assert result["dependencies"]["status"] == "reused"
+
+
+def test_corepack_cache_falls_back_to_xdg_then_home(tmp_path, monkeypatch):
+    runs, repository, commit = _workspace(tmp_path)
+    monkeypatch.delenv("COREPACK_HOME", raising=False)
+    xdg = tmp_path / "xdg"
+    (xdg / "node/corepack").mkdir(parents=True)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(xdg))
+    code, _, output = _check(runs, repository, commit, 'printf %s "$COREPACK_HOME"')
+    assert code == 0 and output == str(xdg / "node/corepack")
+    explicit = tmp_path / "explicit"
+    explicit.mkdir()
+    monkeypatch.setenv("COREPACK_HOME", str(explicit))
+    code, _, output = _check(runs, repository, commit, 'printf %s "$COREPACK_HOME"')
+    assert code == 0 and output == str(explicit)
