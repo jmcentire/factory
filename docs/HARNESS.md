@@ -220,9 +220,12 @@ candidate guard were exercised on temporary repositories, not through a live lan
   denied") and `--approve-mcps` ("automatically approve all MCP servers"). Every turn passes
   `--trust`, which trusts only the lane's own clone (`--workspace`); on interactive
   cursor-agent 2026.11.19 it removes the workspace-trust question, although Cursor's help
-  describes it as headless-only. If Cursor asks to approve the lane's MCP server, the
-  operator answers in the lane's window (`agent mcp enable lane-kindex`, run in the lane's
-  clone, approves that one server). A launch prints this as "this start asks you" and
+  describes it as headless-only. Before launch the Factory runs `agent mcp enable
+  lane-kindex` in the lane's clone, which records an approval for that one server and that
+  workspace only (cursor-agent 2026.11.19 writes it to
+  `~/.cursor/projects/<workspace>/mcp-approvals.json`, as pressing approve would); every other
+  server still asks. If the command is missing, fails or hangs, the launch continues and the
+  operator answers in the lane's window. A launch prints this as "this start asks you" and
   records it as `start_requires`.
 - **The two rules the Factory adds.** Cursor's documented per-project permission file is
   `.cursor/cli.json` with `permissions.allow` and an empty `permissions.deny`, which

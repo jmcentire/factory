@@ -890,9 +890,10 @@ HARNESSES: Mapping[str, Harness] = {
             "The Factory adds two project rules in the clone's .cursor/cli.json: "
             f"`Mcp({CURSOR_LANE_SERVER}:*)` for the lane's own Kindex and `Shell(*)`, so shell "
             "commands run without a question each; your own deny rules and Signet's hooks "
-            "still apply, and no --force or --approve-mcps is passed. If Cursor asks to approve "
-            f"the lane's MCP server `{CURSOR_LANE_SERVER}`, answer it in the lane's window "
-            f"(`agent mcp enable {CURSOR_LANE_SERVER}` in the clone approves that one server). "
+            "still apply, and no --force or --approve-mcps is passed. Before launch the Factory "
+            f"runs `agent mcp enable {CURSOR_LANE_SERVER}` in the clone, approving that one "
+            "server for this workspace only; if that fails and Cursor asks, answer it in the "
+            "lane's window. "
             "A commit-msg hook in the clone drops Cursor's co-author trailer, unless the clone "
             "has its own commit-msg hook. "
             "Until the session reports starting it is `starting` and nothing is typed to it.")),

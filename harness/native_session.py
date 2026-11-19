@@ -641,6 +641,20 @@ def install_cursor_commit_hook(workspace: pathlib.Path) -> None:
     hook.chmod(0o755)
 
 
+def approve_lane_kindex(executable: str, workspace: pathlib.Path) -> None:
+    """Approve the lane's own Kindex server, as pressing approve in its pane would.
+
+    Cursor records it for this workspace only (cursor-agent 2026.11.19:
+    ``~/.cursor/projects/<workspace>/mcp-approvals.json``); no other server is approved.
+    Best effort: if the command is missing, fails or hangs, the lane asks as before."""
+
+    try:
+        subprocess.run([executable, "mcp", "enable", "lane-kindex"], cwd=workspace,
+                       stdin=subprocess.DEVNULL, capture_output=True, timeout=20, check=False)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def cursor_plan(arguments: Sequence[str], *, executable: str, directory: pathlib.Path,
                 slot: str, workspace: pathlib.Path, python: str = sys.executable,
                 prompt: str = "", message_id: str = "") -> Plan:
@@ -713,6 +727,8 @@ def cursor_plan(arguments: Sequence[str], *, executable: str, directory: pathlib
     manifest = directory / f"{slot}-project-files.json"
     install_project_files(workspace, files, manifest)
     install_cursor_commit_hook(workspace)
+    if CURSOR_MCP in files:
+        approve_lane_kindex(executable, workspace)
     try:
         offset = journal.stat().st_size
     except FileNotFoundError:
