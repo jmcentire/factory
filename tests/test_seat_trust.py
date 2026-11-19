@@ -88,3 +88,57 @@ def test_codex_trusts_the_folder_and_only_its_own_project_hooks(tmp_path: pathli
 def test_off_unless_asked_for() -> None:
     assert not seat_trust.enabled({}) and not seat_trust.enabled({"FACTORY_SEAT_TRUST": "0"})
     assert seat_trust.enabled({"FACTORY_SEAT_TRUST": "1"})
+
+
+def _fake_codex(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
+    writes = tmp_path / "writes.jsonl"
+    fake = tmp_path / "bin" / "codex"
+    fake.parent.mkdir()
+    fake.write_text("#!" + sys.executable + "\n" + textwrap.dedent(f"""
+        import json, sys
+        if sys.argv[1:] != ["app-server", "--stdio"]:
+            sys.exit(0)  # the coordinator's own session: nothing to do here
+        for line in sys.stdin:
+            request = json.loads(line)
+            if "id" not in request:
+                continue
+            if request["method"] == "config/value/write":
+                open({str(writes)!r}, "a").write(json.dumps(request["params"]) + "\\n")
+            listed = {{"data": [{{"cwd": ".", "hooks": []}}]}}
+            result = listed if request["method"] == "hooks/list" else {{"status": "ok"}}
+            print(json.dumps({{"id": request["id"], "result": result}}), flush=True)
+        """))
+    fake.chmod(0o755)
+    return fake, writes
+
+
+def test_terminal_codex_coordinator_trusts_its_repository_only_when_asked(
+        tmp_path: pathlib.Path, monkeypatch) -> None:
+    # Seen in a run: a Codex Validator (a terminal coordinator seat) stopped at Codex's
+    # "Trust this folder?" although FACTORY_SEAT_TRUST=1 was set.
+    from harness import lane_agent
+
+    fake, writes = _fake_codex(tmp_path)
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    for name in ("HOME", "CODEX_HOME"):
+        monkeypatch.setenv(name, str(tmp_path / "home"))
+    monkeypatch.chdir(repository)
+    monkeypatch.delenv("FACTORY_TMUX_SOCKET", raising=False)
+
+    def start(switch: str | None) -> None:
+        if switch is None:
+            monkeypatch.delenv("FACTORY_SEAT_TRUST", raising=False)
+        else:
+            monkeypatch.setenv("FACTORY_SEAT_TRUST", switch)
+        assert lane_agent.main(["run", "--slot", "validator", "--terminal",
+                                "--log", str(tmp_path / "lane.log"),
+                                "--exits", str(tmp_path / "exits.jsonl"),
+                                "--", str(fake)]) == 0
+
+    start(None)
+    start("0")
+    assert not writes.exists()
+    start("1")
+    folder = json.loads(writes.read_text().splitlines()[0])
+    assert folder["value"] == {str(repository.resolve()): {"trust_level": "trusted"}}

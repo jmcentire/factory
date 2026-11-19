@@ -1090,6 +1090,17 @@ def run_lane(
             native_session.write_bounded(1, marker.encode())
             return refused
         argv = list(native_plan.argv)
+    if terminal and not native and pathlib.Path(argv[0]).name == "codex":
+        # A Codex coordinator seat runs on the pane's terminal, not the native path above,
+        # so its folder (the run's repository) is trusted here, under the same switch.
+        import seat_trust
+
+        if seat_trust.enabled(os.environ):
+            try:
+                seat_trust.codex(argv[0], pathlib.Path.cwd(), child_env)
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                _append(log, f"lane-agent: folder not pre-trusted ({error}); the agent "
+                             "asks its own trust question\n".encode())
     if native and chosen is not None and chosen.dialect in ("muse", "agy"):
         # A hosted session's host is trusted and stays outside the boundary, as this wrapper
         # does; it puts only the provider's server inside (protocol_host). Wrapping the host
