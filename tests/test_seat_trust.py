@@ -28,7 +28,8 @@ def test_claude_trusts_only_the_seat_folder_and_keeps_the_rest(tmp_path: pathlib
     assert seat_trust.claude(lane, {"HOME": str(tmp_path)}) is False
 
 
-def test_claude_profile_dir_is_used_and_absent_or_linked_profiles_are_left(tmp_path: pathlib.Path) -> None:
+def test_claude_profile_dir_is_used_and_absent_or_linked_profiles_are_left(
+        tmp_path: pathlib.Path) -> None:
     lane = tmp_path / "lane"
     lane.mkdir()
     assert seat_trust.claude(lane, {"HOME": str(tmp_path)}) is False
@@ -71,7 +72,8 @@ def test_codex_trusts_the_folder_and_only_its_own_project_hooks(tmp_path: pathli
                 continue
             if request["method"] == "config/value/write":
                 open(writes, "a").write(json.dumps(request["params"]) + "\\n")
-            result = {{"data": [{{"cwd": ".", "hooks": hooks}}]}} if request["method"] == "hooks/list" else {{"status": "ok"}}
+            listed = {{"data": [{{"cwd": ".", "hooks": hooks}}]}}
+            result = listed if request["method"] == "hooks/list" else {{"status": "ok"}}
             print(json.dumps({{"id": request["id"], "result": result}}), flush=True)
         """))
     fake.chmod(0o755)
