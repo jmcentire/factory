@@ -26,7 +26,7 @@ include = ["factory_core*", "factory_runtime*"]
 
 [tool.setuptools.package-data]
 factory_core = ["schemas/*.json"]
-factory_runtime = ["schemas/*.json"]
+factory_runtime = ["schemas/*.json", "BUILD_REVISION"]
 
 [tool.ruff]
 line-length = 100

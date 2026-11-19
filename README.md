@@ -241,8 +241,13 @@ observations to the resident Orchestrator. Select it explicitly per run; it gran
 
 `factory version --json` reports the installed builder name/package version, Factory Git revision
 and dirty state (when available), harness schema and Python version. `factory --version`
-is the short form. New ordinary runs retain this identity as `factory_version` in
-`harness.json`, separately from the target repository revision. Older records are
+is the short form. A Git checkout reports its own revision and dirty state. Outside a
+checkout, a package can carry a full lowercase Git object name in
+`factory_runtime/BUILD_REVISION`. The package reports that revision as clean without
+running Git. Without a checkout or a stamp the revision is unknown.
+
+New ordinary runs retain this identity as `factory_version` in `harness.json`,
+separately from the target repository revision. Older records are
 unknown, not evidence that a user ran the latest Factory. Use
 `python harness/run_record.py provenance --runs RUNS --run RUN` to render that run's
 `Built-By`/`FactoryRun` commit trailers and `PR built by NAME vVERSION` line. Adding
@@ -379,8 +384,13 @@ retained launcher when executing the same harness steps.
 
 For a new installer binary release, first merge the tested source, then create
 and push the intended `v*` tag and publish its GitHub release with the Factory
-wheel/sdist assets through the existing release process. The Factory setup
-workflow runs on the published release and attaches its four installer binaries
+wheel/sdist assets through the existing release process. To embed the revision in those
+assets, resolve the release tag to a full commit ID and export that exact commit with
+`git archive` into a fresh staging directory. Write the ID followed by a newline to
+`factory_runtime/BUILD_REVISION` in that directory, then run
+`python -m build --sdist --wheel` there. Both artifacts carry the stamp.
+
+The Factory setup workflow runs on the published release and attaches its four installer binaries
 and `checksums.txt` to that existing release. It never creates a competing release.
 Check that workflow succeeds before announcing the installer. Runtime-only
 releases without installer assets are ignored by installer update notices.

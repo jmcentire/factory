@@ -8,6 +8,9 @@ dist/
 .venv/
 venv/
 
+# A packager's revision stamp (see README, "Run storage and build identity"); never committed
+factory_runtime/BUILD_REVISION
+
 # Pinned external tools built by `make tessera`
 .tools/
 
