@@ -14,7 +14,7 @@ import pytest
 
 from harness import run_record
 from tests.test_coordinator_startup import launch as launch
-from tests.test_harness_scripts import HARNESS, _ollama_stub, ordinary_message_fixture, run
+from tests.test_harness_scripts import HARNESS, ordinary_message_fixture, run
 
 CONTEXT = Path(__file__).resolve().parents[1] / "harness/run_context.sh"
 REPORT = (
@@ -234,7 +234,7 @@ def test_a_live_ollama_lane_queues_through_the_recorded_codex_entry(tmp_path, mo
     monkeypatch.setenv("FACTORY_AGENT_BIN", str(wrapper.parent))
     operator, root, env, _ = ordinary_message_fixture(tmp_path)
     binary = tmp_path / "factory-bin"
-    _ollama_stub(binary, available=True)
+    executable(binary / "ollama", '#!/bin/sh\n[ "$1" = show ] && [ "$2" = chosen-local:latest ]\n')
     # The tmux stand-in reports a live pane. Queueing itself runs the chosen executable.
     tmux = binary / "tmux"
     tmux.write_text(tmux.read_text().replace('printf "1\\n"', 'printf "0\\n"'))
