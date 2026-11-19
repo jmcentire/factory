@@ -672,29 +672,33 @@ def _holds(rows: bytes, sender: str, text: str, digest: str | None = None) -> bo
     return False
 
 
-#: The read-only Kindex tools a coordinator calls (observed on Antigravity seats in two runs,
-#: each asking a person every time). Writes still ask.
-AGY_SEAT_KINDEX_TOOLS = ("search", "show", "context", "list_nodes", "watch_list")
+#: The Kindex tools a coordinator calls (observed on Antigravity seats in two runs, each asking
+#: a person every time): reads and its own session tag. Other writes still ask.
+AGY_SEAT_KINDEX_TOOLS = ("search", "show", "context", "list_nodes", "watch_list",
+                         "tag_start", "tag_update", "tag_resume")
 #: The harness programs a coordinator runs (prompts/orchestrate.md, the dispatcher loop and
-#: inbox_wake stop in the start prompt).
-AGY_SEAT_SCRIPTS = ("dispatcher.py", "run_record.py", "inbox_wake.py", "tmux_lane_message.sh")
+#: inbox_wake stop in the start prompt, status.sh in the field runs).
+AGY_SEAT_SCRIPTS = ("dispatcher.py", "run_record.py", "inbox_wake.py", "tmux_lane_message.sh",
+                    "status.sh")
 
 
 def agy_seat_settings(repository: str, root: Path, tools: Path, python: str) -> str:
     """Antigravity's own per-session settings (`--settings`, never saved) for a coordinator
-    seat: trust the run's folders, read outside the workspace, and allow exactly the seat's
-    harness commands and read-only Kindex tools, so its own polling loop runs with nobody at
-    the pane. Nothing else is granted; anything not listed still asks."""
+    seat, so its dispatcher loop (which is how it reads its inbox) runs with nobody at the pane.
 
-    allow = [f"mcp(kindex/{tool})" for tool in AGY_SEAT_KINDEX_TOOLS]
+    Its terminal sandbox cannot start this runtime's Python ("operation not permitted"), and
+    Auto mode runs an allowed command inside it, so the seat runs in accept-edits mode with the
+    sandbox off (resident_command): exactly the commands listed here run without asking, as a
+    person approved them in the field runs; every other command asks. It trusts the run's
+    folders and reads outside the workspace (Factory's prompts, the lane clones it reviews)."""
+
+    allow = [f"mcp(kindex/{tool})" for tool in AGY_SEAT_KINDEX_TOOLS] + ["command(ls)"]
     for script in AGY_SEAT_SCRIPTS:
         path = tools / script
         allow += ([f"command(bash {path})", f"command({path})"] if script.endswith(".sh")
                   else [f"command({python} {path})"])
-    # Reads outside the workspace: Factory's own prompts and the lane clones it reviews, whose
-    # paths the Validator chooses per run. Writes outside the workspace still ask.
     return json.dumps({"trustedWorkspaces": [repository, str(root)],
-                       "allowNonWorkspaceAccess": True,
+                       "allowNonWorkspaceAccess": True, "enableTerminalSandbox": False,
                        "permissions": {"allow": allow}})
 
 
@@ -726,7 +730,8 @@ def resident_command(agent: str, model: str, effort: str, prompt: str, root: Pat
         effort_args = ["--effort", effort] if effort else []
         head = [agent, "--add-dir", str(root),
                 *(["--dangerously-skip-permissions"] if unrestricted else []),
-                *(["--settings", settings] if agent == "agy" and settings else []),
+                *(["--mode", "accept-edits", "--settings", settings]
+                  if agent == "agy" and settings else []),
                 *model_args, *effort_args]
         return [*head, *(["--prompt-interactive"] if agent == "agy" else ["--"]), prompt]
     if agent == "muse":
