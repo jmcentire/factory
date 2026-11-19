@@ -978,6 +978,13 @@ def _start_locked(runs: Path, run: str) -> None:
                 "Begin with {}; retain and pass the returned cursors to the next call. "
                 "Keep observing and acting on concrete findings until task completion."
             )
+        if agent == "agy":
+            # Only the harness commands are allowed for this seat (agy_seat_settings); a
+            # helper script it writes for itself asks a person, as the field runs showed.
+            prompt += (
+                f" Run harness programs as {sys.executable} {tools}/<program>, and read their "
+                "output directly: do not write or run helper scripts or python -c to parse it."
+            )
         if agent == "kickoff" and role == "validator":
             brief = root / role / "BRIEF.md"
             try:
