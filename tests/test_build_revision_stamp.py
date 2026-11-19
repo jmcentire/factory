@@ -1,5 +1,7 @@
 """A packaged Factory identifies its revision from the packager's stamp, not from Git."""
 
+import subprocess
+
 import pytest
 
 from factory_runtime import host_git, version
@@ -42,3 +44,25 @@ def test_a_stamp_that_is_not_one_full_revision_is_refused_by_name(stamp, content
 def test_without_a_stamp_a_package_reports_unknown(stamp):
     identity = version.build_identity()
     assert (identity["revision"], identity["dirty"]) == (None, None)
+
+
+def test_a_checkout_reports_live_git_identity_even_with_an_invalid_stamp(stamp, tmp_path):
+    subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)
+    subprocess.run(
+        [
+            "git", "-C", str(tmp_path), "-c", "user.name=Fixture", "-c",
+            "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false",
+            "-c", "core.hooksPath=/dev/null",
+            "commit", "--allow-empty", "--quiet", "-m", "Fixture",
+        ],
+        check=True,
+    )
+    revision = subprocess.check_output(
+        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"], text=True,
+    ).strip()
+    (tmp_path / "pyproject.toml").touch()
+    stamp.write_bytes(b"\xff")
+
+    identity = version.build_identity()
+
+    assert (identity["revision"], identity["dirty"]) == (revision, True)
