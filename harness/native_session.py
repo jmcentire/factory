@@ -620,7 +620,8 @@ def remove_project_files(manifest: pathlib.Path) -> list[str]:
 #: in the operator's own configuration: a project ``.cursor/cli.json`` refuses the key.
 CURSOR_COAUTHOR = "Co-authored-by: Cursor <cursoragent@cursor.com>"
 CURSOR_COMMIT_HOOK = ("#!/bin/sh\n"
-                      "# Written by the Factory for a Cursor lane: drops Cursor's co-author trailer.\n"
+                      "# Written by the Factory for a Cursor lane: "
+                      "drops Cursor's co-author trailer.\n"
                       f"grep -v -x '{CURSOR_COAUTHOR}' \"$1\" > \"$1.factory\" || true\n"
                       "mv \"$1.factory\" \"$1\"\n")
 
