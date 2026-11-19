@@ -12,6 +12,7 @@ import datetime as dt
 import importlib
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -232,6 +233,44 @@ def retain_result(root: Path, result_root: Path, result: dict[str, Any]) -> None
         ) from error
 
 
+#: Lockfiles that pin a Node dependency install; a byte-identical one makes an install reusable.
+NODE_LOCKFILES = ("pnpm-lock.yaml", "package-lock.json", "npm-shrinkwrap.json", "yarn.lock",
+                  "bun.lock", "bun.lockb")
+
+
+def reuse_dependencies(candidate: Path, source: Path) -> dict[str, Any]:
+    """Copy the source checkout's installed node_modules into the candidate when its lockfiles
+    match, so checks run without a package registry or a package manager install.
+
+    Copies, not links: a linked node_modules resolves workspace packages to the source
+    checkout's files, not the candidate's. A copy keeps its relative links inside the candidate.
+    Copy-on-write clones where the filesystem has them. Nothing happens for a repository with
+    no Node lockfile."""
+    locks = [name for name in NODE_LOCKFILES if (candidate / name).is_file()]
+    if not locks:
+        return {"status": "not-node"}
+    for name in locks:
+        installed_lock = source / name
+        if not installed_lock.is_file() or installed_lock.read_bytes() != (candidate / name).read_bytes():
+            return {"status": "not-reused", "reason": f"{name} differs from the source checkout"}
+    copied = []
+    for manifest in sorted(candidate.rglob("package.json")):
+        relative = manifest.parent.relative_to(candidate)
+        installed, target = source / relative / "node_modules", manifest.parent / "node_modules"
+        if (installed.is_dir() and not installed.is_symlink()
+                and not target.exists() and not target.is_symlink()):
+            clone = (["cp", "-cRP"] if sys.platform == "darwin"
+                     else ["cp", "-a", "--reflink=auto"])
+            if subprocess.run([*clone, str(installed), str(target)],
+                              capture_output=True).returncode:
+                shutil.rmtree(target, ignore_errors=True)  # a partial clone, in the candidate
+                subprocess.run(["cp", "-RP", str(installed), str(target)], check=True,
+                               capture_output=True)  # no clone support: an ordinary copy
+            copied.append((relative / "node_modules").as_posix())
+    return {"status": "reused" if copied else "none-installed", "source": str(source),
+            "copied": copied}
+
+
 def validate(
     runs: Path,
     run: str,
@@ -318,6 +357,10 @@ def validate(
         )
         retain_result(root, result_root, result)
         return 70, result_root
+    try:
+        result["dependencies"] = reuse_dependencies(candidate, repository.resolve())
+    except (OSError, subprocess.SubprocessError) as error:
+        result["dependencies"] = {"status": "not-reused", "reason": str(error)}
     env = {name: os.environ[name] for name in ("PATH", "LANG", "TMPDIR") if name in os.environ}
     env.update(HOME=str(result_root), GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
     with (result_root / "output.log").open("xb") as stream:
@@ -381,6 +424,13 @@ def main() -> int:
             print(f"LFS: hydrated {candidate['lfs_hydrated']} file(s), "
                   f"{candidate['lfs_bytes']} bytes; "
                   f"{candidate['lfs_pointers_left']} pointer file(s) remain")
+        dependencies = evidence.get("dependencies", {})
+        if dependencies.get("status") == "reused":
+            print(f"Dependencies: copied {', '.join(dependencies['copied'])} from "
+                  f"{dependencies['source']} (lockfiles match)")
+        elif dependencies.get("status") == "not-reused":
+            print(f"Dependencies: not reused ({dependencies['reason']}); "
+                  "the check command must install them")
         print(f"{'PASS' if code == 0 else 'FAIL'}: checks only; "
               f"product acceptance not evaluated; {result}/result.json")
         provenance = evidence["builder_provenance"]

@@ -13,7 +13,7 @@ SRC=-
 if [ "${1:-}" = "--file" ]; then SRC="${2:?--file needs a path}"; shift 2; fi
 [ "$#" -eq 0 ] || { echo "relay: unexpected argument: $1" >&2; exit 64; }
 D="$(cd "$(dirname "$0")" && pwd -P)"
-ROOT="${HARNESS_RUN_ROOT:-${HARNESS_DIR:-.factory}/runs/$RUN}"
+ROOT="${HARNESS_RUN_ROOT:-${FACTORY_RUNS_DIR:-${HARNESS_DIR:-.factory}/runs}/$RUN}"
 
 mkdir -p "$ROOT/relay"
 TMP="$(mktemp "$ROOT/relay/.incoming.XXXXXX")"
