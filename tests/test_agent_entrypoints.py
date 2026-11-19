@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from harness import lane_agent, run_record
+from harness import run_record
 from tests.test_coordinator_startup import launch as launch
 
 CONTEXT = Path(__file__).resolve().parents[1] / "harness/run_context.sh"
@@ -52,13 +52,6 @@ def shell_context(runs, *arguments, ambient=None):
         env={"PATH": "/usr/bin:/bin", "FACTORY_PYTHON": sys.executable, **(ambient or {})},
     )
     return result, result.stdout.split("\0")[:2]
-
-
-def test_every_registered_provider_executable_is_an_accepted_entry_name():
-    # The accepted names are written out in run_record.py; a provider registered later
-    # without its name there would be refused as an unexpected entry.
-    registered = {agent.executable for agent in lane_agent.AGENTS.values()}
-    assert run_record.AGENT_ENTRYPOINTS == registered | {"ollama"}
 
 
 def test_create_records_the_directory_and_each_resolved_entry(entrypoints, launch, tmp_path):

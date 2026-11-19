@@ -191,10 +191,13 @@ raise SystemExit(subprocess.run([{real_tmux!r}, *args]).returncode)
                 ).stdout
             )
         )
-        if child.poll() is None:
+        if child.returncode is None:  # not yet collected by the loop above
             stdout, stderr = child.communicate(timeout=30)
-            assert child.returncode == 0, stdout + stderr
-        else:
+        # A slow replacement may finish either way: it can pass the owner check after the
+        # release, or end in the refusal it was due (a window seen live is always refused).
+        # A refusal must be that one, and a fresh launch must then succeed.
+        if child.returncode != 0:
+            assert "still running" in stderr or "still stopping" in stderr, stdout + stderr
             retried = execute(replacement, env)
             assert retried.returncode == 0, retried.stdout + retried.stderr
         wait_for(lambda: len([e for e in read_events(log) if "argv" in e]) == count + 1)
