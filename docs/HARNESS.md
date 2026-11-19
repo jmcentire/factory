@@ -937,7 +937,19 @@ through `lane_agent.py`. It is an author-lane adapter and is not accepted.
   covers every enabled hook in the run, not only the lane's. Without either, the lane
   works but reports nothing: it stays `starting` and its first message stays `submitted`.
   A per-run `-c projects."<folder>".trust_level="trusted"` did not suppress the folder
-  question.
+  question. Opt-in: with `FACTORY_SEAT_TRUST=1` set before the run, each seat's own
+  folder is trusted before its agent starts, and for Codex only that folder's
+  `.codex/hooks.json` report hooks, through Codex's own app-server (`hooks/list`,
+  `config/value/write`); a Claude Code seat's folder is marked trusted in its own
+  `.claude.json` (`harness/seat_trust.py`). Off by default, because it writes the
+  operator's agent profiles. A failure leaves the agent to ask as before.
+- **No loopback-only network for Codex lanes.** The lane's permission profile keeps
+  Codex's network off, so a test that starts a local listener (a Redis, a dev server)
+  fails with `Operation not permitted`. Codex has no loopback-only setting (observed with
+  `codex sandbox`, codex-cli 0.169.0): `network.allow_local_binding=true` alone still
+  refuses the bind, and `network.enabled=true` also opens outbound connections to any host.
+  Such tests need the Validator's endgame or a lane started with
+  `FACTORY_LANE_SANDBOX=off`.
 - **Codex's own resume and queue, observed (2026-11-14, four one-word turns, one
   session).** `codex resume <options> <id>` keeps the session id and its hooks go on
   reporting it. Given no message, the resumed session reported nothing, not even a start,

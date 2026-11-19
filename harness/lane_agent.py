@@ -1035,6 +1035,19 @@ def run_lane(
                 native_plan = native_session.plan(
                     argv[1:], launcher=launcher, directory=native_dir or log.parent,
                     slot=slot, name=f"{run_root.name}-{slot}", python=sys.executable)
+            # The seat's own folder, and for Codex the lane's own report hooks, are trusted in
+            # the agent's own configuration, so the seat does not wait at a trust question.
+            import seat_trust
+
+            if seat_trust.enabled(os.environ) and chosen is not None:
+                try:
+                    if chosen.dialect == "codex":
+                        seat_trust.codex(launcher.path, pathlib.Path.cwd(), child_env)
+                    elif chosen.dialect == "claude" and session_agent == "claude":
+                        seat_trust.claude(pathlib.Path.cwd(), child_env)
+                except (OSError, ValueError, KeyError, TypeError) as error:
+                    _append(log, f"lane-agent: folder not pre-trusted ({error}); the agent "
+                                 "asks its own trust question\n".encode())
             # Before the program exists: a retained delivery record that cannot be trusted
             # stops the start, so nothing typed once can be typed again.
             import persistent_lane

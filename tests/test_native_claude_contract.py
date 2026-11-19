@@ -270,6 +270,18 @@ def test_launch_does_not_rewrite_native_profile_or_settings(native_case):
     assert (native_case['home'] / '.claude.json').read_bytes() == native_case['default_before']
 
 
+def test_opted_in_seat_trust_trusts_only_the_run_folder_in_the_selected_profile(native_case):
+    # The off case is test_launch_does_not_rewrite_native_profile_or_settings above.
+    native_case['env']['FACTORY_SEAT_TRUST'] = '1'
+    launch(native_case)
+    data = json.loads((native_case['profile'] / '.claude.json').read_text())
+    assert data['sentinel'] == 'selected trust unchanged'
+    target = native_case['home'].parent / 'target'
+    assert {path for path, entry in data['projects'].items()
+            if entry.get('hasTrustDialogAccepted') is True} == {str(target.resolve())}
+    assert (native_case['home'] / '.claude.json').read_bytes() == native_case['default_before']
+
+
 def status(case, slot='validator'):
     result = execute([sys.executable, str(FACTORY / 'harness' / 'persistent_lane.py'),
                       'status', '--root', str(case['runs'] / 'native-acceptance'),

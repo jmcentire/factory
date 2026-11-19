@@ -617,6 +617,27 @@ def test_certificate_trust_paths_reach_the_lane_only_when_opted_in(tmp_path: Pat
         for variable in ("NODE_EXTRA_CA_CERTS", "FACTORY_PASS_CA_CERTS", "SSL_CERT_FILE"):
             assert variable not in commands[name]
 
+def test_seat_trust_switch_reaches_the_lane_only_when_opted_in(tmp_path: Path) -> None:
+    # Parity with the certificate switch: the lane command carries it only when opted in.
+    commands = {}
+    for name, env in (("on", {"FACTORY_SEAT_TRUST": "1"}), ("other", {"FACTORY_SEAT_TRUST": "yes"}),
+                      ("unset", {})):
+        lanes = Lanes(tmp_path / name)
+        _stub(lanes.stub, "claude", (
+            'if [ "${1:-}" = --help ]; then echo "--name --effort --session-id --resume --settings '
+            '--mcp-config --add-dir --model"; exit 0; fi\n'
+            'if [ "${1:-}" = --version ]; then echo "2.1.323 (Claude Code)"; exit 0; fi\n'
+            'if [ "${1:-}" = auth ]; then echo \'{"loggedIn": true, "authMethod": "claude.ai"}\'; '
+            "exit 0; fi\nexit 0\n"
+        ))
+        launched = lanes.lane("coder", "--agent", "claude", "--model", "claude-opus-5-5", env=env)
+        assert launched.returncode == 0, launched.stdout + launched.stderr
+        [commands[name]] = lanes.windows("coder")
+    assert " FACTORY_SEAT_TRUST=1" in commands["on"]
+    for name in ("other", "unset"):
+        assert "FACTORY_SEAT_TRUST" not in commands[name]
+
+
 def test_signed_out_cursor_agent_is_refused(tmp_path: Path) -> None:
     lanes = Lanes(tmp_path)
     _cursor_stub(lanes.stub, signed_in=False)
