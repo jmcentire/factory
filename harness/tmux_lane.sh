@@ -196,6 +196,7 @@ REPO_ROOT="$(cd "$D/.." && pwd -P)"
 source "$D/run_context.sh"
 factory_load_context "$RUN" "$RUNS_ARG"
 factory_resolve_tmux
+factory_ca_env
 ROOT="$FACTORY_CONTROL_ROOT"
 TMUX_ROOT="$ROOT/tmux-lanes"
 # tmux resolves a window name it cannot find to the session's current window, even with an
@@ -698,7 +699,8 @@ PY
   LANE_ENV=(env -i HOME="$SAFE_HOME" USER="$SAFE_USER" PATH="$SAFE_PATH" TMPDIR="$SAFE_TMPDIR"
     TERM="$SAFE_TERM" SHELL="$SAFE_SHELL" LANG="$SAFE_LANG" CODEX_HOME="$SAFE_CODEX_HOME"
     PYTHONSAFEPATH=1 PYTHONPATH="$D/trusted_startup:$D:$REPO_ROOT"
-    ${CLAUDE_CONFIG_DIR:+CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR"})
+    ${CLAUDE_CONFIG_DIR:+CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR"}
+    ${FACTORY_CA_ENV[@]+"${FACTORY_CA_ENV[@]}"})
 
   # A codex lane runs with the operator's own Codex configuration: nothing of it is ignored
   # or disabled. With no --model, the model keys of that config are read here only so the
@@ -1218,6 +1220,10 @@ PY
   printf -v ENV_PREFIX 'exec env -i HOME=%q USER=%q PATH=%q TMPDIR=%q TERM=%q SHELL=%q LANG=%q CODEX_HOME=%q FACTORY_RUNS_DIR=%q HARNESS_RUN_ROOT=%q' \
     "$SAFE_HOME" "$SAFE_USER" "$LANE_PATH" "$SAFE_TMPDIR" "$SAFE_TERM" "$SAFE_SHELL" "$SAFE_LANG" "$SAFE_CODEX_HOME" \
     "$FACTORY_RUNS_ROOT" "$ROOT"
+  for CA_SETTING in ${FACTORY_CA_ENV[@]+"${FACTORY_CA_ENV[@]}"}; do
+    printf -v CA_QUOTED ' %q' "$CA_SETTING"
+    ENV_PREFIX+="$CA_QUOTED"
+  done
   # The lane wrapper and the watcher are trusted Python programs started from this rebuilt
   # environment, the wrapper in the lane's clone. They start isolated like every helper of
   # this script: the working directory is on neither's import path and

@@ -664,3 +664,24 @@ def test_environment_github_auth_reaches_only_the_validator(launch, monkeypatch)
     for key, value in sentinels.items():
         assert validator[key] == value
         assert key not in orchestrator
+
+
+def test_certificate_trust_paths_reach_every_seat_only_when_set(launch, monkeypatch):
+    # Seen on a TLS-inspecting network: a Claude seat without NODE_EXTRA_CA_CERTS failed
+    # every API call with UNABLE_TO_GET_ISSUER_CERT_LOCALLY.
+    _, _, _, capture, _, execute = launch
+    for key in ("NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE",
+                "CURL_CA_BUNDLE", "NIX_SSL_CERT_FILE"):
+        monkeypatch.delenv(key, raising=False)
+    calls = capture()
+    unset = {role: execute(calls, role)["env"] for role in ("validator", "orchestrator")}
+    for env in unset.values():
+        assert not {"NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE"} & set(env)
+    monkeypatch.setenv("NODE_EXTRA_CA_CERTS", "/fixture/corporate ca.pem")
+    monkeypatch.setenv("SSL_CERT_FILE", "")
+    calls = capture()
+    for role in ("validator", "orchestrator"):
+        env = execute(calls, role)["env"]
+        assert env["NODE_EXTRA_CA_CERTS"] == "/fixture/corporate ca.pem"
+        assert "SSL_CERT_FILE" not in env
+        assert {k: v for k, v in env.items() if k != "NODE_EXTRA_CA_CERTS"} == unset[role]

@@ -726,6 +726,9 @@ def last_lane_line(log: Path) -> str:
 
 # gh reads these before its own keyring; a user signed in only through them keeps that sign-in.
 GITHUB_ENV = ("GH_TOKEN", "GITHUB_TOKEN", "GH_HOST")
+# Certificate-trust paths, not secrets; harness/run_context.sh lists the same for lanes.
+CA_ENV = ("NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE",
+          "CURL_CA_BUNDLE", "NIX_SSL_CERT_FILE")
 def seat_status(root: Path, role: str) -> dict[str, Any]:
     """What a coordinator seat's native session has itself reported, and nothing inferred.
 
@@ -946,6 +949,8 @@ def _start_locked(runs: Path, run: str) -> None:
                         "CODEX_HOME", "CLAUDE_CONFIG_DIR", "FACTORY_CLAUDE_LAUNCHER")
             if key in os.environ
         }
+        # Certificate-trust paths (e.g. a TLS-inspecting network's CA bundle), when set.
+        env.update({key: os.environ[key] for key in CA_ENV if os.environ.get(key)})
         if socket_directory:
             env["TMUX_TMPDIR"] = socket_directory
         # The Validator opens authorized pull requests; gh auth held only in the environment

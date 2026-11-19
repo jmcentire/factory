@@ -582,6 +582,32 @@ def test_claude_sign_in_is_checked_in_the_operators_profile(tmp_path: Path) -> N
     assert launched.returncode == 0, launched.stdout + launched.stderr
 
 
+
+def test_certificate_trust_paths_reach_the_lane_only_when_set(tmp_path: Path) -> None:
+    # Shawn, 2026-11-19: on a TLS-inspecting network a lane without NODE_EXTRA_CA_CERTS failed
+    # every API call (UNABLE_TO_GET_ISSUER_CERT_LOCALLY), including its sign-in check.
+    bundle = tmp_path / "corporate ca.pem"
+    launched_commands = {}
+    for name, env in (("set", {"NODE_EXTRA_CA_CERTS": str(bundle)}), ("unset", {})):
+        lanes = Lanes(tmp_path / name)
+        _stub(lanes.stub, "claude", (
+            'if [ "${1:-}" = --help ]; then echo "--name --effort --session-id --resume --settings '
+            '--mcp-config --add-dir --model"; exit 0; fi\n'
+            'if [ "${1:-}" = --version ]; then echo "2.1.323 (Claude Code)"; exit 0; fi\n'
+            'if [ "${1:-}" = auth ]; then\n'
+            f'  if [ "${{NODE_EXTRA_CA_CERTS:-}}" = "{bundle}" ] || [ {name} = unset ]; then\n'
+            '    echo \'{"loggedIn": true, "authMethod": "claude.ai"}\'\n'
+            "  else echo '{\"loggedIn\": false}'; fi\n"
+            '  exit 0\nfi\n'
+            "exit 0\n"
+        ))
+        launched = lanes.lane("coder", "--agent", "claude", "--model", "claude-opus-5-5", env=env)
+        assert launched.returncode == 0, launched.stdout + launched.stderr
+        [launched_commands[name]] = lanes.windows("coder")
+    assert f"NODE_EXTRA_CA_CERTS={bundle}".replace(" ", "\\ ") in launched_commands["set"]
+    assert "NODE_EXTRA_CA_CERTS" not in launched_commands["unset"]
+    assert "SSL_CERT_FILE" not in launched_commands["set"]
+
 def test_signed_out_cursor_agent_is_refused(tmp_path: Path) -> None:
     lanes = Lanes(tmp_path)
     _cursor_stub(lanes.stub, signed_in=False)
