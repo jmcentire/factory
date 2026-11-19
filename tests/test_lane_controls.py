@@ -1804,8 +1804,27 @@ def test_a_lane_window_keeps_remain_on_exit_as_a_window_option(tmp_path: Path) -
     assert not any(call.endswith("set-option -t r1 remain-on-exit on") for call in calls)
 
 
-def test_a_finished_lane_retains_its_own_window_on_real_tmux(tmp_path: Path) -> None:
-    """An immediately exiting fake author remains inspectable; a neighboring window survives."""
+def test_lane_windows_run_under_bash_and_keep_the_operators_shell(tmp_path: Path) -> None:
+    """tmux gets Bash and the command as separate arguments, so its default-shell never
+    parses them; the lane's own SHELL is still the operator's, where their launcher lives."""
+    lanes = Lanes(tmp_path)
+    launched = lanes.lane("coder", env={"SHELL": "/operator/login/shell"})
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+    [lane] = lanes.windows("coder")
+    [watcher] = lanes.windows("watch-coder")
+    for window in (lane, watcher):
+        _, interpreter, command = re.split(r" (/\S*bash) -c ", window, maxsplit=1)
+        assert interpreter == shutil.which("bash", path=lanes.env["PATH"])
+        assert not command.startswith("-")
+    assert " SHELL=/operator/login/shell " in lane
+
+
+@pytest.mark.parametrize("default_shell", ["sh", "false"])
+def test_a_finished_lane_retains_its_own_window_on_real_tmux(
+    tmp_path: Path, default_shell: str,
+) -> None:
+    """An immediately exiting fake author remains inspectable; a neighboring window survives.
+    The lane does not depend on the server's default-shell, here one that runs nothing."""
     tmux = shutil.which("tmux")
     if tmux is None:
         pytest.skip("real tmux is unavailable; deterministic retention contract runs separately")
@@ -1839,6 +1858,8 @@ def test_a_finished_lane_retains_its_own_window_on_real_tmux(tmp_path: Path) -> 
             env=lanes.env, capture_output=True, text=True, check=False,
         )
         assert started.returncode == 0, started.stdout + started.stderr
+        chosen = shutil.which(default_shell)
+        assert chosen and inspect("set-option", "-g", "default-shell", chosen).returncode == 0
         before = inspect("list-panes", "-t", "=r1:=neighbor", "-F", "#{pane_id}:#{pane_pid}")
         assert before.returncode == 0, before.stderr
         launched = lanes.lane("coder")
@@ -1856,6 +1877,7 @@ def test_a_finished_lane_retains_its_own_window_on_real_tmux(tmp_path: Path) -> 
         assert exits[-1]["slot"] == "coder" and exits[-1]["rc"] == 0
         after = inspect("list-panes", "-t", "=r1:=neighbor", "-F", "#{pane_id}:#{pane_pid}")
         assert after.returncode == 0 and after.stdout == before.stdout
+        assert inspect("show-options", "-g", "-v", "default-shell").stdout.strip() == chosen
     finally:
         inspect("kill-server")
 

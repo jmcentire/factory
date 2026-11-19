@@ -44,6 +44,14 @@ jobs:
       - name: Install Factory
         run: python -m pip install -e ".[dev]"
 
+      - name: Ensure tmux is available for lane lifecycle tests
+        run: |
+          if ! command -v tmux >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y tmux
+          fi
+          tmux -V
+
       - name: Run deterministic Factory gate
         # One worker per core; oversubscribing starves the native-lane tests' 30s tmux timeouts.
         run: make ship PYTEST_ARGS="-n auto"
