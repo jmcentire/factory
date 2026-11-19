@@ -18,6 +18,7 @@ import os
 import pathlib
 import platform
 import re
+import shutil
 import signal
 import socket
 import stat
@@ -137,7 +138,14 @@ class Plan:
                     "import runpy,sys;sys.path.insert(0,sys.argv.pop(1));"
                     "runpy.run_module('factory_runtime.cli',run_name='__main__')",
                     self.document["factory_home"], *spec["args"]]
-        interpreter = self.document["python"] if script.suffix == ".py" else "/bin/bash"
+        if script.suffix == ".py":
+            return [self.document["python"], str(script), *spec["args"]]
+        # Resolve from the host's tool directories before recording a start.
+        # Relative PATH entries would depend on the broker's working directory.
+        host_path = os.pathsep.join(p for p in os.get_exec_path() if os.path.isabs(p))
+        interpreter = shutil.which("bash", path=host_path)
+        if interpreter is None:
+            raise CustodyError("Bash is unavailable on the host PATH")
         return [interpreter, str(script), *spec["args"]]
 
 

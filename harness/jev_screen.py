@@ -286,7 +286,7 @@ set +x +v
 trap - DEBUG RETURN ERR EXIT
 builtin exec "$factory_http_python" -I "$factory_http_script" --request >&3 3>&-
 """
-        argv = ["/bin/bash", "--noprofile", "--norc", "-c", wrapper,
+        argv = ["bash", "--noprofile", "--norc", "-c", wrapper,
                 "factory-system-one-profile", sys.executable, script]
     try:
         if not direct_key and profile:
