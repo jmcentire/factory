@@ -784,11 +784,13 @@ def test_watchdog_stops_a_lane_that_does_not_commit_and_wakes_the_operator(
     # The window runs from the end of the read allowance (900 s) or the last commit, if later.
     assert watched.at(900 + 1199) == "watching"
     assert watched.stops == []
-    assert watched.at(900 + 1201) == "stalled"
+    # A first quiet check is uncertain; quiet again HUNG_CONFIRM_S later, it is hung.
+    assert watched.at(900 + 1201) == "watching"
+    assert watched.at(900 + 1201 + lane_watchdog.HUNG_CONFIRM_S) == "stalled"
     assert watched.stops == ["r1:tester"]
     [event] = [row for row in watched.events() if row["kind"] == "refusal-lane-stall"]
     assert event["class"] == "refusal" and "no commit for" in str(event["detail"])
-    [requested, wake] = watched.rows("wake.jsonl")
+    *_, requested, wake = watched.rows("wake.jsonl")
     assert requested["kind"] == "lane-stop-requested"
     assert wake["kind"] == "refusal-lane-stall" and wake["slot"] == "tester"
     assert any(line.startswith("FACTORY_WAKE refusal-lane-stall") for line in watched.said)
@@ -830,7 +832,9 @@ def test_a_new_turn_after_done_is_watched_for_stalls_again(tmp_path: Path) -> No
     # The Validator sends new work; the lane is working again and commits nothing.
     native.write_text(json.dumps({"phase": "working", "turn_started_at": T0 + 3000}))
     assert watched.at(3000 + 1199) == "watching"  # the new turn has its own window
-    assert watched.at(3000 + 1201) == "stalled"
+    # A first quiet check is uncertain; quiet again HUNG_CONFIRM_S later, it is hung.
+    assert watched.at(3000 + 1201) == "watching"
+    assert watched.at(3000 + 1201 + lane_watchdog.HUNG_CONFIRM_S) == "stalled"
     assert watched.stops == ["r1:tester"]
 
 
@@ -847,7 +851,10 @@ def test_time_the_machine_slept_is_not_stall_time(tmp_path: Path) -> None:
     assert watched.stops == []
     # Awake time still counts: idle past the window after waking is a stall.
     awake.value += 1201
-    assert watched.at(1000 + 3600 + 1201) == "stalled"
+    # A first quiet check is uncertain; quiet again HUNG_CONFIRM_S later, it is hung.
+    assert watched.at(1000 + 3600 + 1201) == "watching"
+    awake.value += lane_watchdog.HUNG_CONFIRM_S
+    assert watched.at(1000 + 3600 + 1201 + lane_watchdog.HUNG_CONFIRM_S) == "stalled"
 
 
 def test_a_lane_waiting_on_its_own_question_is_not_stalled(tmp_path: Path) -> None:
@@ -1278,7 +1285,9 @@ def test_a_review_pause_carries_the_stall_window_instead_of_resetting_it(tmp_pat
     assert watched.at(1080) == "paused"  # 180 s past the read allowance, carried
     watched.resume(5000)
     assert watched.at(5000 + 1019) == "watching"  # 1019 + 180 = 1199 s idle
-    assert watched.at(5000 + 1021) == "stalled"
+    # A first quiet check is uncertain; quiet again HUNG_CONFIRM_S later, it is hung.
+    assert watched.at(5000 + 1021) == "watching"
+    assert watched.at(5000 + 1021 + lane_watchdog.HUNG_CONFIRM_S) == "stalled"
 
 
 def test_a_review_with_lost_exit_evidence_becomes_pending_not_authorized_work(
