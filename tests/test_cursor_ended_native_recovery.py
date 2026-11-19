@@ -21,7 +21,8 @@ def record(**data):
     with log.open('a') as out: out.write(json.dumps(data)+'\n')
 if args==['--version']: print('2026.11.13-synthetic'); raise SystemExit
 if '--help' in args:
-    print('--model --workspace --resume --sandbox --output-format --approve-mcps'); raise SystemExit
+    print('--model --workspace --resume --trust --sandbox --output-format --approve-mcps')
+    raise SystemExit
 if args and args[0]=='status':
     print(json.dumps({'status':'authenticated','isAuthenticated':True})); raise SystemExit
 assert '-p' not in args and '--print' not in args

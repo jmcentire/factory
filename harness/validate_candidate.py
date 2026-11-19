@@ -70,7 +70,7 @@ def lane_project_files(root: Path, task: dict[str, Any], candidate: Path,
                        repository: Path | None = None) -> list[str]:
     """The lane runtime files a candidate carries, each with why it is one.
 
-    A Cursor lane writes its hooks, its Kindex and one permission rule into its clone's
+    A Cursor lane writes its hooks, its Kindex and its permission rules into its clone's
     ``.cursor/``, a Muse lane writes its hooks into ``.muse/hooks.json``, and both keep them
     out of ordinary commits, but an author can force one in. A candidate is the work, not
     the lane's configuration, so such a commit is not validated. Each provider's paths are

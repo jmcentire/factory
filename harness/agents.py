@@ -886,12 +886,15 @@ HARNESSES: Mapping[str, Harness] = {
             "runtime configuration, not the work:\n  do not edit them, and never add them to "
             "a commit (not with git add -f either).\n"),
         start_requires=(
-            "Cursor asks its own questions in the lane's window and the Factory answers none "
-            "of them: whether to trust the workspace, and whether to approve the lane's MCP "
-            f"server `{CURSOR_LANE_SERVER}` (`agent mcp enable {CURSOR_LANE_SERVER}`, run in "
-            "the lane's clone, approves that one server). What the lane may then run without "
-            "asking is your own Cursor permission configuration; the Factory adds one rule, "
-            f"`Mcp({CURSOR_LANE_SERVER}:*)`, and passes no --force, --approve-mcps or --trust. "
+            "The lane's clone is trusted with --trust, so Cursor asks no workspace question. "
+            "The Factory adds two project rules in the clone's .cursor/cli.json: "
+            f"`Mcp({CURSOR_LANE_SERVER}:*)` for the lane's own Kindex and `Shell(*)`, so shell "
+            "commands run without a question each; your own deny rules and Signet's hooks "
+            "still apply, and no --force or --approve-mcps is passed. If Cursor asks to approve "
+            f"the lane's MCP server `{CURSOR_LANE_SERVER}`, answer it in the lane's window "
+            f"(`agent mcp enable {CURSOR_LANE_SERVER}` in the clone approves that one server). "
+            "A commit-msg hook in the clone drops Cursor's co-author trailer, unless the clone "
+            "has its own commit-msg hook. "
             "Until the session reports starting it is `starting` and nothing is typed to it.")),
 }
 

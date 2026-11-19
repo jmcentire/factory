@@ -61,8 +61,8 @@ case "$AGENT" in
       fail "cursor-agent CLI (agent) is not runnable ($(at agent))"
     HELP=$(agent --help 2>/dev/null) || HELP=""
     # The interactive program; no print-mode flag is required because none is used.
-    # Nor any blanket approval flag: the lane runs with the operator's own permissions.
-    for REQUIRED in --model --workspace --resume; do
+    # Nor any blanket approval flag; --trust (every turn passes it) trusts only the lane's clone.
+    for REQUIRED in --model --workspace --resume --trust; do
       printf '%s' "$HELP" | grep -q -- "$REQUIRED" || \
         fail "cursor-agent CLI contract lacks $REQUIRED ($VERSION at $(at agent))"
     done

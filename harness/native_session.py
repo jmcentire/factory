@@ -648,7 +648,7 @@ def cursor_plan(arguments: Sequence[str], *, executable: str, directory: pathlib
 
     ``arguments`` exclude the executable. The lane's observation hooks, any required hook
     file the registry left in ``directory`` (``cursor-hooks.json``) and the lane's Kindex
-    (``cursor-mcp.json``) and its one permission rule (``cursor-cli.json``) go into the
+    (``cursor-mcp.json``) and its two permission rules (``cursor-cli.json``) go into the
     project files Cursor reads, beside the operator's own user-level hooks, servers and
     permissions, which are untouched and still apply. Cursor chooses its
     own conversation id, so it is known only when the session reports starting, unless
