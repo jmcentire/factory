@@ -42,7 +42,8 @@ def test_agy_seat_settings_allow_only_the_seat_harness_and_read_only_kindex(tmp_
     assert sorted(rule for rule in allow if rule.startswith("mcp(")) == sorted(
         f"mcp(kindex/{tool})" for tool in AGY_SEAT_KINDEX_TOOLS)
     assert settings["enableTerminalSandbox"] is False
-    assert not any("*" in rule or rule.startswith(("write_file(", "command(bash)")) for rule in allow)
+    assert not any("*" in rule or rule.startswith(("write_file(", "command(bash)"))
+               for rule in allow)
     assert all(rule == "command(ls)" or rule.startswith(
         ("mcp(kindex/", f"command(/py {tools}/", f"command(bash {tools}/", f"command({tools}/"))
         for rule in allow)
