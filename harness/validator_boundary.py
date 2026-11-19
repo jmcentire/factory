@@ -37,9 +37,18 @@ ENVIRONMENT_KEYS = frozenset({
 })
 
 
+# Certificate-trust paths, passed only when set. Kept out of ENVIRONMENT_KEYS so the boundary
+# digest, pinned when a lane is admitted, is unchanged for runs already in progress.
+CA_ENVIRONMENT_KEYS = frozenset({
+    "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE", "NIX_SSL_CERT_FILE",
+})
+
+
 def seat_environment(environment: dict[str, str]) -> dict[str, str]:
     """Select permitted names without inspecting/logging credential values."""
-    return {name: value for name, value in environment.items() if name in ENVIRONMENT_KEYS}
+    return {name: value for name, value in environment.items()
+            if name in ENVIRONMENT_KEYS or (name in CA_ENVIRONMENT_KEYS and value)}
 
 
 class BoundaryError(ValueError):
