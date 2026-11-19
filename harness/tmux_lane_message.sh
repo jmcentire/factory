@@ -89,7 +89,11 @@ D="$(cd "$(dirname "$0")" && pwd -P)"
 REPO_ROOT="$(cd "$D/.." && pwd -P)"
 # shellcheck source=harness/run_context.sh
 source "$D/run_context.sh"
-factory_load_context "$RUN" "$RUNS_ARG"
+if [ "$KIND" != idle ]; then
+  factory_load_context "$RUN" "$RUNS_ARG" --agent-entrypoints
+else
+  factory_load_context "$RUN" "$RUNS_ARG"
+fi
 factory_resolve_tmux
 ROOT="$FACTORY_CONTROL_ROOT"
 TMUX_ROOT="$ROOT/tmux-lanes"
@@ -811,6 +815,8 @@ elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
     exit 70
   }
   exec 4<&-
+  # Runtime directories lead LANE_PATH; the run's entrypoints outrank them as well.
+  if [ -n "$FACTORY_RUN_AGENT_BIN" ]; then LANE_PATH="$FACTORY_RUN_AGENT_BIN:$LANE_PATH"; fi
   # The resumed lane gets the same scoped Kindex it launched with (launches before 0.8.8 had none).
   KINDEX_C=""
   [ -z "$KINDEX_OVERRIDE" ] || printf -v KINDEX_C -- '-c %q' "$KINDEX_OVERRIDE"

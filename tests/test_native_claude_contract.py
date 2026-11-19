@@ -28,7 +28,7 @@ def manifest(root):
 
 
 @pytest.fixture
-def native_case(tmp_path):
+def native_case(tmp_path, request):
     home = tmp_path / 'home'
     profile = home / 'selected account with spaces'
     profile.mkdir(parents=True)
@@ -164,6 +164,16 @@ for line in sys.stdin:
     kin.chmod(0o755)
     env['FACTORY_KINDEX_LITE_BIN'] = str(kindex)
     env['PATH'] = str(bin_dir) + os.pathsep + env['PATH']
+    if request.node.get_closest_marker('agent_entrypoints'):
+        # The run's own claude entry: a wrapper that reaches its program by absolute path.
+        selected = tmp_path / 'wrapped-recorder'
+        selected.write_text(recorder)
+        selected.chmod(0o755)
+        entry = tmp_path / 'entrypoints' / 'claude'
+        entry.parent.mkdir()
+        entry.write_text('#!/bin/sh\nexec ' + shlex.quote(str(selected)) + ' "$@"\n')
+        entry.chmod(0o755)
+        env['FACTORY_AGENT_BIN'] = str(entry.parent)
     runs = tmp_path / 'runs'
     base = [sys.executable, str(FACTORY / 'harness' / 'run_record.py')]
     common = ['--runs', str(runs), '--run', 'native-acceptance']
@@ -185,8 +195,8 @@ for line in sys.stdin:
         for pid in {item['pid'] for item in read_events(log) if 'pid' in item}:
             command = subprocess.run(['ps', '-ww', '-p', str(pid), '-o', 'command='],
                                      capture_output=True, text=True).stdout
-            if not any(str(bin_dir / name) in command
-                       for name in ('cl', 'native-recorder')):
+            if not any(str(path) in command for path in (
+                    bin_dir / 'cl', bin_dir / 'native-recorder', tmp_path / 'wrapped-recorder')):
                 continue
             try:
                 os.kill(pid, 15)
@@ -439,6 +449,83 @@ def test_author_launch_respects_native_launcher(native_case, tmp_path):
     probes = [e for e in read_events(native_case['log'])[before:] if 'argv' in e
               and e['argv'] == ['auth', 'status', '--json']]
     assert all(e['launcher'] == 'cl' for e in probes), probes
+
+
+@pytest.mark.agent_entrypoints
+def test_run_claude_entry_is_used_to_check_start_and_resume_the_lane(
+    native_case, tmp_path,
+):
+    native_case['env'].pop('ANTHROPIC_API_KEY', None)
+    # The operator's usual launcher is still installed and still named; the run's entry wins.
+    native_case['env']['FACTORY_CLAUDE_LAUNCHER'] = 'cl'
+    coordinators = launch(native_case)
+    assert {e['launcher'] for e in coordinators} == {'wrapped-recorder'}, coordinators
+    lane = tmp_path / 'author-repository'
+    prepared = execute([sys.executable, str(FACTORY / 'harness' / 'role_inputs.py'),
+                        'prepare', '--runs', str(native_case['runs']), '--run', 'native-acceptance',
+                        '--role', 'coder', '--repo', str(lane)], native_case['env'])
+    assert prepared.returncode == 0, prepared.stderr
+    lane = Path(json.loads(prepared.stdout)['repository'])
+    brief = tmp_path / 'author-brief.txt'
+    brief.write_text('Observe native behavior only; change no target files.\n')
+    before = len(read_events(native_case['log']))
+    runtime = tmp_path / 'runtime'
+    runtime.mkdir()
+    competing_claude = runtime / 'claude'
+    competing_claude.write_bytes((native_case['bin_dir'] / 'claude').read_bytes())
+    competing_claude.chmod(0o555)
+    runtime.chmod(0o555)
+    launched = execute(['bash', str(FACTORY / 'harness' / 'tmux_lane.sh'),
+                        'native-acceptance', 'coder', 'launch', '--runs', str(native_case['runs']),
+                        '--repo', str(lane), '--prompt', str(brief), '--agent', 'claude',
+                        '--runtime-dir', str(runtime)],
+                       native_case['env'])
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+    wait_for(lambda: [e for e in read_events(native_case['log'])[before:]
+                      if '--session-id' in e.get('argv', [])])
+    # Sign-in is checked on the program the lane then starts.
+    observed = [e for e in read_events(native_case['log'])[before:] if 'argv' in e]
+    assert any(e['argv'] == ['auth', 'status', '--json'] for e in observed)
+    assert any(e['argv'] == ['--version'] for e in observed)
+    assert any(e['argv'] == ['--help'] for e in observed)
+    assert {e['launcher'] for e in observed} == {'wrapped-recorder'}, observed
+
+    initial = next(e for e in observed if '--session-id' in e['argv'])
+    session = initial['argv'][initial['argv'].index('--session-id') + 1]
+    message = ['bash', str(FACTORY / 'harness' / 'tmux_lane_message.sh'),
+               'native-acceptance', 'validator', 'coder', 'status',
+               '--runs', str(native_case['runs'])]
+    root = native_case['runs'] / 'native-acceptance'
+    state = [sys.executable, str(FACTORY / 'harness' / 'persistent_lane.py'),
+             'status', '--root', str(root), '--slot', 'coder']
+
+    def lane_phase():
+        result = execute(state, native_case['env'])
+        return json.loads(result.stdout).get('phase') if result.returncode == 0 else ''
+
+    wait_for(lambda: lane_phase() == 'stop-reported')
+    delivered = execute(message, native_case['env'])
+    assert delivered.returncode == 0, delivered.stdout + delivered.stderr
+    assert any(e['pid'] == initial['pid'] and 'FACTORY_STATUS_PROBE' in e.get('input', '')
+               for e in read_events(native_case['log']))
+
+    command = subprocess.run(['ps', '-ww', '-p', str(initial['pid']), '-o', 'command='],
+                             capture_output=True, text=True).stdout
+    assert str(tmp_path / 'wrapped-recorder') in command
+    os.kill(initial['pid'], 15)
+    socket = json.loads((root / 'harness.json').read_text())['tmux_socket']
+    panes = ['tmux', '-L', socket, 'list-panes', '-t', 'native-acceptance:coder',
+             '-F', '#{pane_dead}']
+    wait_for(lambda: execute(panes, native_case['env']).stdout.strip() == '1')
+
+    delivered = execute(message, native_case['env'])
+    assert delivered.returncode == 0, delivered.stdout + delivered.stderr
+    resumed = next(e for e in read_events(native_case['log'])[before:]
+                   if '--resume' in e.get('argv', []))
+    assert resumed['launcher'] == 'wrapped-recorder'
+    assert resumed['argv'][resumed['argv'].index('--resume') + 1] == session
+    assert any(e['pid'] == resumed['pid'] and 'FACTORY_STATUS_PROBE' in e.get('input', '')
+               for e in read_events(native_case['log']))
 
 
 def test_hook_observations_do_not_claim_model_completion(native_case):
