@@ -49,7 +49,8 @@ def _parser() -> argparse.ArgumentParser:
     ordinary.add_argument("run")
     ordinary.add_argument("task")
     ordinary.add_argument("--repo", required=True)
-    ordinary.add_argument("--runs", default=".factory/runs")
+    ordinary.add_argument("--runs", help="runs directory (default: $FACTORY_RUNS_DIR, "
+                          "else .factory/runs in the current directory)")
     ordinary.add_argument("--log")
     ordinary.add_argument("--budget", type=float)
 
@@ -644,8 +645,10 @@ def main(argv: list[str] | None = None) -> int:
         if arguments.command == "run":
             import subprocess
             script = Path(__file__).resolve().parents[1] / "harness/factory.sh"
+            # FACTORY_RUNS_DIR, when set, names the runs directory; the default is unchanged.
+            runs = arguments.runs or os.environ.get("FACTORY_RUNS_DIR") or ".factory/runs"
             command = ["bash", str(script), arguments.run, arguments.task,
-                       "--repo", arguments.repo, "--runs", arguments.runs]
+                       "--repo", arguments.repo, "--runs", runs]
             for key in ("log", "budget"):
                 value = getattr(arguments, key)
                 if value is not None:

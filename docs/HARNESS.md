@@ -1085,6 +1085,15 @@ replacement objects, smudge filters or network downloads. Use `--require-lfs` wh
 need hydrated assets and `--lfs-objects PATH` for an explicit local object store. Retained
 results state whether pointers remained, what ran, and its exit status.
 
+Node repositories: when every Node lockfile in the candidate (`pnpm-lock.yaml`,
+`package-lock.json`, `yarn.lock`, `bun.lock`, ...) is byte-identical to the `--repo`
+checkout's, that checkout's installed `node_modules` directories are copied into the
+candidate (copy-on-write where the filesystem supports it) before the check runs, so it
+needs no registry or install. Copies keep workspace links inside the candidate, so the
+candidate's own packages are tested. A changed lockfile is not reused, and the result's
+`dependencies` field says which happened; the check command must then install. Generated
+files a repository ignores (codegen output) are not copied: regenerate them in the command.
+
 Passing tests is evidence for the Validator's decision; it is not automatic task
 acceptance, publication, installation or merge permission. Report the candidate,
 observed behavior, failures, unrun checks and remaining work. Preserve evidence and
