@@ -672,7 +672,34 @@ def _holds(rows: bytes, sender: str, text: str, digest: str | None = None) -> bo
     return False
 
 
-def resident_command(agent: str, model: str, effort: str, prompt: str, root: Path) -> list[str]:
+#: The read-only Kindex tools a coordinator calls (observed on Antigravity seats in two runs,
+#: each asking a person every time). Writes still ask.
+AGY_SEAT_KINDEX_TOOLS = ("search", "show", "context", "list_nodes", "watch_list")
+#: The harness programs a coordinator runs (prompts/orchestrate.md, the dispatcher loop and
+#: inbox_wake stop in the start prompt).
+AGY_SEAT_SCRIPTS = ("dispatcher.py", "run_record.py", "inbox_wake.py", "tmux_lane_message.sh")
+
+
+def agy_seat_settings(repository: str, root: Path, tools: Path, python: str) -> str:
+    """Antigravity's own per-session settings (`--settings`, never saved) for a coordinator
+    seat: trust the run's folders, read outside the workspace, and allow exactly the seat's
+    harness commands and read-only Kindex tools, so its own polling loop runs with nobody at
+    the pane. Nothing else is granted; anything not listed still asks."""
+
+    allow = [f"mcp(kindex/{tool})" for tool in AGY_SEAT_KINDEX_TOOLS]
+    for script in AGY_SEAT_SCRIPTS:
+        path = tools / script
+        allow += ([f"command(bash {path})", f"command({path})"] if script.endswith(".sh")
+                  else [f"command({python} {path})"])
+    # Reads outside the workspace: Factory's own prompts and the lane clones it reviews, whose
+    # paths the Validator chooses per run. Writes outside the workspace still ask.
+    return json.dumps({"trustedWorkspaces": [repository, str(root)],
+                       "allowNonWorkspaceAccess": True,
+                       "permissions": {"allow": allow}})
+
+
+def resident_command(agent: str, model: str, effort: str, prompt: str, root: Path,
+                     settings: str = "") -> list[str]:
     """CLI adapters describe syntax, never an approved-model list."""
     sandbox = os.environ.get("FACTORY_LANE_SANDBOX", "on")
     if sandbox not in {"on", "off"}:
@@ -699,6 +726,7 @@ def resident_command(agent: str, model: str, effort: str, prompt: str, root: Pat
         effort_args = ["--effort", effort] if effort else []
         head = [agent, "--add-dir", str(root),
                 *(["--dangerously-skip-permissions"] if unrestricted else []),
+                *(["--settings", settings] if agent == "agy" and settings else []),
                 *model_args, *effort_args]
         return [*head, *(["--prompt-interactive"] if agent == "agy" else ["--"]), prompt]
     if agent == "muse":
@@ -962,14 +990,13 @@ def _start_locked(runs: Path, run: str) -> None:
         # its trust question in the seat's window, for the operator to answer; until the session
         # reports that it started, the seat's status is "starting" and nothing is typed into it.
         # Only Claude Code is hosted for a seat by the lane wrapper. An Antigravity seat is
-        # its own interactive session in its window, started below like any other seat's
-        # program and driven there: nothing delivers a wake or a message into it, because
-        # Antigravity has no supported route for that yet and its print mode is never used.
+        # its own interactive session in its window. Nothing is typed into it: it reads its
+        # inbox through its own dispatcher loop, which its per-session settings allow.
         native_stream = agent == "claude"
         if agent == "agy":
             print(f"Factory {run}: the {role} seat is Antigravity's own interactive session. "
-                  "Wakes and messages are not delivered into it (no supported route yet, and "
-                  "print mode is never used): read and answer them in its window.")
+                  "It reads its inbox through its own dispatcher loop; its harness commands "
+                  "and read-only Kindex tools are allowed for this session only.")
         if native_stream:
             extra = ["--add-dir", str(root)]
             if os.environ.get("FACTORY_LANE_SANDBOX", "on") == "off":
@@ -993,7 +1020,9 @@ def _start_locked(runs: Path, run: str) -> None:
             elif prompt_file.read_text() != prompt:
                 raise ValueError("retained initial coordinator prompt changed")
         else:
-            argv = resident_command(agent, model, effort, prompt, root)
+            argv = resident_command(agent, model, effort, prompt, root, settings=(
+                agy_seat_settings(doc["repository"], root, tools, sys.executable)
+                if agent == "agy" else ""))
         if agent_bin and argv[0] in doc["agent_bin"]["entries"]:
             executable = str(Path(agent_bin) / argv[0])
         else:
