@@ -117,6 +117,30 @@ until it prints `READY`. Apply each listed fix as you go. Editing the user's she
 PATH), removing another `factory` install, or installing Python or Rust is the user's call, so
 ask before doing it.
 
+### Custom agent entrypoints
+
+Set `FACTORY_AGENT_BIN` before `factory run` to an absolute, trusted directory
+whose executable entries are provider wrappers or links to them. Use the CLI's
+command name for each entry: `codex`, `claude`, `agent` (Cursor), `agy`, `muse`,
+`prime-agent`, or `ollama`. Each wrapper can prepare its own environment and
+then forward its arguments directly to the provider, for example
+`exec /absolute/path/to/real/codex "$@"`. Use the real executable's absolute
+path, since looking up `codex` on PATH can invoke the wrapper again. Keep the
+directory and wrappers outside agent-writable workspaces. Forward the supplied
+permissions and credential settings, and keep credentials restricted to the
+provider context that Factory passed to the wrapper.
+
+Factory records the directory and the resolved wrapper paths for the run. Those
+entries take precedence over PATH for coordinator startup and the author lane's
+checks, start, message delivery and resume. A `claude` entry also takes precedence
+over `FACTORY_CLAUDE_LAUNCHER` for that run. Unlisted commands use the usual
+lookup. Use a separate directory for a different set of wrappers. Adding,
+removing, or retargeting an executable entry makes dependent operations fail,
+and the refusal names each changed entry. A link is recorded by the file it
+resolves to, so link to a stable path: a link into a versioned install directory
+changes when that install is upgraded. Factory checks paths against accidental
+configuration changes. Keep the wrapper contents stable for the lifetime of a run.
+
 ### Packaged runtime paths
 
 `FACTORY_HOME` optionally selects a directory containing `prompts/` and `docs/`.

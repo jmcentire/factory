@@ -89,7 +89,11 @@ D="$(cd "$(dirname "$0")" && pwd -P)"
 REPO_ROOT="$(cd "$D/.." && pwd -P)"
 # shellcheck source=harness/run_context.sh
 source "$D/run_context.sh"
-factory_load_context "$RUN" "$RUNS_ARG"
+if [ "$KIND" != idle ]; then
+  factory_load_context "$RUN" "$RUNS_ARG" --agent-entrypoints
+else
+  factory_load_context "$RUN" "$RUNS_ARG"
+fi
 factory_resolve_tmux
 ROOT="$FACTORY_CONTROL_ROOT"
 TMUX_ROOT="$ROOT/tmux-lanes"
@@ -731,6 +735,10 @@ SAFE_PATH="${PATH:?lane-message: PATH is required}"
 SAFE_TMPDIR="${TMPDIR:-/tmp}"
 SAFE_TERM="${TERM:-xterm-256color}"
 SAFE_SHELL="${SHELL:-/bin/bash}"
+# The generated lane commands are quoted for Bash, and tmux hands a one-string command to
+# its default-shell. Start them as "$LANE_BASH" -c <command>, on the Bash running this script.
+# SAFE_SHELL stays the operator's login shell: the lane resolves their Claude launcher in it.
+LANE_BASH="$BASH"
 SAFE_LANG="${LANG:-en_US.UTF-8}"
 SAFE_CODEX_HOME="${CODEX_HOME:-$SAFE_HOME/.codex}"
 # Resume on the model the lane launched with: the Codex config overrides that selected it when
@@ -807,6 +815,8 @@ elif [ "$PANE_DEAD" = "1" ] || [ "$PANE_DEAD" = "missing" ]; then
     exit 70
   }
   exec 4<&-
+  # Runtime directories lead LANE_PATH; the run's entrypoints outrank them as well.
+  if [ -n "$FACTORY_RUN_AGENT_BIN" ]; then LANE_PATH="$FACTORY_RUN_AGENT_BIN:$LANE_PATH"; fi
   # The resumed lane gets the same scoped Kindex it launched with (launches before 0.8.8 had none).
   KINDEX_C=""
   [ -z "$KINDEX_OVERRIDE" ] || printf -v KINDEX_C -- '-c %q' "$KINDEX_OVERRIDE"
@@ -991,10 +1001,10 @@ finally:
 PY
   # No live turn: resume the retained thread, in a fresh window when the lane's was closed.
   if [ "$PANE_DEAD" = "missing" ]; then
-    tmux new-window -t "$RUN" -n "$WINDOW" -c "$REPOSITORY" "$RESUME_CMD"
+    tmux new-window -t "$RUN" -n "$WINDOW" -c "$REPOSITORY" "$LANE_BASH" -c "$RESUME_CMD"
     tmux set-option -w -t "$RUN:$WINDOW" remain-on-exit on >/dev/null 2>&1 || true
   else
-    tmux respawn-pane -k -t "$RUN:$WINDOW" -c "$REPOSITORY" "$RESUME_CMD"
+    tmux respawn-pane -k -t "$RUN:$WINDOW" -c "$REPOSITORY" "$LANE_BASH" -c "$RESUME_CMD"
   fi
   # Match first launch: only an explicitly capped lane needs the spend/qualification watcher.
   # Ordinary plan-funded work must not gain automatic pauses merely by receiving a message.
@@ -1004,7 +1014,7 @@ PY
   if [ -n "$WALL_CAP_S" ] || [ "$HOSTED_RESUME" = 1 ]; then
     WATCH_WID=$(window_id "watch-$WINDOW")
     [ -z "$WATCH_WID" ] || tmux kill-window -t "$WATCH_WID" >/dev/null 2>&1 || true
-    tmux new-window -d -t "$RUN" -n "watch-$WINDOW" -c "$ROOT" "$WATCH_CMD" || {
+    tmux new-window -d -t "$RUN" -n "watch-$WINDOW" -c "$ROOT" "$LANE_BASH" -c "$WATCH_CMD" || {
       WID=$(window_id "$WINDOW"); [ -z "$WID" ] || tmux send-keys -t "$WID" C-c >/dev/null 2>&1 || true
       echo "lane-message: the watcher for $RUN:$WINDOW could not start; the resumed turn was interrupted" >&2
       exit 70

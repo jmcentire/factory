@@ -41,6 +41,7 @@ addopts = "-q"
 markers = [
     "isolation_integration: requires the macOS Seatbelt sandbox",
     "tessera_integration: requires a built real Tessera CLI",
+    "agent_entrypoints: create the native fixture run with its own FACTORY_AGENT_BIN",
 ]
 
 [tool.mypy]

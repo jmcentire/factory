@@ -9,6 +9,8 @@ public API is still pre-1.0.
 
 - A package can state the revision it was built from in `factory_runtime/BUILD_REVISION`,
   so `factory version` and new run records identify a build that has no Git checkout.
+- `FACTORY_AGENT_BIN` lets an operator select provider entrypoints retained across
+  coordinator starts and author-lane launches and resumes.
 
 ## [0.8.31] - 2026-11-18
 
