@@ -949,8 +949,10 @@ def _start_locked(runs: Path, run: str) -> None:
                         "CODEX_HOME", "CLAUDE_CONFIG_DIR", "FACTORY_CLAUDE_LAUNCHER")
             if key in os.environ
         }
-        # Certificate-trust paths (e.g. a TLS-inspecting network's CA bundle), when set.
-        env.update({key: os.environ[key] for key in CA_ENV if os.environ.get(key)})
+        # Certificate-trust paths (e.g. a TLS-inspecting network's CA bundle), opt-in only.
+        if os.environ.get("FACTORY_PASS_CA_CERTS") == "1":
+            env["FACTORY_PASS_CA_CERTS"] = "1"
+            env.update({key: os.environ[key] for key in CA_ENV if os.environ.get(key)})
         if socket_directory:
             env["TMUX_TMPDIR"] = socket_directory
         # The Validator opens authorized pull requests; gh auth held only in the environment

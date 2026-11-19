@@ -383,11 +383,14 @@ print(json.dumps(out))
                 "forbidden": "denied", "broker": "connected", "ip": "connected"}
 
 
-def test_certificate_trust_paths_cross_the_boundary_without_changing_its_digest() -> None:
+def test_certificate_trust_paths_cross_the_boundary_only_when_opted_in() -> None:
     # The Nix-packaged Claude uses NIX_SSL_CERT_FILE; without it even the public API chain fails.
     from harness import validator_boundary
-    passed = seat_environment({"HOME": "/h", "NIX_SSL_CERT_FILE": "/bundle.crt",
-                               "NODE_EXTRA_CA_CERTS": "", "SSH_AUTH_SOCK": "/agent"})
-    assert passed == {"HOME": "/h", "NIX_SSL_CERT_FILE": "/bundle.crt"}
+    environment = {"HOME": "/h", "NIX_SSL_CERT_FILE": "/bundle.crt",
+                   "NODE_EXTRA_CA_CERTS": "", "SSH_AUTH_SOCK": "/agent"}
+    assert seat_environment(environment) == {"HOME": "/h"}
+    assert seat_environment({**environment, "FACTORY_PASS_CA_CERTS": "1"}) == {
+        "HOME": "/h", "NIX_SSL_CERT_FILE": "/bundle.crt", "FACTORY_PASS_CA_CERTS": "1"}
     # The digest pinned at lane admission covers ENVIRONMENT_KEYS only, so in-flight runs keep it.
     assert not validator_boundary.CA_ENVIRONMENT_KEYS & validator_boundary.ENVIRONMENT_KEYS
+    assert "FACTORY_PASS_CA_CERTS" not in validator_boundary.ENVIRONMENT_KEYS
