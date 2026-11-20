@@ -6,6 +6,7 @@ import json
 import os
 import pathlib
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -74,6 +75,46 @@ def test_factory_module_is_loaded_with_isolated_python_from_pinned_root(tmp_path
                          timeout=10)
     assert ran.returncode == 0, ran.stderr
     assert "untrusted search path" not in ran.stderr
+
+
+def test_shell_operation_uses_host_bash_and_preserves_operator_shell(tmp_path, monkeypatch):
+    bash = shutil.which("bash")
+    assert bash
+    bin_dir = tmp_path / "runtime bin"
+    bin_dir.mkdir()
+    runtime_bash = bin_dir / "bash"
+    runtime_bash.symlink_to(bash)
+    monkeypatch.setenv("PATH", str(bin_dir), prepend=os.pathsep)
+    monkeypatch.setenv("SHELL", "/operator/login/shell")
+    script = tmp_path / "harness/tmux_lane.sh"
+    script.parent.mkdir()
+    script.write_text("""printf '%s\\n' "$BASH" "$SHELL" "$@"\n""")
+    argument = "lane with spaces; $(false)"
+    plan = custody.Plan.parse({
+        **plan_document(tmp_path),
+        "factory_home": str(tmp_path),
+        "cwd": str(tmp_path),
+        "operations": {"lane": {
+            "entrypoint": "lane", "args": [argument], "timeout": 10,
+            "source_sha256": hashlib.sha256(script.read_bytes()).hexdigest(),
+        }},
+    })
+    receipts = tmp_path / "receipts"
+    receipts.mkdir()
+    admitted = {**request(plan), "operation": "lane"}
+    result = custody.execute(plan, admitted, receipts)
+    assert result["status"] == "completed" and result["returncode"] == 0
+    assert json.loads((receipts / "request-1.started.json").read_text())[
+        "interpreter"] == str(runtime_bash)
+    assert (receipts / "request-1.log").read_text().splitlines() == [
+        str(runtime_bash), "/operator/login/shell", argument,
+    ]
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", bin_dir.name)
+    assert custody.execute(plan, admitted, receipts) == {**result, "replayed": True}
+    with pytest.raises(custody.CustodyError, match="Bash is unavailable"):
+        custody.execute(plan, {**request(plan, "request-2"), "operation": "lane"}, receipts)
+    assert not list(receipts.glob("request-2.*"))
 
 
 @pytest.mark.parametrize("change", [

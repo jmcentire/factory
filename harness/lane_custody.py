@@ -18,6 +18,7 @@ import os
 import pathlib
 import platform
 import re
+import shutil
 import signal
 import socket
 import stat
@@ -123,12 +124,16 @@ class Plan:
     def digest(self) -> str:
         return _digest(self.document)
 
-    def command(self, operation: str) -> list[str]:
+    def _operation(self, operation: str) -> dict[str, Any]:
         spec = self.document["operations"].get(operation)
         if spec is None:
             raise CustodyError("operation was not admitted by the host")
         # Recheck immediately before execution; neither the client nor a stale plan chooses code.
         Plan.parse(self.document)
+        return spec
+
+    def command(self, operation: str) -> list[str]:
+        spec = self._operation(operation)
         script = pathlib.Path(self.document["factory_home"]) / _ENTRYPOINTS[spec["entrypoint"]][0]
         if spec["entrypoint"] == "factory-cli":
             # -m normally searches cwd before PYTHONPATH. Never import a seat-created
@@ -137,7 +142,14 @@ class Plan:
                     "import runpy,sys;sys.path.insert(0,sys.argv.pop(1));"
                     "runpy.run_module('factory_runtime.cli',run_name='__main__')",
                     self.document["factory_home"], *spec["args"]]
-        interpreter = self.document["python"] if script.suffix == ".py" else "/bin/bash"
+        if script.suffix == ".py":
+            return [self.document["python"], str(script), *spec["args"]]
+        # Resolve from the host's tool directories before recording a start.
+        # Relative PATH entries would depend on the broker's working directory.
+        host_path = os.pathsep.join(p for p in os.get_exec_path() if os.path.isabs(p))
+        interpreter = shutil.which("bash", path=host_path)
+        if interpreter is None:
+            raise CustodyError("Bash is unavailable on the host PATH")
         return [interpreter, str(script), *spec["args"]]
 
 
@@ -228,7 +240,6 @@ def execute(plan: Plan, request: Any, receipts: pathlib.Path) -> dict[str, Any]:
             if policy_custody.holds(receipts):
                 raise CustodyError(
                     "policy hold prevents execution; supervised disposition required")
-    command = plan.command(request["operation"])
     stem = receipts / request["request_id"]
     started = stem.with_suffix(stem.suffix + ".started.json")
     terminal = stem.with_suffix(stem.suffix + ".terminal.json")
@@ -236,6 +247,7 @@ def execute(plan: Plan, request: Any, receipts: pathlib.Path) -> dict[str, Any]:
         prior = _read_receipt(terminal)
         if prior.get("request") != request:
             raise CustodyError("request ID was reused for different work")
+        plan._operation(request["operation"])
         return {**prior, "replayed": True}
     if started.exists() or started.is_symlink():
         raise CustodyError("prior request outcome is uncertain; inspect before retrying")
@@ -255,7 +267,9 @@ def execute(plan: Plan, request: Any, receipts: pathlib.Path) -> dict[str, Any]:
         completion = _read_receipt(finished) if finished.exists() else {}
         if completion.get("request") != previous or completion.get("status") != "completed":
             raise CustodyError("operation has an uncertain prior request; inspect before retrying")
-    _save_once(started, {"request": request, "at": datetime.datetime.now(datetime.UTC).isoformat()})
+    command = plan.command(request["operation"])
+    _save_once(started, {"request": request, "interpreter": command[0],
+                         "at": datetime.datetime.now(datetime.UTC).isoformat()})
     # Logs remain host-owned. Their contents are not relayed automatically across role boundaries.
     log = stem.with_suffix(stem.suffix + ".log")
     spec = plan.document["operations"][request["operation"]]

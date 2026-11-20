@@ -8,6 +8,7 @@ startup-file execution or a credential in the normalized output would turn these
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -37,10 +38,18 @@ def dummy_home(tmp_path, monkeypatch):
 def test_profile_source_is_opted_in_silent_and_cannot_consume_payload(
     dummy_home, monkeypatch, capfd,
 ):
+    bash = shutil.which("bash")
+    assert bash
+    bin_dir = dummy_home / "runtime bin"
+    bin_dir.mkdir()
+    runtime_bash = bin_dir / "bash"
+    runtime_bash.symlink_to(bash)
+    monkeypatch.setenv("PATH", str(bin_dir), prepend=os.pathsep)
+    monkeypatch.setenv("SHELL", "/operator/login/shell")
     sourced, unwanted = dummy_home / "sourced", dummy_home / "unapproved-startup"
     profile = dummy_home / ".profile"
     profile.write_text(
-        f"touch '{sourced}'\nexport JMC_JEV_API_KEY=dummy-jev-key\n"
+        f"""printf '%s' "$BASH" > '{sourced}'\nexport JMC_JEV_API_KEY=dummy-jev-key\n"""
         "export VOYAGE_API_KEY=dummy-unrelated-key\n"
         "printf dummy-source-secret\nprintf dummy-source-secret >&2\n"
         "read -r discarded || true\ntrap 'printf dummy-trap-secret' DEBUG\n"
@@ -60,9 +69,9 @@ def test_profile_source_is_opted_in_silent_and_cannot_consume_payload(
     real_popen, children = subprocess.Popen, []
 
     def shell_with_recording_worker(args, **kwargs):
-        assert args[:4] == ["/bin/bash", "--noprofile", "--norc", "-c"]
+        assert args[1:4] == ["--noprofile", "--norc", "-c"]
         assert args[-2] == sys.executable and kwargs["start_new_session"] is True
-        assert not {"BASH_ENV", "ENV"} & kwargs["env"].keys()
+        assert not {"BASH_ENV", "ENV", "SHELL"} & kwargs["env"].keys()
         child = real_popen([*args[:-1], str(worker)], **kwargs)
         children.append(child)
         return child
@@ -72,9 +81,15 @@ def test_profile_source_is_opted_in_silent_and_cannot_consume_payload(
         jev_screen.request(PAYLOAD)
     assert not sourced.exists() and not children
     monkeypatch.setenv("FACTORY_SYSTEM_ONE_PROFILE", "1")
+    with monkeypatch.context() as context:
+        context.setenv("PATH", "relative-tools")
+        with pytest.raises(jev_screen.ScreenError, match="provider-unavailable"):
+            jev_screen.request(PAYLOAD)
+        assert not sourced.exists() and not children
     parent = dict(os.environ)
     assert jev_screen.request(PAYLOAD) == ENVELOPE
-    assert sourced.exists() and not unwanted.exists() and dict(os.environ) == parent
+    assert sourced.read_text() == str(runtime_bash)
+    assert not unwanted.exists() and dict(os.environ) == parent
     assert len(children) == 1
     profile.write_text("printf dummy-empty-profile-noise\n")
     with pytest.raises(jev_screen.ScreenError, match="missing-key"):
