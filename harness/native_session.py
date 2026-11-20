@@ -58,6 +58,11 @@ LAUNCHER_ENV = "FACTORY_CLAUDE_LAUNCHER"
 DEFAULT_LAUNCHER = "cl"
 #: Native lifecycle events the hook settings subscribe to.
 HOOK_EVENTS = ("SessionStart", "UserPromptSubmit", "Stop", "Notification", "SessionEnd")
+#: A seat's terminal output is kept in its lane log, which the Orchestrator and the operator
+#: read back, so a spinner or shimmer redrawn several times a second fills it with frames. A
+#: hosted session starts with its animations off where its program has a setting for that
+#: (Claude Code and Codex; Antigravity and Cursor have none).
+CLAUDE_QUIET_SETTINGS = {"prefersReducedMotion": True, "spinnerTipsEnabled": False}
 #: Notification types that mean the session is asking the operator something on screen.
 #: Keys typed then would answer that question, so nothing is typed while one is the last report.
 ASKING = ("permission_prompt", "elicitation_dialog", "elicitation_url_dialog", "agent_needs_input")
@@ -347,6 +352,7 @@ def plan(arguments: Sequence[str], *, launcher: Launcher, directory: pathlib.Pat
             raise ValueError("lane settings file is not an object")
         settings = merge_settings(existing, settings)
         del args[index:index + 2]
+    settings.update(CLAUDE_QUIET_SETTINGS)
     target = directory / f"{slot}-native-settings.json"
     _write_private(target, json.dumps(settings, sort_keys=True))
     # First, and in one word: a launcher that reads its first argument as a session name still
@@ -412,6 +418,8 @@ _LANE_MARKS[AGY_HOOKS] = (b"native_session.py", b"--dialect")
 CODEX_HOOKS = ".codex/hooks.json"
 CODEX_PROJECT_FILES = (CODEX_HOOKS,)
 _LANE_MARKS[CODEX_HOOKS] = (b"native_session.py", b"--dialect")
+#: Codex's own setting for its spinners and shimmer (see CLAUDE_QUIET_SETTINGS).
+CODEX_QUIET_OPTIONS = ("-c", "tui.animations=false")
 #: The project files a lane of each agent writes into its own clone, and what to call them.
 PROJECT_FILES: Mapping[str, tuple[str, ...]] = {"cursor-agent": CURSOR_PROJECT_FILES,
                                                 "muse": MUSE_PROJECT_FILES,
@@ -974,6 +982,9 @@ def codex_plan(arguments: Sequence[str], *, executable: str, directory: pathlib.
                          "session, and nothing else")
     if "\0" in prompt:
         raise ValueError("the first message holds a NUL byte and cannot be a launch argument")
+    # Last among the options: before the session id a resumed start ends with.
+    at = len(args) - 1 if resumed else len(args)
+    args[at:at] = CODEX_QUIET_OPTIONS
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     journal = directory / f"{slot}-native-events.jsonl"
     if journal.is_symlink():

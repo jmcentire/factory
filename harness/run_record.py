@@ -759,6 +759,9 @@ def resident_command(agent: str, model: str, effort: str, prompt: str, root: Pat
             "--no-alt-screen",
             *model_args,
             *effort_args,
+            # Its pane goes to the seat's lane log (native_session.CODEX_QUIET_OPTIONS).
+            "-c",
+            "tui.animations=false",
             prompt,
         ]
     if agent in {"claude", "agy"}:
