@@ -101,13 +101,17 @@ def test_shell_operation_uses_host_bash_and_preserves_operator_shell(tmp_path, m
     })
     receipts = tmp_path / "receipts"
     receipts.mkdir()
-    result = custody.execute(plan, {**request(plan), "operation": "lane"}, receipts)
+    admitted = {**request(plan), "operation": "lane"}
+    result = custody.execute(plan, admitted, receipts)
     assert result["status"] == "completed" and result["returncode"] == 0
+    assert json.loads((receipts / "request-1.started.json").read_text())[
+        "interpreter"] == str(runtime_bash)
     assert (receipts / "request-1.log").read_text().splitlines() == [
         str(runtime_bash), "/operator/login/shell", argument,
     ]
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("PATH", bin_dir.name)
+    assert custody.execute(plan, admitted, receipts) == {**result, "replayed": True}
     with pytest.raises(custody.CustodyError, match="Bash is unavailable"):
         custody.execute(plan, {**request(plan, "request-2"), "operation": "lane"}, receipts)
     assert not list(receipts.glob("request-2.*"))

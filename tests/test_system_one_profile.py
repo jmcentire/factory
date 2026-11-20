@@ -71,7 +71,7 @@ def test_profile_source_is_opted_in_silent_and_cannot_consume_payload(
     def shell_with_recording_worker(args, **kwargs):
         assert args[1:4] == ["--noprofile", "--norc", "-c"]
         assert args[-2] == sys.executable and kwargs["start_new_session"] is True
-        assert not {"BASH_ENV", "ENV"} & kwargs["env"].keys()
+        assert not {"BASH_ENV", "ENV", "SHELL"} & kwargs["env"].keys()
         child = real_popen([*args[:-1], str(worker)], **kwargs)
         children.append(child)
         return child
@@ -81,6 +81,11 @@ def test_profile_source_is_opted_in_silent_and_cannot_consume_payload(
         jev_screen.request(PAYLOAD)
     assert not sourced.exists() and not children
     monkeypatch.setenv("FACTORY_SYSTEM_ONE_PROFILE", "1")
+    with monkeypatch.context() as context:
+        context.setenv("PATH", "relative-tools")
+        with pytest.raises(jev_screen.ScreenError, match="provider-unavailable"):
+            jev_screen.request(PAYLOAD)
+        assert not sourced.exists() and not children
     parent = dict(os.environ)
     assert jev_screen.request(PAYLOAD) == ENVELOPE
     assert sourced.read_text() == str(runtime_bash)

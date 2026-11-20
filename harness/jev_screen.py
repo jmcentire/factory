@@ -14,6 +14,7 @@ import json
 import math
 import os
 import pathlib
+import shutil
 import signal
 import stat
 import subprocess
@@ -275,6 +276,11 @@ def request(payload: dict[str, Any], *, profile: bool | None = None) -> dict[str
            ("HOME", "USER", "LOGNAME", "PATH", "LANG", "LC_ALL", "TMPDIR", *credential_names)
            if name in os.environ}
     if not direct_key and profile:
+        # The dispatcher can run from the target checkout. Use absolute tool directories.
+        tool_path = os.pathsep.join(p for p in os.get_exec_path(env) if os.path.isabs(p))
+        bash = shutil.which("bash", path=tool_path)
+        if bash is None:
+            raise ScreenError("provider-unavailable")
         # Source the explicitly authorized fixed profile only in this short-lived child.
         # Keep its noise/traps off the response pipe; preserve payload stdin for HTTP.
         wrapper = """
@@ -286,7 +292,7 @@ set +x +v
 trap - DEBUG RETURN ERR EXIT
 builtin exec "$factory_http_python" -I "$factory_http_script" --request >&3 3>&-
 """
-        argv = ["bash", "--noprofile", "--norc", "-c", wrapper,
+        argv = [bash, "--noprofile", "--norc", "-c", wrapper,
                 "factory-system-one-profile", sys.executable, script]
     try:
         if not direct_key and profile:
