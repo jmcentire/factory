@@ -6,7 +6,14 @@ The current workflow is [docs/SOFTWARE-FACTORY.md](docs/SOFTWARE-FACTORY.md).
 
 ## Install
 
-For Wander machines, the local provisioning installer now ships in this repository:
+**On a Wander machine, use tooling-devshell.** Run `wander-tooling sync`; the devshell
+ships Factory and keeps it updated. Your next devshell load moves an existing install
+(including one from the installer link below) over to it, backing up every file it
+replaces as `<name>.factory-backup-<hash>`. To keep working from your own checkout
+(for example while developing Factory), create `~/.factory/keep-standalone` before
+that load. Details: [tooling-devshell factory/README.md](https://github.com/wandercom/tooling-devshell/blob/dev/factory/README.md).
+
+Without tooling-devshell, the local provisioning installer ships in this repository:
 
 ```bash
 gh api -H "Accept: application/vnd.github.raw" repos/wandercom/chiron/contents/install.sh | bash
