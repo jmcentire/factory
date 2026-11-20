@@ -646,6 +646,33 @@ def test_lane_env_environment_is_the_grant(tmp_path: Path) -> None:
     assert "HARNESS_SECRETS" not in keys
 
 
+def test_lane_env_can_find_packaged_tools_without_inheriting_host_path(tmp_path: Path) -> None:
+    env = lane_env_setup(tmp_path)
+    tools = tmp_path / "runtime tools"
+    tools.mkdir()
+    tool = tools / "only-packaged-probe"
+    tool.write_text('#!/bin/sh\nprintf "%s\n" "$LANE_TOKEN" "${UNGRANTED-unset}" "$PATH"\n')
+    tool.chmod(0o755)
+    args = ["bash", str(HARNESS / "lane_env.sh"), str(tmp_path / "manifest"), "--", tool.name]
+    default = run(args, tmp_path, env)
+    assert default.returncode == 127
+    chosen = f"{tools}:/usr/bin:/bin"
+    configured = run(args, tmp_path, {**env, "FACTORY_LANE_ENV_PATH": chosen, "UNGRANTED": "host"})
+    assert configured.returncode == 0, configured.stderr
+    assert configured.stdout.splitlines() == ["tok-123", "unset", chosen]
+
+
+@pytest.mark.parametrize("invalid", ["", "relative:/bin", ":/bin", "/bin:", "/bin::/usr/bin"])
+def test_lane_env_refuses_search_paths_that_depend_on_working_directory(
+    tmp_path: Path, invalid: str,
+) -> None:
+    env = {**lane_env_setup(tmp_path), "FACTORY_LANE_ENV_PATH": invalid}
+    args = ["bash", str(HARNESS / "lane_env.sh"), str(tmp_path / "manifest"), "--", "true"]
+    result = run(args, tmp_path, env)
+    assert result.returncode == 64
+    assert "FACTORY_LANE_ENV_PATH" in result.stderr
+
+
 # --------------------------------------------------------------------------
 # tmux layer — injection topology and dispatch gate
 # --------------------------------------------------------------------------

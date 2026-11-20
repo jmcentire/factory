@@ -164,6 +164,12 @@ Cleanup and archival use that recorded socket even when the caller changes
 `list` reports those runs as kept. A confirmed absent run/session may be cleaned.
 `FACTORY_PYTHON` already selects the Factory-capable Python interpreter.
 
+`FACTORY_LANE_ENV_PATH` selects the command search path for
+`harness/lane_env.sh` when a launcher supplies its own tools. Set it to a
+colon-separated list of absolute directories. The default is
+`/usr/local/bin:/usr/bin:/bin`. The child still starts with a scrubbed
+environment and receives only the explicitly granted variables.
+
 ## Workflow and implementation
 
 [docs/SOFTWARE-FACTORY.md](docs/SOFTWARE-FACTORY.md) defines the four roles and the
