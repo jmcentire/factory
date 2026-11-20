@@ -796,6 +796,29 @@ def test_relay_file_sends_one_line_pointer_with_the_exact_bytes_digest(tmp_path:
     assert f"sha256={digest}" in pointer and "Line two" not in pointer
 
 
+def test_relay_file_answer_is_one_escalation_response_through_the_input_path(
+    tmp_path: Path,
+) -> None:
+    """Follow-up to #125: the human's answer to an escalation reaches the Validator as an
+    escalation-response notice from them, told once however often it is relayed."""
+    env = {"HARNESS_DIR": str(tmp_path / ".harness"), "INJECT_FROM": "founder",
+           "PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+    relay = ["bash", str(HARNESS / "relay_file.sh"), "testrun"]
+
+    def run(to: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run([*relay, to, "--answer", "core-1-sigstop"], input="Keep it.\n",
+                              cwd=tmp_path, capture_output=True, text=True, env=env, check=False)
+
+    for _ in range(2):
+        r = run("validator")
+        assert r.returncode == 0, r.stdout + r.stderr
+    [row] = read_chain(tmp_path / ".harness/runs/testrun/validator/inbox.jsonl")
+    assert row["sender"] == "founder"
+    assert row["text"].startswith("FACTORY_ESCALATION_RESPONSE (from founder) Answer to "
+                                  "core-1-sigstop: FACTORY_RELAY file=")
+    assert run("coder").returncode == 64
+
+
 def test_relay_file_applies_the_content_guards_to_the_file_bytes(tmp_path: Path) -> None:
     """The coder oracle-leak guard judges what the file says, not only the pointer line."""
     leak = tmp_path / "leak.txt"
@@ -2421,8 +2444,9 @@ def test_dispatcher_wakes_the_validator_once_per_lane_question_and_done(
     notices = read_chain(root / "validator/inbox.jsonl")
     assert len(notices) == 2
     question_id = read_chain(root / "dialogue/journal.jsonl")[0]["question_id"]
-    assert notices[0]["text"].startswith(f"FACTORY_QUESTION_PENDING {question_id} from tester")
-    assert notices[1]["text"].startswith("FACTORY_LANE_DONE tester")
+    assert notices[0]["text"].startswith("FACTORY_WORKER_QUESTION (from dispatcher) "
+                                         f"FACTORY_QUESTION_PENDING {question_id} from tester")
+    assert "FACTORY_LANE_DONE tester" in notices[1]["text"]
     assert all(row["sender"] == "dispatcher" for row in notices)
 
 
@@ -2467,9 +2491,9 @@ def test_dispatcher_watches_a_parallel_lane_instance_named_by_its_launch_journal
     assert sent == [], "parallel-lane notices must not invoke terminal delivery"
     notices = read_chain(root / "validator/inbox.jsonl")
     assert [row["text"].split(" ")[0] for row in notices] == [
-        "FACTORY_QUESTION_PENDING", "FACTORY_LANE_DONE"]
+        "FACTORY_WORKER_QUESTION", "FACTORY_LANE_STATUS"]
     assert "from tester-b" in notices[0]["text"]
-    assert notices[1]["text"].startswith("FACTORY_LANE_DONE tester-b")
+    assert "FACTORY_LANE_DONE tester-b" in notices[1]["text"]
 
 
 def test_dispatcher_does_not_treat_a_blocked_status_line_as_a_question(

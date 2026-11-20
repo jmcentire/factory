@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from harness import lane_agent, lane_dialogue, lane_watchdog
+from harness import lane_agent, lane_dialogue, lane_watchdog, validator_input
 
 T0 = 1_791_000_000.0
 
@@ -755,3 +755,21 @@ def test_a_turn_end_on_record_holds_through_an_unreadable_record_for_one_window_
         assert watched.at(STALL_AT + 1) == "watching"
     assert watched.at(at) == "watching"  # quiet once; a hang must outlast HUNG_CONFIRM_S
     _settle(watched, at + lane_watchdog.HUNG_CONFIRM_S, "stalled")
+
+
+def test_a_question_only_a_typed_session_recorded_is_told_once_through_the_input_path(
+    tmp_path: Path,
+) -> None:
+    """Follow-up to #125: a question no pane watcher saw reaches the Validator as one
+    worker-question notice, however often it is checked and whoever else posts it."""
+
+    watched = Lane(tmp_path, record=None, lane=None)
+    row, _ = lane_dialogue.record_question(watched.root, "tester", "Is an empty basket a 400?")
+    assert watched.at(600) == "watching" and watched.at(630) == "watching"
+    notice_id, _ = lane_dialogue.question_notice(row)
+    assert not validator_input.post(watched.root, notice_id, "worker-question", "dispatcher", "x")
+    rows = watched._rows(watched.root / "validator" / "inbox.jsonl")
+    [told] = [str(r["text"]) for r in rows if "FACTORY_QUESTION_PENDING" in str(r["text"])]
+    assert told.startswith("FACTORY_WORKER_QUESTION (from host) FACTORY_QUESTION_PENDING "
+                           f"{row['question_id']} from tester")
+    assert validator_input.status(watched.root, notice_id) == "delivered"
