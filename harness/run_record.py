@@ -902,6 +902,26 @@ def seat_status(root: Path, role: str) -> dict[str, Any]:
     }
 
 
+def tmux_command(doc: dict) -> list[str]:
+    import shutil
+
+    selector = os.environ.get("FACTORY_TMUX") or "tmux"
+    executable = shutil.which(selector)
+    if executable is None:
+        raise ValueError(f"FACTORY_TMUX executable is unavailable: {selector}")
+    return [str(Path(executable).absolute()), "-L", doc["tmux_socket"]]
+
+
+def attach(runs: Path, run: str) -> None:
+    """Replace the CLI with the client for this run's private session."""
+    _, doc = load(runs, run)
+    tmux = tmux_command(doc)
+    env = dict(os.environ)
+    if directory := doc.get("tmux_tmpdir"):
+        env["TMUX_TMPDIR"] = directory
+    os.execve(tmux[0], [*tmux, "attach", "-t", f"={run}"], env)
+
+
 def start(runs: Path, run: str) -> None:
     from factory_runtime.storage import run_storage_lock
 
@@ -933,12 +953,8 @@ def _start_locked(runs: Path, run: str) -> None:
     agent_path = (
         os.pathsep.join((agent_bin, os.environ.get("PATH", os.defpath))) if agent_bin else None
     )
-    selector = os.environ.get("FACTORY_TMUX") or "tmux"
-    executable = shutil.which(selector)
-    if executable is None:
-        raise ValueError(f"FACTORY_TMUX executable is unavailable: {selector}")
     # Panes change cwd to the target repository; keep the executable selected here.
-    tmux = [str(Path(executable).absolute()), "-L", doc["tmux_socket"]]
+    tmux = tmux_command(doc)
     socket_directory = doc.get("tmux_tmpdir")
     tmux_env = {**os.environ, "TMUX_TMPDIR": socket_directory} if socket_directory else None
     socket_env = ["env", f"TMUX_TMPDIR={socket_directory}"] if socket_directory else []
@@ -1228,8 +1244,12 @@ def _start_locked(runs: Path, run: str) -> None:
                             "-n", "inbox-wake", "-c", doc['repository'], wake],
                            check=True, env=tmux_env)
         # Native inbox transport only; no supervisor may stop work for review lag.
-        attach = shlex.join([*socket_env, *tmux, "attach", "-t", run])
-        print(f"Factory {run}: {attach}")
+        if os.environ.get("FACTORY_ATTACH_VIA_CLI") == "1":
+            hint = ["env", f"FACTORY_TMUX={tmux[0]}", "factory", "attach", run,
+                    "--runs", str(root.parent)]
+        else:
+            hint = [*socket_env, *tmux, "attach", "-t", run]
+        print(f"Factory {run}: {shlex.join(hint)}")
         if selected["validator"] == "kickoff":
             print(f"Existing Validator: read {root}/validator/BRIEF.md")
     except BaseException as error:
@@ -1258,8 +1278,8 @@ def _start_locked(runs: Path, run: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["create", "start", "context", "status", "message",
-                                           "notify", "capture", "provenance", "pr"])
+    parser.add_argument("action", choices=["create", "start", "attach", "context", "status",
+                                           "message", "notify", "capture", "provenance", "pr"])
     parser.add_argument("--runs", type=Path, required=True)
     parser.add_argument("--run", required=True)
     parser.add_argument("--agent-entrypoints", action="store_true")
@@ -1302,6 +1322,8 @@ def main() -> int:
             )
         elif args.action == "start":
             start(args.runs, args.run)
+        elif args.action == "attach":
+            attach(args.runs, args.run)
         elif args.action == "context":
             context(args.runs, args.run, with_agent_bin=args.agent_entrypoints)
         else:

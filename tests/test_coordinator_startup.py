@@ -503,6 +503,19 @@ def test_a_seat_that_stops_during_startup_fails_the_start_and_can_be_retried(
     assert {name: (root / name).read_bytes() for name in original} == original
 
 
+def test_cli_start_prints_attach_with_the_selected_client(launch, monkeypatch, capsys):
+    root, _, _, _, _, _ = launch
+    monkeypatch.setenv("FACTORY_ATTACH_VIA_CLI", "1")
+    calls = _seats(monkeypatch)
+    run_record.start(root.parent, "task")
+    [instruction] = [line.removeprefix("Factory task: ") for line in
+                     capsys.readouterr().out.splitlines() if " factory attach " in line]
+    assert shlex.split(instruction) == [
+        "env", f"FACTORY_TMUX={calls[0][0]}", "factory", "attach", "task",
+        "--runs", str(root.parent),
+    ]
+
+
 def test_a_seat_that_never_registers_fails_the_start(launch, monkeypatch):
     root, _, _, _, _, _ = launch
     calls = []
