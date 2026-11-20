@@ -12,6 +12,12 @@ public API is still pre-1.0.
 - `FACTORY_AGENT_BIN` lets an operator select provider entrypoints retained across
   coordinator starts and author-lane launches and resumes.
 
+### Fixed
+
+- Claude Code and Codex seats start with their animations off (`prefersReducedMotion`,
+  `tui.animations=false`), so spinner and shimmer frames no longer fill the lane logs the
+  Orchestrator and the operator read back. Antigravity and Cursor have no such setting.
+
 ## [0.8.31] - 2026-11-18
 
 ### Changed
