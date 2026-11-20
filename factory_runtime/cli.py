@@ -53,6 +53,10 @@ def _parser() -> argparse.ArgumentParser:
                           "else .factory/runs in the current directory)")
     ordinary.add_argument("--log")
     ordinary.add_argument("--budget", type=float)
+    attach = commands.add_parser("attach", help="open a run's private tmux session")
+    attach.add_argument("run")
+    attach.add_argument("--runs", help="runs directory (default: $FACTORY_RUNS_DIR, "
+                        "else .factory/runs in the current directory)")
 
 
     validate = commands.add_parser(
@@ -642,6 +646,11 @@ def main(argv: list[str] | None = None) -> int:
                 result = inventory(arguments.runs)
             print(json.dumps(result, sort_keys=True))
             return 0
+        if arguments.command == "attach":
+            script = Path(__file__).resolve().parents[1] / "harness/run_record.py"
+            runs = arguments.runs or os.environ.get("FACTORY_RUNS_DIR") or ".factory/runs"
+            os.execv(sys.executable, [sys.executable, str(script), "attach",
+                                     "--runs", runs, "--run", arguments.run])
         if arguments.command == "run":
             import subprocess
             script = Path(__file__).resolve().parents[1] / "harness/factory.sh"
@@ -654,7 +663,8 @@ def main(argv: list[str] | None = None) -> int:
                 if value is not None:
                     command.extend([f"--{key}", str(value)])
             return subprocess.run(command, check=False,
-                                  env={**os.environ, "FACTORY_PYTHON": sys.executable}).returncode
+                                  env={**os.environ, "FACTORY_PYTHON": sys.executable,
+                                       "FACTORY_ATTACH_VIA_CLI": "1"}).returncode
         _execute(arguments)
     except (OSError, ValueError) as exc:
         print(f"factory: refused: {exc}", file=sys.stderr)

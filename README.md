@@ -156,6 +156,10 @@ the selection to an absolute executable before changing directories. It reaches
 Factory's shell/Python controls, scrubbed coordinator environments and lane watchers;
 it does not change the per-run private socket or select the operator's unrelated server.
 A missing explicitly selected binary fails rather than substituting another executable.
+After `factory run`, use the printed `factory attach RUN --runs PATH` command.
+It carries the absolute tmux client selected at start and uses the recorded private
+socket. When calling `factory attach` yourself, set `FACTORY_TMUX` to select the
+same client and use `--runs` or `FACTORY_RUNS_DIR` to locate the run.
 Standalone `run-checkout.sh clean` uses the selected client and keeps work when
 liveness cannot be established, including older records without a retained socket
 directory or client errors. New runs record their socket directory when created.

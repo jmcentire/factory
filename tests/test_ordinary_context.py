@@ -65,3 +65,28 @@ def test_changed_task_refuses_context_before_downstream_command(task):
     assert loaded.returncode == 70 and "retained task changed" in loaded.stderr
     assert loaded.stdout == ""
     assert (root / "harness.json").read_bytes() == before
+
+
+def test_attach_execs_selected_tmux_for_the_recorded_socket(task, tmp_path):
+    runs, root, _, _ = task
+    record = json.loads((root / "harness.json").read_text())
+    tmux = tmp_path / "pinned tmux"
+    tmux.write_text('#!/bin/sh\nprintf "%s\n" "$TMUX_TMPDIR" "$@"\nexit 17\n')
+    tmux.chmod(0o755)
+    command = [sys.executable, "-m", "factory_runtime.cli", "attach", root.name]
+    result = subprocess.run(
+        [*command, "--runs", str(runs)], capture_output=True, text=True,
+        env={**os.environ, "FACTORY_TMUX": str(tmux), "TMUX_TMPDIR": str(tmp_path / "wrong"),
+             "FACTORY_RUNS_DIR": str(tmp_path / "another run directory")},
+    )
+    assert result.returncode == 17, result.stderr
+    assert result.stdout.splitlines() == [
+        record["tmux_tmpdir"], "-L", record["tmux_socket"], "attach", "-t", "=" + root.name,
+    ]
+    refused = subprocess.run(
+        command, capture_output=True, text=True,
+        env={**os.environ, "FACTORY_TMUX": str(tmux.with_name("missing tmux")),
+             "FACTORY_RUNS_DIR": str(runs)},
+    )
+    assert refused.returncode == 70
+    assert "FACTORY_TMUX executable is unavailable" in refused.stderr
