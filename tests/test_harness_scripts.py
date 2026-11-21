@@ -663,13 +663,21 @@ def test_lane_env_can_find_packaged_tools_without_inheriting_host_path(tmp_path:
 
 
 def test_lane_env_accepts_absolute_path_with_non_utf8_bytes(tmp_path: Path) -> None:
+    locales = subprocess.run(["locale", "-a"], capture_output=True, text=True, check=True)
+    utf8_locale = next(
+        (name for name in locales.stdout.splitlines()
+         if name.lower().replace("-", "").endswith("utf8")),
+        None,
+    )
+    if utf8_locale is None:
+        pytest.skip("a UTF-8 locale is required to test pathname encoding")
     chosen = b"/runtime/caf\xe9:/usr/bin:/bin"
     env = {
         **lane_env_setup(tmp_path),
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "FACTORY_PYTHON": sys.executable,
         "FACTORY_LANE_ENV_PATH": os.fsdecode(chosen),
-        "LC_ALL": "en_US.UTF-8",
+        "LC_ALL": utf8_locale,
     }
     result = subprocess.run(
         ["bash", str(HARNESS / "lane_env.sh"), str(tmp_path / "manifest"), "--", "/usr/bin/env"],
