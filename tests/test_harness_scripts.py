@@ -651,7 +651,7 @@ def test_lane_env_can_find_packaged_tools_without_inheriting_host_path(tmp_path:
     tools = tmp_path / "runtime tools"
     tools.mkdir()
     tool = tools / "only-packaged-probe"
-    tool.write_text('#!/bin/sh\nprintf "%s\n" "$LANE_TOKEN" "${UNGRANTED-unset}" "$PATH"\n')
+    tool.write_text('#!/bin/sh\nprintf "%s\\n" "$LANE_TOKEN" "${UNGRANTED-unset}" "$PATH"\n')
     tool.chmod(0o755)
     args = ["bash", str(HARNESS / "lane_env.sh"), str(tmp_path / "manifest"), "--", tool.name]
     default = run(args, tmp_path, env)
@@ -662,7 +662,40 @@ def test_lane_env_can_find_packaged_tools_without_inheriting_host_path(tmp_path:
     assert configured.stdout.splitlines() == ["tok-123", "unset", chosen]
 
 
-@pytest.mark.parametrize("invalid", ["", "relative:/bin", ":/bin", "/bin:", "/bin::/usr/bin"])
+def test_lane_env_accepts_absolute_path_with_non_utf8_bytes(tmp_path: Path) -> None:
+    chosen = b"/runtime/caf\xe9:/usr/bin:/bin"
+    env = {
+        **lane_env_setup(tmp_path),
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "FACTORY_PYTHON": sys.executable,
+        "FACTORY_LANE_ENV_PATH": os.fsdecode(chosen),
+        "LC_ALL": "en_US.UTF-8",
+    }
+    result = subprocess.run(
+        ["bash", str(HARNESS / "lane_env.sh"), str(tmp_path / "manifest"), "--", "/usr/bin/env"],
+        cwd=tmp_path, env=env, capture_output=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert b"PATH=" + chosen in result.stdout.splitlines()
+
+
+def test_lane_env_preserves_explicit_manifest_path_precedence(tmp_path: Path) -> None:
+    env = lane_env_setup(tmp_path)
+    (tmp_path / "manifest").write_text("LANE_TOKEN\nPATH\n")
+    (tmp_path / "secrets" / "PATH").write_text("/granted/bin:/usr/bin:/bin")
+    result = run(
+        ["bash", str(HARNESS / "lane_env.sh"), str(tmp_path / "manifest"), "--", "/usr/bin/env"],
+        tmp_path,
+        {**env, "FACTORY_LANE_ENV_PATH": "/launcher/tools:/usr/bin:/bin"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert "PATH=/granted/bin:/usr/bin:/bin" in result.stdout.splitlines()
+    assert "LANE_TOKEN=tok-123" in result.stdout.splitlines()
+
+
+@pytest.mark.parametrize(
+    "invalid", ["", "relative:/bin", ":/bin", "/bin:", "/bin::/usr/bin", "/bin:relative:/usr/bin"],
+)
 def test_lane_env_refuses_search_paths_that_depend_on_working_directory(
     tmp_path: Path, invalid: str,
 ) -> None:
