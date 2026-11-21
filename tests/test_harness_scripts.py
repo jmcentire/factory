@@ -646,6 +646,77 @@ def test_lane_env_environment_is_the_grant(tmp_path: Path) -> None:
     assert "HARNESS_SECRETS" not in keys
 
 
+def test_lane_env_can_find_packaged_tools_without_inheriting_host_path(tmp_path: Path) -> None:
+    env = lane_env_setup(tmp_path)
+    tools = tmp_path / "runtime tools"
+    tools.mkdir()
+    tool = tools / "only-packaged-probe"
+    tool.write_text('#!/bin/sh\nprintf "%s\\n" "$LANE_TOKEN" "${UNGRANTED-unset}" "$PATH"\n')
+    tool.chmod(0o755)
+    args = ["bash", str(HARNESS / "lane_env.sh"), str(tmp_path / "manifest"), "--", tool.name]
+    default = run(args, tmp_path, env)
+    assert default.returncode == 127
+    chosen = f"{tools}:/usr/bin:/bin"
+    configured = run(args, tmp_path, {**env, "FACTORY_LANE_ENV_PATH": chosen, "UNGRANTED": "host"})
+    assert configured.returncode == 0, configured.stderr
+    assert configured.stdout.splitlines() == ["tok-123", "unset", chosen]
+
+
+def test_lane_env_accepts_absolute_path_with_non_utf8_bytes(tmp_path: Path) -> None:
+    try:
+        locales = subprocess.run(["locale", "-a"], capture_output=True, text=True, check=True)
+    except (OSError, subprocess.CalledProcessError):
+        pytest.skip("cannot list the installed locales")
+    utf8_locale = next(
+        (name for name in locales.stdout.splitlines()
+         if name.lower().replace("-", "").endswith("utf8")),
+        None,
+    )
+    if utf8_locale is None:
+        pytest.skip("a UTF-8 locale is required to test pathname encoding")
+    chosen = b"/runtime/caf\xe9:/usr/bin:/bin"
+    env = {
+        **lane_env_setup(tmp_path),
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "FACTORY_PYTHON": sys.executable,
+        "FACTORY_LANE_ENV_PATH": os.fsdecode(chosen),
+        "LC_ALL": utf8_locale,
+    }
+    result = subprocess.run(
+        ["bash", str(HARNESS / "lane_env.sh"), str(tmp_path / "manifest"), "--", "/usr/bin/env"],
+        cwd=tmp_path, env=env, capture_output=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert b"PATH=" + chosen in result.stdout.splitlines()
+
+
+def test_lane_env_preserves_explicit_manifest_path_precedence(tmp_path: Path) -> None:
+    env = lane_env_setup(tmp_path)
+    (tmp_path / "manifest").write_text("LANE_TOKEN\nPATH\n")
+    (tmp_path / "secrets" / "PATH").write_text("/granted/bin:/usr/bin:/bin")
+    result = run(
+        ["bash", str(HARNESS / "lane_env.sh"), str(tmp_path / "manifest"), "--", "/usr/bin/env"],
+        tmp_path,
+        {**env, "FACTORY_LANE_ENV_PATH": "/launcher/tools:/usr/bin:/bin"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert "PATH=/granted/bin:/usr/bin:/bin" in result.stdout.splitlines()
+    assert "LANE_TOKEN=tok-123" in result.stdout.splitlines()
+
+
+@pytest.mark.parametrize(
+    "invalid", ["", "relative:/bin", ":/bin", "/bin:", "/bin::/usr/bin", "/bin:relative:/usr/bin"],
+)
+def test_lane_env_refuses_search_paths_that_depend_on_working_directory(
+    tmp_path: Path, invalid: str,
+) -> None:
+    env = {**lane_env_setup(tmp_path), "FACTORY_LANE_ENV_PATH": invalid}
+    args = ["bash", str(HARNESS / "lane_env.sh"), str(tmp_path / "manifest"), "--", "true"]
+    result = run(args, tmp_path, env)
+    assert result.returncode == 64
+    assert "FACTORY_LANE_ENV_PATH" in result.stderr
+
+
 # --------------------------------------------------------------------------
 # tmux layer — injection topology and dispatch gate
 # --------------------------------------------------------------------------
