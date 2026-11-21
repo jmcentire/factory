@@ -663,7 +663,10 @@ def test_lane_env_can_find_packaged_tools_without_inheriting_host_path(tmp_path:
 
 
 def test_lane_env_accepts_absolute_path_with_non_utf8_bytes(tmp_path: Path) -> None:
-    locales = subprocess.run(["locale", "-a"], capture_output=True, text=True, check=True)
+    try:
+        locales = subprocess.run(["locale", "-a"], capture_output=True, text=True, check=True)
+    except (OSError, subprocess.CalledProcessError):
+        pytest.skip("cannot list the installed locales")
     utf8_locale = next(
         (name for name in locales.stdout.splitlines()
          if name.lower().replace("-", "").endswith("utf8")),
